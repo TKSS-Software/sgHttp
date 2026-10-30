@@ -37,6 +37,20 @@ end sub
 
 Stop observing with `sgquery.unobserveEvents()`.
 
+## Printing every event
+
+`initialize({ debug: true })` prints each event and each change as it happens, with the cache key, so a session's traffic reads straight off the console:
+
+```
+[sgquery] miss homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
+[sgquery] resolve homePage via network (412ms) homePage|profile=|{"slug":"home-page"}
+[sgquery] hit homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
+[sgquery] error favorites.add via network (1203ms) code 401 
+[sgquery] change homePage via network homePage|profile=|{"slug":"home-page"}
+```
+
+The key shows the args (and, for a page after the first, the cursor), so it tells which page or which profile a line is about. It's the same information `observeEvents` delivers, printed; turn it on in development builds only.
+
 ## Stats
 
 `sgquery.getStats()` returns running counters since `initialize`:

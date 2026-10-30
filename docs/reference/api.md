@@ -4,6 +4,8 @@ Every function is in the `sgquery` namespace. Call them from render-thread compo
 
 `initialize`, `fetch` and `setHeaders` are the HTTP client, and are all an app has to use. Everything under Queries, Cache control and Changes applies only to queries the app defines.
 
+The shapes the functions take and return (`sgquery.Definition`, `sgquery.FetchSpec`, `sgquery.Response`, `sgquery.PagedValue`, and so on) are declared as interfaces in the package's typedef, for completion and hover; see [Editor support](../installation.md#editor-support).
+
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
@@ -41,7 +43,9 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sgquery/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
 | `maxEntries` | 100 | In-memory entry cap |
 | `defaultTtl` | 300 | Seconds, for definitions without a `ttl` |
+| `debug` | `false` | Print every event and change to the console with its cache key, as `[sgquery] <type> <name> via <source> (<ms>ms) <key>`. See [Debugging](../guides/debugging.md#printing-every-event). |
 | `store` | none | An existing `Store` node to attach instead of creating one (tests) |
+| `persistence` | none | An existing `Persistence` node to run file operations on, left running by `destroy` (tests; see [Testing](../guides/testing.md#things-to-know)) |
 | `appInfo` | `roAppInfo` | `{ id, title, version }` to name the namespace with instead of `roAppInfo` (tests) |
 
 Returns the store node.

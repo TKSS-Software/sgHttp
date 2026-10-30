@@ -52,6 +52,16 @@ import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 
 Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache. Call sgQuery from components on the render thread, not from inside Task functions.
 
+## Editor support
+
+The package ships a typedef (`sgquery.d.bs`, which ropm installs beside `sgquery.brs`), so in an editor with the BrighterScript extension every `sgquery.*` function shows its documentation on hover and completion, and so do the shapes they take and return: `sgquery.Definition`, `sgquery.Request`, `sgquery.FetchSpec`, `sgquery.Response`, `sgquery.PagedValue`, `sgquery.InitializeParams`, `sgquery.QueryOptions`, `sgquery.MutateOptions`, `sgquery.Event` and `sgquery.Change`. They describe the keys; nothing is enforced, and any associative array with the right keys works. Annotate your own code with them when you want the same help there:
+
+```brightscript
+function homePageDefinition() as sgquery.Definition
+    return { request: { url: "/home/{slug}" }, parser: "HomePageParser", ttl: 300 }
+end function
+```
+
 ## Next
 
 [Quick start](quick-start.md)

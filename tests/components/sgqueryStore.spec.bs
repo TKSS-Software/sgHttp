@@ -13,7 +13,6 @@ namespace tests
         public watchedOne = invalid
         public watchedTwo = invalid
         public partner = invalid
-        public files = invalid
         public legacyPath = ""
 
         ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
@@ -26,8 +25,16 @@ namespace tests
             m.store.callFunc("_define", "items.save", { request: { url: "/items/{id}/save", method: "POST" }, cache: false, expires: ["items"] })
         end function
 
-        ' Stops the previous store's tasks, so they neither outlive the spec nor race the next
-        ' store's file operations
+        ' One persistence task for every store the specs make, kept on the scene for the run:
+        ' their file operations then run in one queue, in order, so a store's last write never
+        ' races the next store's clear
+        function disk() as object
+            scene = m.top.getScene()
+            if not scene.hasField("__specDisk") then scene.addFields({ __specDisk: createObject("roSGNode", "Persistence") })
+            return scene.__specDisk
+        end function
+
+        ' Stops the previous store's tasks, so they do not outlive the spec
         function dropStore()
             if type(m.store) = "roSGNode" then m.store.callFunc("_destroy")
             m.store = invalid
@@ -232,7 +239,7 @@ namespace tests
             m.dropStore()
             m.fake = createObject("roSGNode", "FakeTransport")
             m.store = createObject("roSGNode", "Store")
-            m.store.callFunc("_initialize", { transport: m.fake, baseUrl: baseUrl, persist: true, maxEntries: 1, version: "spec", appInfo: { id: "dev", title: title, version: version } })
+            m.store.callFunc("_initialize", { transport: m.fake, persistence: m.disk(), baseUrl: baseUrl, persist: true, maxEntries: 1, version: "spec", appInfo: { id: "dev", title: title, version: version } })
             m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300, persist: true })
         end function
 
@@ -384,12 +391,11 @@ namespace tests
         @async
         @it("deletes bodies left by the layout before per-app folders")
         function _()
-            ' A file where the old layout put a query's bodies, written through the suite's own
+            ' A file where the old layout put a query's bodies, written through the shared
             ' persistence task; a read after it tells when it is on disk
-            m.files = createObject("roSGNode", "Persistence")
             m.legacyPath = "cachefs:/sgquery/items/legacy.json"
-            m.files.callFunc("execute", { type: "write", path: m.legacyPath, text: "{}" })
-            promises.chain(m.files.callFunc("execute", { type: "read", path: m.legacyPath }), m).then(function(text as dynamic, suite as object) as dynamic
+            m.disk().callFunc("execute", { type: "write", path: m.legacyPath, text: "{}" })
+            promises.chain(m.disk().callFunc("execute", { type: "read", path: m.legacyPath }), m).then(function(text as dynamic, suite as object) as dynamic
                 suite.assertEqual(text, "{}")
                 ' The clean-up is queued once the store's first disk read answers; a second
                 ' read, queued behind it on the store's task, tells when it has run
@@ -400,10 +406,9 @@ namespace tests
                 suite.fake.callFunc("answerNext", "b")
                 return suite.query("2")
             end function).then(function(value as dynamic, suite as object) as dynamic
-                return suite.files.callFunc("execute", { type: "read", path: suite.legacyPath })
+                return suite.disk().callFunc("execute", { type: "read", path: suite.legacyPath })
             end function).then(function(text as dynamic, suite as object) as dynamic
                 suite.assertEqual(text, "")
-                suite.files.shutdown = true
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

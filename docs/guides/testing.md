@@ -100,6 +100,7 @@ Because the spec answers each request itself, it controls the order responses ar
 ## Things to know
 
 - **Requests can start late.** A `persist: true` query reads the disk before it makes its request, so the request doesn't exist yet right after `query` returns. Turn persistence off in specs, or have the fake answer requests as they arrive.
+- **Specs that persist should share one persistence task.** Each store starts its own `Persistence` task, and file operations are ordered only within a task, so a destroyed store's last write can race the next store's clear of the same folder. Create one `Persistence` node for the run and pass it as `initialize({ persistence: node })`: every store's operations then queue in order, and `destroy` leaves the node running.
 - **Parsers need a parser task.** Pass `parserTask` to `initialize` in specs that test parsing. Or test parser classes directly: `new HomePageParser().parse(json, {})` needs no task.
 - **`spec.url` has no base url or query string.** It is the filled url as the definition wrote it; check `spec.query` for parameters.
 - **Destroy between specs.** `initialize` returns the existing store if there is one, so without `destroy` one spec's cache and definitions leak into the next.

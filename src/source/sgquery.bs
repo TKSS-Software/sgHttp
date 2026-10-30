@@ -11,6 +11,181 @@ import "keys.bs"
 '*** though sgRouter is not required).
 '************************
 
+'*************************************************************************
+'#region Shapes
+' The objects the functions below take and return, for completion and hover in an editor.
+' They are not enforced: any associative array with the right keys works.
+'*************************************************************************
+
+' A request: a definition's request, or fetch's spec. {name} placeholders in strings are
+' filled from the args and the current scopes.
+interface Request
+    ' Relative to the client's baseUrl, or absolute (starting with http)
+    url as string
+    ' GET (default), HEAD, POST, PUT, PATCH, DELETE
+    optional method as string
+    ' Added to the client's shared headers for this request
+    optional headers as object
+    ' An associative array or array is sent as JSON; a string as text; "{name}" passes that arg through
+    optional body as dynamic
+    ' Query string parameters; a placeholder with nothing to fill it drops the parameter; an array repeats it
+    optional query as object
+    ' false leaves the response body as text. Default true
+    optional parseJson as boolean
+    ' Attempts after the first. Default: the transport's
+    optional retries as integer
+end interface
+
+' fetch's spec: a request plus the per-request settings a definition has
+interface FetchSpec extends Request
+    ' The client to send through. Default: the default client
+    optional client as string
+    ' false leaves out the client's shared headers
+    optional auth as boolean
+    ' false sends directly even when a debugging proxy is set
+    optional proxy as boolean
+    ' Seconds before the request is given up and retried
+    optional timeout as integer
+    ' Statuses treated as success. Default 200-299
+    optional successCodes as object
+    ' A parser name to run the body through on the parser task
+    optional parser as string
+    ' A name for the events this request emits. Default "fetch"
+    optional name as string
+end interface
+
+' The pages of a query loaded a page at a time (see define's pages)
+interface Pages
+    ' Path in a page's value to the cursor of the page after it; empty, missing or false on the last
+    next as string
+    ' The arg the cursor is passed as. Default "next"
+    optional arg as string
+    ' The request for pages after the first. Default: the definition's
+    optional request as Request
+end interface
+
+' What define takes (see define for each key's meaning and default)
+interface Definition
+    request as Request
+    optional parser as string
+    optional ttl as integer
+    optional staleWhileRevalidate as boolean
+    optional persist as boolean
+    optional scopes as object
+    optional bucket as integer
+    optional successCodes as object
+    optional cache as boolean
+    optional invalidates as object
+    optional expires as object
+    optional client as string
+    optional auth as boolean
+    optional proxy as boolean
+    optional timeout as integer
+    optional conditional as boolean
+    optional compare as string
+    optional pages as Pages
+end interface
+
+' A server's settings: initialize's top level for the default client, or one of clients
+interface ClientSettings
+    optional baseUrl as string
+    optional headers as object
+    optional baseHeaders as object
+    optional proxy as string
+    optional maxConcurrent as integer
+    optional timeout as integer
+    optional retries as integer
+    optional httpVersion as string
+    optional transport as object
+end interface
+
+' What initialize takes (see initialize for each key's meaning and default)
+interface InitializeParams extends ClientSettings
+    optional parserTask as string
+    optional persist as boolean
+    optional version as string
+    optional namespace as string
+    optional maxEntries as integer
+    optional defaultTtl as integer
+    ' { <name>: ClientSettings }
+    optional clients as object
+    optional debug as boolean
+    optional store as object
+    optional persistence as object
+end interface
+
+' What fetch resolves with, and what a failing status or network error rejects with
+interface Response
+    ' The HTTP status; negative for a network failure
+    code as integer
+    headers as object
+    ' JSON-decoded, the raw text, or the parser's result
+    body as dynamic
+    url as string
+    ' Milliseconds from sending to the answer
+    ms as integer
+    ' On a failure
+    optional message as string
+end interface
+
+' What query, nextPage and peek answer with for a query defined with pages
+interface PagedValue
+    ' Each page's value, in order
+    pages as object
+    ' Whether the last page points to another
+    hasNext as boolean
+end interface
+
+interface QueryOptions
+    ' Skip the memory and disk copies and wait for a request
+    optional force as boolean
+    ' Resolve with the cached value at once and check the server in the background
+    optional revalidate as boolean
+end interface
+
+' A value written before a mutation's request, and put back if it fails
+interface OptimisticWrite
+    name as string
+    optional args as object
+    value as dynamic
+end interface
+
+interface MutateOptions
+    ' [OptimisticWrite]
+    optional optimistic as object
+end interface
+
+interface ScopeOptions
+    ' true keeps the previous value's entries instead of dropping them
+    optional keep as boolean
+end interface
+
+' An event, from observeEvents (the store's lastEvent)
+interface Event
+    ' hit | stale | dedupe | resolve | unchanged | set | error
+    type as string
+    name as string
+    key as string
+    ' memory | disk | network | local
+    source as string
+    ms as integer
+    client as string
+    ' Errors only: the HTTP status, or 0
+    optional code as integer
+    ' Errors only: whether the request sent the client's shared headers
+    optional auth as boolean
+end interface
+
+' A change, from watch (with value) and observeChanges (without)
+interface Change
+    name as string
+    key as string
+    source as string
+    optional value as dynamic
+end interface
+
+'#endregion
+
 ' Creates the Store singleton on the scene and returns it. Idempotent: a second
 ' call returns the existing store.
 ' @param {Object} params
@@ -38,8 +213,11 @@ import "keys.bs"
 '                 timeout, retries, httpVersion, transport } }, each with its own transport and
 '                 shared headers, inheriting nothing from the default client. A definition picks
 '                 one with client: "<name>". Optional.
+'   debug       - true prints every event and change to the console with its cache key, as
+'                 "[sgquery] <type> <name> via <source> (<ms>ms) <key>". Default false.
 '   store       - an existing Store node (tests). Optional.
-function initialize(params = {} as object) as object
+'   persistence - an existing Persistence node to run file operations on (tests). Optional.
+function initialize(params = {} as InitializeParams) as object
     scene = m.top.getScene()
     existing = scene.__sgquery
     if isNode(existing) then return existing
@@ -91,7 +269,7 @@ end function
 '              first (default: request). query and nextPage then resolve with { pages, hasNext }.
 ' Every cached query compares the response body's hash with the cached one: an unchanged
 ' payload renews the entry without parsing and without a change notification.
-sub define(name as string, definition as object)
+sub define(name as string, definition as Definition)
     getStore().callFunc("_define", name, definition)
 end sub
 
@@ -101,7 +279,7 @@ end sub
 ' response { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when
 ' spec names one. Rejects with the same shape plus message on a failing status or a network
 ' failure (code negative).
-' @param {Dynamic} spec - a url (relative, or starting with http), or { url, method, headers,
+' @param {Dynamic} spec - a url (relative, or starting with http), or a FetchSpec: { url, method, headers,
 '   body, query, parseJson, retries } as in a definition's request, with {arg} placeholders
 '   filled from args and scopes; plus client, auth, proxy, timeout, successCodes and parser as
 '   in define; and name, for events. A query name here rejects at once: use query() for those.
@@ -118,7 +296,7 @@ end function
 '   revalidate - true resolves with the cached value at once, fresh or stale, and checks the
 '                server in the background (a different answer reaches watchers, see watch).
 '                With nothing cached it behaves like a normal query.
-function query(name as string, args = {} as object, options = {} as object) as object
+function query(name as string, args = {} as object, options = {} as QueryOptions) as object
     return getStore().callFunc("_query", name, args, options)
 end function
 
@@ -137,7 +315,7 @@ end function
 '   optimistic - [{ name, args, value }]: values set (see set) before the request goes out, so
 '                every screen shows the change at once, and put back if the request fails,
 '                unless a newer set or a response has replaced one by then.
-function mutate(name as string, args = {} as object, options = {} as object) as object
+function mutate(name as string, args = {} as object, options = {} as MutateOptions) as object
     return getStore().callFunc("_query", name, args, { mutation: true, optimistic: options.optimistic })
 end function
 
@@ -176,7 +354,7 @@ end sub
 ' Sets a scope value (e.g. "profile" -> active profile id). Definitions listing
 ' this scope get a new key, and entries for the previous value are dropped unless
 ' options.keep is true.
-sub setScope(scopeName as string, value as dynamic, options = {} as object)
+sub setScope(scopeName as string, value as dynamic, options = {} as ScopeOptions)
     getStore().callFunc("_setScope", scopeName, value, options)
 end sub
 

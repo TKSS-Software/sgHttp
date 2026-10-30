@@ -73,6 +73,8 @@ function _initialize(params = {} as object) as object
     end if
 
     m.persistEnabled = params.persist <> false
+    ' Prints every event and change with its key (see emit)
+    m.debug = params.debug = true
     m.version = isNonEmptyString(params.version) ? params.version : "1"
     m.maxEntries = (type(params.maxEntries) = "roInt" or type(params.maxEntries) = "roInteger" or type(params.maxEntries) = "Integer") ? params.maxEntries : 100
     m.defaultTtl = (type(params.defaultTtl) = "roInt" or type(params.defaultTtl) = "roInteger" or type(params.defaultTtl) = "Integer") ? params.defaultTtl : 300
@@ -81,8 +83,16 @@ function _initialize(params = {} as object) as object
     ' every app (and every version of it) keeps its bodies apart from the others'
     m.persistDir = PERSIST_DIR + "/" + persistNamespace(params)
     m.persistence = invalid
+    m.ownsPersistence = false
     if m.persistEnabled then
-        m.persistence = createObject("roSGNode", "Persistence")
+        ' A persistence task of the caller's (tests): file operations of several stores then run
+        ' in one queue, in order, and _destroy leaves it running
+        if isNode(params.persistence) then
+            m.persistence = params.persistence
+        else
+            m.persistence = createObject("roSGNode", "Persistence")
+            m.ownsPersistence = true
+        end if
         m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
         m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
         ' Clean-ups wait until the first disk read has answered (see runCleanups), so a cold
@@ -996,6 +1006,7 @@ end sub
 ' watcher of this query whose args key to it now (or that watches every entry)
 sub notifyChange(name as string, key as string, source as string, value as dynamic)
     m.stats.changes++
+    if m.debug then print `[sgquery] change ${name} via ${source} ${key}`
     m.top.changed = { name: name, key: key, source: source }
     watchers = m.watchers[name]
     if watchers = invalid then return
@@ -1551,6 +1562,7 @@ sub emit(eventType as string, name as string, key as string, source as string, m
         if client <> invalid then client.errors++
     end if
     m.top.lastEvent = event
+    if m.debug then print `[sgquery] ${eventType} ${name} via ${source} (${ms}ms)${eventType = "error" ? " code " + asString(event.code) : ""} ${key}`
 end sub
 
 ' Error events carry the HTTP status (0 for network or parse failures) and whether the
@@ -1575,5 +1587,5 @@ sub _destroy()
     end for
     m.clients = {}
     if isNode(m.parserTask) and m.parserTask.hasField("shutdown") then m.parserTask.shutdown = true
-    if isNode(m.persistence) then m.persistence.shutdown = true
+    if isNode(m.persistence) and m.ownsPersistence then m.persistence.shutdown = true
 end sub
