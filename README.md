@@ -4,51 +4,74 @@
 
 # sgQuery
 
-An HTTP client for Roku SceneGraph apps, with a query cache that grows on top of it. Start with plain requests on a task thread; add names, caching, parsing, persistence and background refreshes one key at a time, without ever blocking the render thread.
+An HTTP client for Roku SceneGraph apps. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts, shared headers and JSON decoding; the render thread only ever sees the promise.
 
 ```brightscript
+' once, in the main scene
 sgquery.initialize({ baseUrl: "https://api.example.com" })
 
-' A request: sent from a pooled task thread, back as a promise with the whole response
+' anywhere
 promises.chain(sgquery.fetch("/home/main"), m).then(function(response as object, m as object) as dynamic
-    print response.code, response.body.rows.count()
+    m.titleLabel.text = response.body.rows[0].title   ' response is { code, headers, body, url, ms }
     return invalid
 end function)
 
-' A query: the same request with a name, cached for every component to share
+sgquery.fetch({ url: "/favorites", method: "POST", body: { slug: "pilot" } })
+sgquery.setHeaders({ Authorization: "Bearer " + token })   ' on every request from now on
+```
+
+That is the library. Nothing has to be defined, cached or configured beyond a `baseUrl`, and most code never needs more than `fetch`.
+
+## Optional: a query cache
+
+When the same data is wanted in more than one place, you can give a request a name. Then it's a **query**: sgQuery caches the result for every component to share, merges simultaneous calls into one request, and refreshes it in the background when it goes stale. Each further feature is one more key on the definition. None of it is required, and `fetch` keeps working exactly as before beside it.
+
+```brightscript
 sgquery.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
 
 promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
-    ' a second query within 5 minutes needs no request
-    m.titleLabel.text = page.rows[0].title
+    m.titleLabel.text = page.rows[0].title   ' a second query within 5 minutes sends no request
     return invalid
 end function)
 ```
 
-Everything beyond that is a key on the definition: a `parser` that builds ContentNode trees off the render thread, `persist` for a cold start that shows data before the network answers, `scopes` for per-profile data, `expires` on the mutations that change it.
+## What's in the box
 
-- A pooled, queued HTTP client on a task thread: retries with backoff, timeouts, shared headers, a debugging proxy and JSON decoding, with promises back on the render thread
-- `fetch` for one-off calls: no definition, no cache, the whole response back
-- Declarative queries: define an endpoint once, then query it by name from any component
-- One shared cache for the whole app, with request de-duplication and stale-while-revalidate
-- Parsers that turn responses into ContentNode trees on a task thread, never on the render thread
-- Persistence to `cachefs:/`, so a cold start shows data before the network answers
+**The HTTP client**
+
+- `fetch(url)` or `fetch({ url, method, headers, body, query })`, with `{placeholders}` filled from args
+- A pool of `roUrlTransfer` objects on a task thread, with a queue, per-request timeouts and retries with backoff
+- Shared headers for auth, changed at any time with `setHeaders`
+- More than one server, each with its own base url, headers and pool
+- JSON decoding off the render thread, and the whole response back: status, headers and body
+- An event for every request, so one observer can send the app to sign-in on a 401
+- A debugging proxy switch for Charles or mitmproxy
+
+**The query cache, when you want it**
+
+- Define an endpoint once, query it by name from any component
+- One shared cache, with request de-duplication and stale-while-revalidate
+- Parsers that build ContentNode trees on a task thread
+- Persistence to `cachefs:/`, so a cold start draws before the network answers
 - Background refreshes that skip parsing and redraws when the server's data hasn't changed
-- Mutations that expire or invalidate the queries they affect
-- Scopes (per-profile data), time buckets (now-and-next schedules) and more than one API server
-- Change watchers, cache events and stats for redraws, auth handling and debugging
+- Mutations that expire or invalidate the queries they affect, scopes for per-profile data, time buckets for schedules
+- Change watchers and stats
+
+**Either way**
+
 - No framework needed: works with any SceneGraph navigation, and plays nicely with [sgRouter](https://github.com/rokucommunity/sgRouter)
+- Written in [BrighterScript](https://github.com/rokucommunity/brighterscript), installed with [ropm](https://github.com/rokucommunity/ropm), built on [promises](https://github.com/rokucommunity/promises), its only dependency
 
 ### [Read the docs →](docs/README.md)
 
 ## Get started
 
-- [Overview](docs/overview.md): why sgQuery exists and what it does for you
+- [Overview](docs/overview.md): what sgQuery does, and what it does only if you ask
 - [Installation](docs/installation.md): add it to your channel with ropm
-- [Quick start](docs/quick-start.md): from one request to a cached, parsed, persisted screen, one step at a time
+- [Quick start](docs/quick-start.md): the HTTP client in five minutes, then the cache if you want it
 - [API reference](docs/reference/api.md): every function, its parameters and what it returns
 
-sgQuery is written in [BrighterScript](https://github.com/rokucommunity/brighterscript), ships as a [ropm](https://github.com/rokucommunity/ropm) package and builds on [promises](https://github.com/rokucommunity/promises). Its only dependency is promises. It is a namespace of stateless functions plus one node, attached to the scene, that owns all state, so if you know sgRouter the shape will be familiar, but sgRouter is not required.
+sgQuery is a namespace of stateless functions plus one node, attached to the scene, that owns all state. If you know sgRouter the shape will be familiar, but sgRouter is not required.
 
 ## Get involved
 

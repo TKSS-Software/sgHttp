@@ -1,0 +1,12 @@
+' Upper-cases a string body and appends args.tag, so a spec can tell the parser ran and
+' received the args
+class UpperParser
+    function parse(body as dynamic, args as object) as dynamic
+        return ucase(body) + "|" + args.tag
+    end function
+end class
+
+function getParser(name as string) as dynamic
+    if name = "Upper" then return new UpperParser()
+    return invalid
+end function

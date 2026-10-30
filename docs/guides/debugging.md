@@ -1,6 +1,6 @@
 # Debugging
 
-## Cache events
+## Events
 
 Every cache decision is reported as an event. Observe them from any component:
 
@@ -90,4 +90,4 @@ Keep it out of release builds.
 
 ## Next
 
-[Testing your app](testing.md)
+Optional, the query cache: [Queries and keys](queries.md)

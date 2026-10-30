@@ -1,6 +1,6 @@
 # Events, stats and errors
 
-## Cache events
+## Events
 
 Delivered to [`observeEvents`](api.md#observeevents) callbacks as `event.getData()`. The store's `lastEvent` field holds the latest one.
 

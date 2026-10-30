@@ -19,9 +19,9 @@ end class
 ```
 
 - `body` is the decoded JSON (an associative array or array), or the raw string when the response wasn't JSON or the request set `parseJson: false`.
-- `args` are the args passed to `query` or `mutate`, or `{}`.
-- The return value is what `query` resolves with and what the cache stores. Return anything: a node, an associative array, a string.
-- If `parse` throws, the query rejects with `{ message: "sgquery parser \"ShowParser\" threw: ...", error }`.
+- `args` are the args passed to `fetch`, `query` or `mutate`, or `{}`.
+- The return value is what `query` resolves with (and what the cache stores), or what a `fetch` resolves with as `response.body`. Return anything: a node, an associative array, a string.
+- If `parse` throws, the promise rejects with `{ message: "sgquery parser \"ShowParser\" threw: ...", error }`.
 
 ## The parser task
 
@@ -44,17 +44,23 @@ function getParser(name as string) as dynamic
 end function
 ```
 
-Pass the component name to `initialize`, and name a parser in each definition that needs one:
+Pass the component name to `initialize`, then name a parser wherever a body should go through one: in a definition, or in a `fetch` spec.
 
 ```brightscript
 sgquery.initialize({ parserTask: "AppParserTask" })
+
+' Every query of "show" is parsed
 sgquery.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser" })
+
+' This one request is parsed; response.body is the ShowParser's node
+sgquery.fetch({ url: "/shows/{id}", parser: "ShowParser" }, { id: "abc" })
 ```
 
 - `getParser` is called for every response, so each parse gets a new instance. Don't rely on state kept between parses.
-- An unknown name (`getParser` returns `invalid`) rejects the query with `sgquery parser: unknown parser "..."`.
-- A definition naming a parser when no `parserTask` was configured rejects with a message saying so.
-- Queries without a `parser` resolve with the decoded body itself.
+- An unknown name (`getParser` returns `invalid`) rejects with `sgquery parser: unknown parser "..."`.
+- Naming a parser when no `parserTask` was configured rejects with a message saying so.
+- There is one parser task per app, and a request names a parser on it, not a task of its own.
+- Without a `parser`, a query resolves with the decoded body itself, and a `fetch`'s `response.body` is the decoded body.
 
 ## Nodes come back by reference
 
@@ -66,4 +72,4 @@ All parses run on the same task, one at a time, in the order the responses arriv
 
 ## Next
 
-[More than one server](multiple-servers.md)
+[Testing your app](testing.md)

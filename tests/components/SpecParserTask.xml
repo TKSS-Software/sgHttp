@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The parser task an app would extend, with one parser the specs can recognise the work of -->
+<component name="SpecParserTask" extends="ParserTask">
+</component>

@@ -26,34 +26,31 @@ ropm copies the package into your channel's `roku_modules` folders and prefixes 
 
 After changing sgQuery itself, rebuild it (`npm run build`), then run `npx ropm copy` in the channel to pick up the new build.
 
-## Initialize the store
+## Initialize
 
-All of sgQuery's state lives in one node, created by `initialize` and attached to the scene. Call it once, early, from the main scene's `init()`, before any screen asks for data. (If your app uses sgRouter, that means before the router starts.)
+Call `initialize` once, early, from the main scene's `init()`, before any component sends a request. (If your app uses sgRouter, that means before the router starts.) It creates one node on the scene that owns the transport, the shared headers and, if you use them, the cache.
 
 ```brightscript
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 
 sub init()
-    sgquery.initialize({
-        baseUrl: "https://api.example.com"
-        headers: { "X-Platform": "roku" }
-        parserTask: "AppParserTask"
-        version: "1"
-    })
+    sgquery.initialize({ baseUrl: "https://api.example.com" })
 end sub
 ```
 
-`initialize` is idempotent: calling it again returns the existing store and ignores the new settings. Every setting is optional; see [`initialize`](reference/api.md#initialize) for the full list.
+That's enough to send requests. Every setting is optional, `baseUrl` included; the ones you're most likely to add are `headers` (sent with every request), `timeout`, `retries` and `maxConcurrent` for the transport, `clients` for more servers, and `parserTask` if you use parsers. See [`initialize`](reference/api.md#initialize) for the full list.
+
+`initialize` is idempotent: calling it again returns the existing store and ignores the new settings.
 
 ## Use it from other components
 
-Import the same file into any component that needs data:
+Import the same file into any component that sends requests:
 
 ```brightscript
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 ```
 
-Every component that imports it talks to the same store, so they all share one cache. Call sgQuery from components on the render thread, not from inside Task functions.
+Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache. Call sgQuery from components on the render thread, not from inside Task functions.
 
 ## Next
 

@@ -719,5 +719,42 @@ namespace tests
                 return invalid
             end function)
         end function
+        @async
+        @it("runs the body through a named parser on the parser task")
+        function _()
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false, parserTask: "SpecParserTask" })
+            waiting = m.store.callFunc("_fetch", { url: "/word", parser: "Upper" }, { tag: "t" })
+            m.fake.callFunc("answer", 0, "abc")
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.assertEqual(response.body, "ABC|t")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("rejects a spec naming a parser when no parser task was configured")
+        function _()
+            m.makeStore()
+            waiting = m.store.callFunc("_fetch", { url: "/word", parser: "Upper" }, {})
+            m.fake.callFunc("answer", 0, "abc")
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved without a parser task")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.message.instr("parserTask") >= 0)
+                suite.done()
+                return invalid
+            end function)
+        end function
     end class
 end namespace

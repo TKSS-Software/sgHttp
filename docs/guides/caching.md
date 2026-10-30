@@ -42,7 +42,7 @@ sgquery.query("homePage", args, { force: true })
 ## Failures
 
 - When the request for an entry with no value fails, the entry is dropped and the promise rejects, so the next query tries again.
-- When a **background** refresh fails, the cached value stays and keeps being served. The failure is reported as an `error` [event](debugging.md#cache-events).
+- When a **background** refresh fails, the cached value stays and keeps being served. The failure is reported as an `error` [event](debugging.md#events).
 - A request still answers its callers when its entry is dropped or expired while it's in flight, but the cache doesn't store the answer. That way a response from before a change never replaces one from after it.
 
 ## Reading the cache directly

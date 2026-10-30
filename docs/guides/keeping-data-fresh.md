@@ -8,7 +8,7 @@ The transport hashes (MD5) the raw body of every cached query's response, on its
 
 - the entry is renewed, and its `ttl` starts again
 - nothing is parsed, nothing is written to disk, and no watcher is notified
-- the [cache event](debugging.md#cache-events) is `unchanged`
+- the [event](debugging.md#events) is `unchanged`
 
 That makes short `ttl`s on volatile queries affordable: a check every 30 seconds costs a request, not a parse and a redraw.
 

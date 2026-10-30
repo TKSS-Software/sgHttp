@@ -2,7 +2,8 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "keys.bs"
 
 '************************
-'*** sgquery public API.
+'*** sgquery public API: an HTTP client (initialize, fetch, setHeaders) and, only if the app
+'*** defines queries, a cache on top of it (define, query, mutate and the rest).
 '*** Import this file in any component (not main.brs). After ropm install the
 '*** functions are available as sgquery.initialize(), sgquery.fetch(), etc.
 '*** All state lives in a single Store node attached to the scene, so every

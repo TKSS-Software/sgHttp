@@ -2,6 +2,8 @@
 
 Every function is in the `sgquery` namespace. Call them from render-thread components that import `pkg:/source/roku_modules/sgquery/sgquery.brs`.
 
+`initialize`, `fetch` and `setHeaders` are the HTTP client, and are all an app has to use. Everything under Queries, Cache control and Changes applies only to queries the app defines.
+
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
@@ -210,7 +212,7 @@ Whether a change event's data is for this query, and for these args when given (
 sgquery.observeEvents(functionName as string)
 ```
 
-Calls `functionName(event)` in the calling component for every cache event. `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#cache-events).
+Calls `functionName(event)` in the calling component for every event: each request, cache hit, miss and error. `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#events).
 
 ## unobserveEvents
 

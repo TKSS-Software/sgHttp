@@ -1,7 +1,7 @@
 {
   "name": "sgquery",
   "version": "0.1.0",
-  "description": "Query cache, request de-duplication, parsing and persistence for Roku SceneGraph apps",
+  "description": "HTTP client for Roku SceneGraph apps, with an optional query cache: de-duplication, parsing, persistence and background refresh",
   "private": true,
   "keywords": [
     "ropm",

@@ -53,7 +53,7 @@ The cache, scopes, watchers, `expireAll` and `invalidate()` cover every client. 
 
 ## Telling clients apart
 
-- Every [cache event](debugging.md#cache-events) carries `client`, so an app can react to one server's `401` without guessing from query names.
+- Every [event](debugging.md#events) carries `client`, so an app can react to one server's `401` without guessing from query names.
 - `getStats().clients.<name>` counts each client's `requests`, `errors` and `active` (requests in flight).
 
 ```brightscript
