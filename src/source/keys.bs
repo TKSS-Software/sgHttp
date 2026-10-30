@@ -1,0 +1,100 @@
+' Key building and small utilities shared by the public API and the Store component.
+' These are plain functions on purpose: ropm prefixes them at install time.
+
+' Current time in seconds since epoch.
+function nowSeconds() as integer
+    return createObject("roDateTime").asSeconds()
+end function
+
+' Deterministic serialization: associative array keys are sorted so argument
+' order never forks the cache ({a:1,b:2} and {b:2,a:1} are one key).
+function stableSerialize(value as dynamic) as string
+    valueType = type(value)
+    if value = invalid then return "null"
+    if valueType = "roAssociativeArray" then
+        keys = value.keys()
+        keys.sort()
+        parts = []
+        for each key in keys
+            parts.push(formatJson(key) + ":" + stableSerialize(value[key]))
+        end for
+        return "{" + parts.join(",") + "}"
+    else if valueType = "roArray" then
+        parts = []
+        for each item in value
+            parts.push(stableSerialize(item))
+        end for
+        return "[" + parts.join(",") + "]"
+    else if valueType = "roSGNode" then
+        return formatJson("node:" + value.id)
+    else if valueType = "roString" or valueType = "String" then
+        return formatJson(value)
+    else if valueType = "roBoolean" or valueType = "Boolean" then
+        return value ? "true" : "false"
+    else if valueType = "roInt" or valueType = "roInteger" or valueType = "Integer" or valueType = "roFloat" or valueType = "Float" or valueType = "roDouble" or valueType = "Double" or valueType = "LongInteger" or valueType = "roLongInteger" then
+        return value.toStr()
+    end if
+    return formatJson(value.toStr())
+end function
+
+' MD5 of a string, used for on-disk file names.
+function hashString(text as string) as string
+    digest = createObject("roEVPDigest")
+    digest.setup("md5")
+    bytes = createObject("roByteArray")
+    bytes.fromAsciiString(text)
+    return digest.process(bytes)
+end function
+
+' Builds the cache key for a query call.
+'   name|scope=a|scope=b|bucket=N|<stable args>
+' Scopes are the definition's declared scope names resolved against the store's
+' current scope values; bucket is floor(now / definition.bucket) when set.
+function buildKey(name as string, definition as object, args as object, scopes as object, now as integer) as string
+    parts = [name]
+    scopeNames = definition.scopes
+    if type(scopeNames) = "roArray" then
+        for each scopeName in scopeNames
+            value = scopes[scopeName]
+            if value = invalid then value = ""
+            parts.push(scopeName + "=" + value.toStr())
+        end for
+    end if
+    bucket = definition.bucket
+    if type(bucket) = "roInt" or type(bucket) = "roInteger" or type(bucket) = "Integer" then
+        if bucket > 0 then parts.push("bucket=" + (now \ bucket).toStr())
+    end if
+    parts.push(stableSerialize(args))
+    return parts.join("|")
+end function
+
+' Replaces {placeholder} tokens in a template with values from args, then scopes.
+' Placeholders are looked up by name rather than matched against the keys of args:
+' associative array keys can come back lowercased (seasonnum), and replace() is case
+' sensitive, so {seasonNum} would otherwise be left in the url.
+function fillTemplate(template as string, args as object, scopes as object) as string
+    result = template
+    placeholder = createObject("roRegex", "\{([A-Za-z0-9_]+)\}", "")
+    for each match in placeholder.matchAll(template)
+        name = match[1]
+        value = invalid
+        if type(args) = "roAssociativeArray" then value = args[name]
+        if not isTemplateValue(value) and type(scopes) = "roAssociativeArray" then value = scopes[name]
+        if isTemplateValue(value) then result = result.replace(match[0], value.toStr())
+    end for
+    return result
+end function
+
+function isTemplateValue(value as dynamic) as boolean
+    return value <> invalid and type(value) <> "roAssociativeArray" and type(value) <> "roArray" and type(value) <> "roSGNode"
+end function
+
+' Returns true if the value is a SceneGraph node.
+function isNode(value as dynamic) as boolean
+    return type(value) = "roSGNode"
+end function
+
+' Returns true if the value is a non-empty string.
+function isNonEmptyString(value as dynamic) as boolean
+    return (type(value) = "roString" or type(value) = "String") and value <> ""
+end function

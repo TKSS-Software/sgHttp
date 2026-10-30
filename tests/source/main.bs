@@ -1,0 +1,3 @@
+' The test app's entry point: Rooibos takes it over to run the specs (npm test)
+sub main(args as object)
+end sub

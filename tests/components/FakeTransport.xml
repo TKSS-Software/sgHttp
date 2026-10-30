@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A transport for the store whose requests wait until a spec answers them, so a spec
+     controls the order responses arrive in -->
+<component name="FakeTransport" extends="Node">
+    <interface>
+        <!-- How many requests the store has made -->
+        <field id="requestCount" type="integer" value="0" />
+        <!-- The client's shared headers, as the store sets them -->
+        <field id="headers" type="assocarray" />
+        <function name="makeRequest" />
+        <function name="answer" />
+        <function name="answerNext" />
+        <function name="fail" />
+        <function name="requestAt" />
+    </interface>
+</component>

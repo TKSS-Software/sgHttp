@@ -1,0 +1,460 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+
+' The store driven through a FakeTransport, so each spec decides when (and in what
+' order) the server answers. Promise callbacks get the suite as their context.
+namespace tests
+    @SGNode("Node")
+    @suite("sgquery cache")
+    class SgqueryStoreTests extends rooibos.BaseTestSuite
+
+        public store = invalid
+        public fake = invalid
+        public oldCheck = invalid
+        public watchedOne = invalid
+        public watchedTwo = invalid
+        public partner = invalid
+
+        ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
+        function makeStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false })
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300 })
+            m.store.callFunc("_define", "items.save", { request: { url: "/items/{id}/save", method: "POST" }, cache: false, expires: ["items"] })
+        end function
+
+        function fetch(id as string, options = {} as object) as object
+            return m.store.callFunc("_fetch", "items", { id: id }, options)
+        end function
+
+        function watcher(id as string) as object
+            node = createObject("roSGNode", "Node")
+            node.addField("changed", "assocarray", true)
+            m.store.callFunc("_watch", "items", { id: id }, node)
+            return node
+        end function
+
+        ' Whether a watcher has heard nothing (its field starts empty or invalid)
+        function heardNothing(node as object) as boolean
+            changed = node.changed
+            return type(changed) <> "roAssociativeArray" or changed.count() = 0
+        end function
+
+        @describe("expire")
+
+        @async
+        @it("keeps the value for peek, and a plain fetch waits for the server")
+        function _()
+            m.makeStore()
+            first = m.fetch("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.store.callFunc("_expire", "items", invalid)
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                again = suite.fetch("1")
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.fake.callFunc("answer", 1, "b")
+                return again
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "b")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("answers with the kept value when the refetch fails")
+        function _()
+            m.makeStore()
+            first = m.fetch("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_expire", "items", { id: "1" })
+                again = suite.fetch("1")
+                suite.fake.callFunc("fail", 1, 500)
+                return again
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("never lets an answer from before the expire replace a newer one")
+        function _()
+            m.makeStore()
+            first = m.fetch("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' A background check starts (request 1), then the data changes
+                suite.fetch("1", { revalidate: true })
+                suite.oldCheck = suite.fetch("1")
+                suite.store.callFunc("_expire", "items", invalid)
+                fresh = suite.fetch("1")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.fake.callFunc("answer", 2, "new")
+                return fresh
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "new")
+                ' The old check answers last: its own caller gets it, the cache does not
+                suite.fake.callFunc("answer", 1, "old")
+                return suite.oldCheck
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "old")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "new")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("is what a mutation's expires does: the next plain fetch asks the server")
+        function _()
+            m.makeStore()
+            first = m.fetch("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                saved = suite.store.callFunc("_fetch", "items.save", { id: "1" }, { mutation: true })
+                suite.fake.callFunc("answer", 1, "ok")
+                return saved
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "ok")
+                again = suite.fetch("1")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.fake.callFunc("answer", 2, "b")
+                return again
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("watch")
+
+        @async
+        @it("hands the new value to the watcher of that key only, and unwatch stops it")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            m.watchedTwo = m.watcher("2")
+            first = m.fetch("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' A first value is not a change
+                suite.assertTrue(suite.heardNothing(suite.watchedOne))
+                suite.store.callFunc("_expire", "items", invalid)
+                ' revalidate: the kept value now, the server checked in the background
+                suite.fetch("1", { revalidate: true })
+                inFlight = suite.fetch("1")
+                suite.fake.callFunc("answer", 1, "b")
+                return inFlight
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                suite.assertEqual(suite.watchedOne.changed.value, "b")
+                suite.assertEqual(suite.watchedOne.changed.name, "items")
+                suite.assertTrue(suite.heardNothing(suite.watchedTwo))
+                suite.assertEqual(suite.store.callFunc("_getStats").watchers, 2)
+                suite.store.callFunc("_unwatch", suite.watchedOne)
+                suite.assertEqual(suite.store.callFunc("_getStats").watchers, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("requests in flight")
+
+        @async
+        @it("still answers a fetch whose entry was dropped while it waited")
+        function _()
+            m.makeStore()
+            waiting = m.fetch("1")
+            m.store.callFunc("_invalidate", "items", invalid)
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("invalidate")
+
+        ' A store that persists to cachefs, holding one entry in memory, so a second key evicts
+        ' the first to disk only. Starts from an empty disk cache.
+        function makePersistingStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: true, maxEntries: 1, version: "spec" })
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300, persist: true })
+            m.store.callFunc("_invalidate", invalid, invalid)
+        end function
+
+        ' Stores "a" for item 1 on disk, then "b" for item 2, which evicts item 1 from memory
+        ' (each fetch reads the disk first, so its request starts later: answerNext)
+        function storeAndEvict() as object
+            m.fake.callFunc("answerNext", "a")
+            return promises.chain(m.fetch("1"), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fake.callFunc("answerNext", "b")
+                return suite.fetch("2")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                return invalid
+            end function).toPromise()
+        end function
+
+        @async
+        @it("drops a disk copy that is not in memory, by args")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_invalidate", "items", { id: "1" })
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("drops a disk copy that is not in memory, by name")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_invalidate", "items", invalid)
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("force")
+
+        @async
+        @it("asks the server even when a disk copy exists")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.fetch("1", { force: true })
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("expire and disk copies")
+
+        @async
+        @it("skips a disk copy stored before the expire")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_expire", "items", { id: "1" })
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("serves a disk copy written after the expire")
+        function _()
+            m.makePersistingStore()
+            m.fake.callFunc("answerNext", "a")
+            promises.chain(m.fetch("1"), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_expire", "items", { id: "1" })
+                suite.fake.callFunc("answerNext", "b")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                ' Evicts item 1 to disk only
+                suite.fake.callFunc("answerNext", "c")
+                return suite.fetch("2")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("time buckets")
+
+        @async(5000)
+        @it("drops entries from an earlier bucket once it rolls over")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "clock", { request: { url: "/clock" }, ttl: 300, bucket: 1 })
+            first = m.store.callFunc("_fetch", "clock", {}, {})
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Into the next one-second bucket
+                start = createObject("roDateTime").asSeconds()
+                while createObject("roDateTime").asSeconds() = start
+                    sleep(20)
+                end while
+                rolled = suite.store.callFunc("_fetch", "clock", {}, {})
+                suite.assertEqual(suite.fake.requestCount, 2)
+                ' Only the new bucket's entry is left
+                suite.assertEqual(suite.store.callFunc("_getStats").entries, 1)
+                suite.fake.callFunc("answer", 1, "b")
+                return rolled
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "b")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("clients")
+
+        @async
+        @it("sends a query through its client, with that client's headers, and names the client")
+        function _()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.partner = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false, headers: { "X-Main": "1" }, clients: { partner: { transport: m.partner, headers: { "X-Partner": "1" } } } })
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" } })
+            m.store.callFunc("_define", "partner.items", { client: "partner", request: { url: "/items/{id}" } })
+            m.store.callFunc("_setHeaders", { Authorization: "partner-token" }, "partner")
+            m.store.callFunc("_setHeaders", { Authorization: "main-token" })
+
+            ' Each client keeps its own headers
+            m.assertEqual(m.partner.headers["X-Partner"], "1")
+            m.assertEqual(m.partner.headers.Authorization, "partner-token")
+            m.assertInvalid(m.partner.headers["X-Main"])
+            m.assertEqual(m.fake.headers.Authorization, "main-token")
+
+            waiting = m.store.callFunc("_fetch", "partner.items", { id: "1" }, {})
+            m.assertEqual(m.partner.requestCount, 1)
+            m.assertEqual(m.fake.requestCount, 0)
+            m.partner.callFunc("answer", 0, "p")
+            promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "p")
+                suite.assertEqual(suite.store.lastEvent.client, "partner")
+                stats = suite.store.callFunc("_getStats")
+                suite.assertEqual(stats.clients.partner.requests, 1)
+                suite.assertEqual(stats.clients.default.requests, 0)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @it("removes a shared header set to invalid, keeping the others")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_setHeaders", { Authorization: "token", "X-Platform": "roku" }, "")
+            m.assertEqual(m.fake.headers.Authorization, "token")
+            m.store.callFunc("_setHeaders", { Authorization: invalid }, "")
+            m.assertFalse(m.fake.headers.doesExist("Authorization"))
+            m.assertEqual(m.fake.headers["X-Platform"], "roku")
+        end function
+
+        @async
+        @it("fails a query whose client was never set up, without sending it")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "ghost.items", { client: "ghost", request: { url: "/x" } })
+            promises.chain(m.store.callFunc("_fetch", "ghost.items", {}, {}), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fail("resolved a query with no client")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.assertEqual(suite.store.lastEvent.client, "ghost")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("mutate")
+
+        @async
+        @it("refuses a cached query")
+        function _()
+            m.makeStore()
+            promises.chain(m.store.callFunc("_fetch", "items", { id: "1" }, { mutation: true }), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fail("resolved a cached query as a mutation")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.done()
+                return invalid
+            end function)
+        end function
+    end class
+end namespace

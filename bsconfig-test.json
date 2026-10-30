@@ -1,0 +1,36 @@
+{
+  "rootDir": "tests",
+  "outDir": "build/test-staging",
+  "files": [
+    "manifest",
+    "source/**/*",
+    "components/**/*",
+    {
+      "src": "../src/**/*",
+      "dest": ""
+    }
+  ],
+  "compilerOptions": {
+    "autoImportComponentScript": true
+  },
+  "diagnosticFilters": [
+    {
+      "src": "**/roku_modules/**/*",
+      "codes": [
+        "unnecessary-codebehind-script-import"
+      ]
+    }
+  ],
+  "plugins": [
+    "rooibos-roku"
+  ],
+  "rooibos": {
+    "testsFilePattern": "**/*.spec.bs",
+    "showOnlyFailures": false,
+    "failFast": false,
+    "printTestTimes": true,
+    "catchCrashes": true,
+    "keepAppOpen": false,
+    "lineWidth": 70
+  }
+}

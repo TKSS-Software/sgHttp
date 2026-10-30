@@ -1,0 +1,342 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+
+' Default HTTP transport: a single task with a bounded pool of roUrlTransfer
+' objects, a FIFO queue, retries with backoff, gzip, JSON decoding, and promise
+' settlement from the task thread. Any node with the same makeRequest(spec)
+' contract can replace it via initialize({ transport: node }) or a client's transport.
+' The store starts it (control RUN) once its fields are set: the task reads its pool size
+' and base headers when it starts.
+'
+' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
+'         allowNotModified, timeoutSeconds }
+' response: { code, body, headers, url, ms, bodyHash, notModified }
+'   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
+'                 render thread), so the store can tell an unchanged payload without parsing
+'   notModified - true for a 304 answering a conditional request (spec.allowNotModified)
+
+sub init()
+    m.port = createObject("roMessagePort")
+    m.top.observeField("request", m.port)
+    m.top.observeField("shutdown", m.port)
+    m.top.observeField("headers", m.port)
+    m.top.functionName = "runTransport"
+end sub
+
+' Render-thread entry point. Returns a promise node settled by the task thread.
+function makeRequest(spec as object) as object
+    promise = promises.create()
+    if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
+        promises.reject({ message: "sgquery transport: request needs a url" }, promise)
+        return promise
+    end if
+    m.top.activeRequests = m.top.activeRequests + 1
+    m.top.request = { promise: promise, spec: spec }
+    return promise
+end function
+
+'*************************************************************************
+'#region Task thread
+'*************************************************************************
+
+sub runTransport()
+    m.queue = []
+    m.jobs = {}
+    m.pool = []
+    m.retryQueue = []
+    m.lastRequestId = ""
+    m.sharedHeaders = m.top.headers
+    if m.sharedHeaders = invalid then m.sharedHeaders = {}
+    m.baseHeaders = m.top.baseHeaders
+    if m.baseHeaders = invalid then m.baseHeaders = {}
+    for i = 1 to m.top.maxConcurrent
+        m.pool.push(createTransfer())
+    end for
+
+    while true
+        timeout = m.retryQueue.count() > 0 ? 250 : 0
+        message = wait(timeout, m.port)
+        if message <> invalid then
+            messageType = type(message)
+            if messageType = "roSGNodeEvent" then
+                field = message.getField()
+                if field = "request" then
+                    enqueue(message.getData())
+                else if field = "headers" then
+                    m.sharedHeaders = message.getData()
+                    if m.sharedHeaders = invalid then m.sharedHeaders = {}
+                else if field = "shutdown" then
+                    return
+                end if
+            else if messageType = "roUrlEvent" then
+                onUrlEvent(message)
+            end if
+        end if
+        pumpRetries()
+        pumpQueue()
+    end while
+end sub
+
+function createTransfer() as object
+    transfer = createObject("roUrlTransfer")
+    transfer.setMessagePort(m.port)
+    transfer.setCertificatesFile("common:/certs/ca-bundle.crt")
+    transfer.initClientCertificates()
+    transfer.enableEncodings(true)
+    transfer.retainBodyOnError(true)
+    ' A rate no connection can sustain makes this a hard per-request timeout
+    transfer.setMinimumTransferRate(2147483647, m.top.timeoutSeconds)
+    if isNonEmptyString(m.top.httpVersion) then
+        try
+            transfer.setHttpVersion(m.top.httpVersion)
+        catch e
+            ' Older firmware: ignore
+        end try
+    end if
+    return transfer
+end function
+
+sub enqueue(request as object)
+    if type(request) <> "roAssociativeArray" or not isNode(request.promise) then return
+    ' See ParserTask.runJob: a request delivered twice means another was lost
+    if request.promise.id = m.lastRequestId then print `[sgquery] transport: request ${request.promise.id} delivered twice (field events coalesced)`
+    m.lastRequestId = request.promise.id
+    job = {
+        promise: request.promise
+        spec: request.spec
+        attempts: 0
+        maxAttempts: 1 + retriesFor(request.spec)
+        timespan: createObject("roTimespan")
+        retryTimer: createObject("roTimespan")
+        retryAfterMs: 0
+    }
+    m.queue.push(job)
+end sub
+
+' Network failures and 5xx responses are retried, except a POST answered with 502: the
+' gateway may have passed it on, and repeating it could apply the change twice.
+function isRetryable(spec as object, code as integer) as boolean
+    if code > 0 and code < 500 then return false
+    method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
+    if method = "POST" and code = 502 then return false
+    return true
+end function
+
+function retriesFor(spec as object) as integer
+    if type(spec.retries) = "roInt" or type(spec.retries) = "roInteger" or type(spec.retries) = "Integer" then return spec.retries
+    return m.top.retries
+end function
+
+sub pumpQueue()
+    while m.queue.count() > 0 and m.pool.count() > 0
+        job = m.queue.shift()
+        transfer = m.pool.pop()
+        if not startJob(transfer, job) then
+            m.pool.push(transfer)
+        end if
+    end while
+end sub
+
+sub pumpRetries()
+    if m.retryQueue.count() = 0 then return
+    remaining = []
+    for each job in m.retryQueue
+        if job.retryTimer.totalMilliseconds() >= job.retryAfterMs then
+            m.queue.push(job)
+        else
+            remaining.push(job)
+        end if
+    end for
+    m.retryQueue = remaining
+end sub
+
+function startJob(transfer as object, job as object) as boolean
+    spec = job.spec
+    url = spec.url
+    if url.left(4) <> "http" and isNonEmptyString(m.top.baseUrl) then url = m.top.baseUrl + url
+    url = appendQuery(url, spec.query)
+    if spec.useProxy <> false then url = applyProxy(url)
+
+    headers = {}
+    headers.append(m.baseHeaders)
+    ' Shared headers carry auth; definitions that target third-party or LAN hosts opt out with auth: false
+    if spec.includeSharedHeaders <> false then headers.append(m.sharedHeaders)
+    if type(spec.headers) = "roAssociativeArray" then headers.append(spec.headers)
+
+    ' A query's own timeout, else the transport's; set per job, since transfers are pooled
+    timeout = m.top.timeoutSeconds
+    if type(spec.timeoutSeconds) = "roInt" or type(spec.timeoutSeconds) = "roInteger" or type(spec.timeoutSeconds) = "Integer" then
+        if spec.timeoutSeconds > 0 then timeout = spec.timeoutSeconds
+    end if
+    transfer.setMinimumTransferRate(2147483647, timeout)
+
+    method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
+    body = spec.body
+    if type(body) = "roAssociativeArray" or type(body) = "roArray" then
+        body = formatJson(body)
+        if headers["Content-Type"] = invalid then headers["Content-Type"] = "application/json"
+    end if
+
+    transfer.setUrl(url)
+    transfer.setHeaders(headers)
+    transfer.setRequest(method)
+
+    job.attempts++
+    job.url = url
+    job.timespan.mark()
+    m.jobs[transfer.getIdentity().toStr()] = { job: job, transfer: transfer }
+
+    started = false
+    if method = "GET" then
+        started = transfer.asyncGetToString()
+    else if method = "HEAD" then
+        started = transfer.asyncHead()
+    else
+        if body = invalid then body = ""
+        started = transfer.asyncPostFromString(body)
+    end if
+
+    if not started then
+        m.jobs.delete(transfer.getIdentity().toStr())
+        finish(job, { code: -1, body: invalid, headers: {}, url: url, ms: 0, message: "could not start request" }, false)
+    end if
+    return started
+end function
+
+sub onUrlEvent(event as object)
+    identity = event.getSourceIdentity().toStr()
+    slot = m.jobs[identity]
+    if slot = invalid then return
+    m.jobs.delete(identity)
+    job = slot.job
+    transfer = slot.transfer
+    m.pool.push(transfer)
+
+    code = event.getResponseCode()
+    rawBody = event.getString()
+    response = {
+        code: code
+        body: rawBody
+        headers: event.getResponseHeaders()
+        url: job.url
+        ms: job.timespan.totalMilliseconds()
+        message: event.getFailureReason()
+    }
+
+    ' A 304 answers a conditional request: no body, the cached value still holds
+    if code = 304 and job.spec.allowNotModified = true then
+        response.notModified = true
+        response.body = invalid
+        finish(job, response, true)
+        return
+    end if
+
+    success = isSuccess(code, job.spec)
+    if success and job.spec.hashBody = true and rawBody <> "" then response.bodyHash = hashString(rawBody)
+    if success and job.spec.parseJson <> false and rawBody <> "" then
+        parsed = parseJson(rawBody)
+        if parsed <> invalid then response.body = parsed
+    end if
+
+    retryable = isRetryable(job.spec, code) and job.attempts < job.maxAttempts
+    if not success and retryable then
+        ' Exponential backoff: 1s, 2s, 4s...
+        job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
+        job.retryTimer.mark()
+        m.retryQueue.push(job)
+        return
+    end if
+
+    finish(job, response, success)
+end sub
+
+sub finish(job as object, response as object, success as boolean)
+    m.top.activeRequests = m.top.activeRequests - 1
+    if success then
+        promises.resolve(response, job.promise)
+    else
+        promises.reject(response, job.promise)
+    end if
+end sub
+
+function isSuccess(code as integer, spec as object) as boolean
+    codes = spec.successCodes
+    if type(codes) = "roArray" and codes.count() > 0 then
+        for each allowed in codes
+            if allowed = code then return true
+        end for
+        return false
+    end if
+    return code >= 200 and code < 300
+end function
+
+' Routes a request through a debugging proxy such as Charles: Roku apps
+' cannot set an HTTP proxy, so the proxy address is prefixed onto the url instead
+' (http://host:port/;https://api...). No-op when no proxy is set, for non-http urls, and
+' for urls that already carry a proxy prefix (only the original url is kept).
+function applyProxy(url as string) as string
+    address = proxyAddress()
+    if address = "" or url.left(4) <> "http" then return url
+    ' The proxy is for inspecting cloud traffic; a device on the LAN (a tuner) is reached
+    ' directly, since the proxy host may not see that network at all
+    if isPrivateHost(url) then return url
+    prefix = "http://" + address + "/;"
+    if url.left(prefix.len()) = prefix then return url
+    alreadyProxied = url.instr("/;http")
+    if alreadyProxied >= 0 then url = url.mid(alreadyProxied + 2)
+    return prefix + url
+end function
+
+' localhost, *.local and the private ranges (10/8, 172.16/12, 192.168/16, 169.254/16)
+function isPrivateHost(url as string) as boolean
+    rest = url.mid(url.instr("://") + 3)
+    slash = rest.instr("/")
+    host = slash >= 0 ? rest.left(slash) : rest
+    colon = host.instr(":")
+    if colon >= 0 then host = host.left(colon)
+    host = lcase(host)
+    if host = "localhost" or host.left(4) = "127." or host.right(6) = ".local" then return true
+    if host.left(3) = "10." or host.left(8) = "192.168." or host.left(8) = "169.254." then return true
+    if host.left(4) = "172." then
+        second = val(host.mid(4).split(".")[0])
+        return second >= 16 and second <= 31
+    end if
+    return false
+end function
+
+' The configured proxy as host:port, or "" when unset or not a usable address.
+function proxyAddress() as string
+    proxy = m.top.proxy
+    if not isNonEmptyString(proxy) then return ""
+    if proxy.left(7) = "http://" then proxy = proxy.mid(7)
+    if proxy.left(8) = "https://" then proxy = proxy.mid(8)
+    if proxy.right(1) = "/" then proxy = proxy.left(proxy.len() - 1)
+    parts = proxy.tokenize(":")
+    if parts.count() <> 2 or val(parts[1]) <= 0 then
+        if m.proxyWarned <> true then print `[sgquery] proxy "${m.top.proxy}" is not host:port, ignoring it`
+        m.proxyWarned = true
+        return ""
+    end if
+    return proxy
+end function
+
+function appendQuery(url as string, query as dynamic) as string
+    if type(query) <> "roAssociativeArray" or query.count() = 0 then return url
+    transfer = createObject("roUrlTransfer")
+    parts = []
+    for each key in query
+        value = query[key]
+        if type(value) = "roArray" then
+            for each item in value
+                if item <> invalid then parts.push(transfer.escape(key) + "=" + transfer.escape(item.toStr()))
+            end for
+        else if value <> invalid then
+            parts.push(transfer.escape(key) + "=" + transfer.escape(value.toStr()))
+        end if
+    end for
+    if parts.count() = 0 then return url
+    separator = url.instr("?") >= 0 ? "&" : "?"
+    return url + separator + parts.join("&")
+end function
+
+'#endregion

@@ -1,0 +1,16 @@
+{
+  "rootDir": "src",
+  "outDir": "dist",
+  "files": [
+    "source/**/*",
+    "components/**/*"
+  ],
+  "compilerOptions": {
+    "emitDefinitions": true,
+    "sourceMap": false,
+    "autoImportComponentScript": true
+  },
+  "diagnosticFilters": [
+    { "src": "**/roku_modules/**/*", "codes": ["unnecessary-codebehind-script-import"] }
+  ]
+}

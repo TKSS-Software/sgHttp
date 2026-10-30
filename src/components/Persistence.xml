@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="Persistence" extends="Task">
+    <interface>
+        <!-- Internal: a file operation handed to the task thread -->
+        <field id="op" type="assocarray" alwaysNotify="true" />
+        <field id="shutdown" type="boolean" alwaysNotify="true" />
+
+        <function name="execute" />
+    </interface>
+</component>

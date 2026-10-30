@@ -1,0 +1,45 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+
+sub init()
+    m.requests = []
+    m.queued = []
+end sub
+
+' The store's request: kept, unanswered, until answer or fail, unless answerNext queued a body
+function makeRequest(spec as object) as object
+    pending = promises.create()
+    m.requests.push({ spec: spec, promise: pending })
+    m.top.requestCount = m.requests.count()
+    if m.queued.count() > 0 then answer(m.requests.count() - 1, m.queued.shift())
+    return pending
+end function
+
+' Answers the next request not yet made with this body, for requests that start later
+' (after a disk read)
+function answerNext(body as string) as boolean
+    m.queued.push(body)
+    return true
+end function
+
+' Answers request index (0 = the first made) with a 200 and this body. The body is its own
+' hash, so the same body counts as unchanged.
+function answer(index as integer, body as string) as boolean
+    request = m.requests[index]
+    if request = invalid then return false
+    promises.resolve({ code: 200, body: body, bodyHash: body, headers: {}, url: "", ms: 0 }, request.promise)
+    return true
+end function
+
+function fail(index as integer, code = 0 as integer) as boolean
+    request = m.requests[index]
+    if request = invalid then return false
+    promises.reject({ message: "fake failure", code: code }, request.promise)
+    return true
+end function
+
+' The spec of request index, e.g. to check its url
+function requestAt(index as integer) as dynamic
+    request = m.requests[index]
+    if request = invalid then return invalid
+    return request.spec
+end function

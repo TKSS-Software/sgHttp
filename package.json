@@ -1,0 +1,35 @@
+{
+  "name": "sgquery",
+  "version": "0.1.0",
+  "description": "Query cache, request de-duplication, parsing and persistence for Roku SceneGraph apps",
+  "private": true,
+  "keywords": [
+    "ropm",
+    "roku",
+    "brighterscript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TKSS-Software/sgQueury.git"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "ropm": {
+    "packageRootDir": "dist",
+    "rootDir": "src"
+  },
+  "scripts": {
+    "build": "node scripts/build.js",
+    "test": "npm run build && bsc --project bsconfig-test.json && rooibos --project bsconfig-test.json --no-build --host \"${ROKU_HOST:-$(grep ^ROKU_IP= .env | cut -d= -f2)}\""
+  },
+  "dependencies": {
+    "promises": "npm:@rokucommunity/promises@^0.7.4"
+  },
+  "devDependencies": {
+    "brighterscript": "1.0.0-alpha.57",
+    "ropm": "^0.11.11",
+    "rooibos-roku": "6.0.0-alpha.57"
+  }
+}

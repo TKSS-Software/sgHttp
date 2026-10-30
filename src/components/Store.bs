@@ -1,0 +1,1065 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+
+' The cache singleton. Everything lives in m (never in fields) so reads never copy.
+' Entry shape in m.cache[key]:
+'   { id, name, scopes, promise, value, hasValue, storedAt, freshUntil, hash, etag, lastModified,
+'     expired, expiredSequence }
+'   id       - unique per entry, so a request can tell the entry it started for from one made
+'              after a drop
+'   promise  - pending promise while a fetch is in flight (shared by all callers)
+'   value    - resolved value once settled (node or AA)
+'   hash     - MD5 of the raw body the value was parsed from ("" when unknown)
+'   parsedHash - MD5 of the parsed value's JSON, for compare: "parsed" ("" otherwise)
+'   etag, lastModified - the response's validators, sent back by conditional definitions
+'   expired  - set by expire(): the value is kept but known to be out of date, so a plain
+'              fetch waits for the server
+'   expiredSequence - the request sequence number at expiry: a request started before it
+'              answers its own callers but never writes to the entry
+'   bucket   - the time bucket the key was made in (bucket definitions), -1 otherwise
+
+const PERSIST_DIR = "cachefs:/sgquery"
+' The client made from initialize's top-level settings, used by definitions without a client
+const DEFAULT_CLIENT = "default"
+
+sub init()
+    m.definitions = {}
+    m.cache = {}
+    m.order = []
+    m.scopes = {}
+    ' client name -> { name, transport, headers, requests, errors } (see addClient)
+    m.clients = {}
+    ' query name -> [{ node, args }] (watch)
+    m.watchers = {}
+    ' query name or key -> seconds of the last expire(), so a disk copy older than it is skipped.
+    ' Only persisted queries need one, and a record goes once the disk copy it guards is
+    ' rewritten or deleted (see dropExpiries)
+    m.expiries = {}
+    ' query name -> the time bucket its entries were last swept at (see dropOldBuckets)
+    m.buckets = {}
+    ' Counts request starts and expiries, ordering them (see currentEntry)
+    m.sequence = 0
+    m.nextEntryId = 0
+    m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
+    m.initialized = false
+end sub
+
+function _initialize(params = {} as object) as object
+    ' The top-level settings are the default client, as an app with one server has always
+    ' passed them; params.clients adds a client per other server
+    m.clients = {}
+    addClient(DEFAULT_CLIENT, params)
+    if type(params.clients) = "roAssociativeArray" then
+        for each clientName in params.clients
+            settings = params.clients[clientName]
+            if clientName = DEFAULT_CLIENT then
+                print `[sgquery] a client cannot be named "${DEFAULT_CLIENT}"; the top-level settings are that client`
+            else if type(settings) = "roAssociativeArray" then
+                addClient(clientName, settings)
+            end if
+        end for
+    end if
+
+    m.parserTask = invalid
+    if isNonEmptyString(params.parserTask) then
+        m.parserTask = createObject("roSGNode", params.parserTask)
+    end if
+
+    m.persistEnabled = params.persist <> false
+    m.version = isNonEmptyString(params.version) ? params.version : "1"
+    m.maxEntries = (type(params.maxEntries) = "roInt" or type(params.maxEntries) = "roInteger" or type(params.maxEntries) = "Integer") ? params.maxEntries : 100
+    m.defaultTtl = (type(params.defaultTtl) = "roInt" or type(params.defaultTtl) = "roInteger" or type(params.defaultTtl) = "Integer") ? params.defaultTtl : 300
+
+    m.persistence = invalid
+    if m.persistEnabled then
+        m.persistence = createObject("roSGNode", "Persistence")
+        m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
+    end if
+
+    m.initialized = true
+    return m.top
+end function
+
+'*************************************************************************
+'#region Clients
+'*************************************************************************
+
+' A server the store talks to, with its own transport (so a slow server cannot hold up
+' another's requests) and its own shared headers. A client inherits nothing from the
+' default one. settings: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout,
+' retries, httpVersion, transport }
+sub addClient(name as string, settings as object)
+    transport = settings.transport
+    ownTransport = not isNode(transport)
+    if ownTransport then transport = createObject("roSGNode", "Transport")
+    headers = {}
+    if type(settings.headers) = "roAssociativeArray" then headers.append(settings.headers)
+    if isNonEmptyString(settings.baseUrl) then setTransportField(transport, "baseUrl", settings.baseUrl)
+    if isNonEmptyString(settings.proxy) then setTransportField(transport, "proxy", settings.proxy)
+    if isNonEmptyString(settings.httpVersion) then setTransportField(transport, "httpVersion", settings.httpVersion)
+    if type(settings.baseHeaders) = "roAssociativeArray" then setTransportField(transport, "baseHeaders", settings.baseHeaders)
+    if isWholeNumber(settings.maxConcurrent) and settings.maxConcurrent > 0 then setTransportField(transport, "maxConcurrent", settings.maxConcurrent)
+    if isWholeNumber(settings.timeout) and settings.timeout > 0 then setTransportField(transport, "timeoutSeconds", settings.timeout)
+    if isWholeNumber(settings.retries) and settings.retries >= 0 then setTransportField(transport, "retries", settings.retries)
+    setTransportField(transport, "headers", headers)
+    ' Started only now that its settings are in (it reads some of them as it starts)
+    if ownTransport then transport.control = "RUN"
+    m.clients[name] = { name: name, transport: transport, headers: headers, requests: 0, errors: 0 }
+end sub
+
+' A replacement transport (tests, an app's own) need not have every field
+sub setTransportField(transport as object, field as string, value as dynamic)
+    if transport.hasField(field) then transport[field] = value
+end sub
+
+function isWholeNumber(value as dynamic) as boolean
+    valueType = type(value)
+    return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
+end function
+
+' The client a definition sends through, or invalid when it names one that does not exist
+function clientOf(definition as object) as dynamic
+    return m.clients[definition.client]
+end function
+
+function noClientError(definition as object) as object
+    return { message: `sgquery: query "${definition.name}" names client "${definition.client}", which initialize did not set up`, code: 0 }
+end function
+
+'#endregion
+
+'*************************************************************************
+'#region Definitions and scopes
+'*************************************************************************
+
+sub _define(name as string, definition as object)
+    if m.definitions[name] <> invalid then
+        print `[sgquery] "${name}" is defined again: the new definition replaces the first`
+    end if
+    clientName = isNonEmptyString(definition.client) ? definition.client : DEFAULT_CLIENT
+    if m.clients[clientName] = invalid then
+        print `[sgquery] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
+    end if
+    normalized = {
+        name: name
+        request: definition.request
+        parser: definition.parser
+        ttl: definition.ttl
+        staleWhileRevalidate: definition.staleWhileRevalidate <> false
+        persist: definition.persist = true
+        scopes: type(definition.scopes) = "roArray" ? definition.scopes : []
+        bucket: definition.bucket
+        successCodes: definition.successCodes
+        cache: definition.cache <> false
+        invalidates: type(definition.invalidates) = "roArray" ? definition.invalidates : []
+        expires: type(definition.expires) = "roArray" ? definition.expires : []
+        auth: definition.auth <> false
+        timeout: definition.timeout
+        proxy: definition.proxy <> false
+        conditional: definition.conditional = true
+        compare: definition.compare = "parsed" ? "parsed" : "body"
+        client: clientName
+    }
+    ' ttl: invalid -> store default; negative -> fresh until invalidated
+    if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
+    ' Names the persisted file: a body stored under another request (url, query, method)
+    ' or parser is never read again, since the key alone does not say where a value came from
+    ' (and, for any client but the default, which server it goes to)
+    requestText = formatJson(definition.request) + "|" + asString(definition.parser)
+    if clientName <> DEFAULT_CLIENT then requestText = requestText + "|" + clientName
+    normalized.requestHash = hashString(requestText)
+    m.definitions[name] = normalized
+end sub
+
+sub _setScope(scopeName as string, value as dynamic, options = {} as object)
+    previous = m.scopes[scopeName]
+    m.scopes[scopeName] = value
+    if options.keep <> true and previous <> invalid and previous <> value then
+        _invalidateScope(scopeName)
+    end if
+end sub
+
+' Merged into the client's shared headers (the default client's when none is named). A header
+' set to invalid is removed, e.g. Authorization on sign-out.
+sub _setHeaders(headers as object, clientName = "" as string)
+    if clientName = "" then clientName = DEFAULT_CLIENT
+    client = m.clients[clientName]
+    if client = invalid then
+        print `[sgquery] setHeaders: no client "${clientName}"`
+        return
+    end if
+    if type(headers) = "roAssociativeArray" then
+        for each headerName in headers
+            value = headers[headerName]
+            if value = invalid then
+                client.headers.delete(headerName)
+            else
+                client.headers[headerName] = value
+            end if
+        end for
+        setTransportField(client.transport, "headers", client.headers)
+    end if
+end sub
+
+function _getStats() as object
+    stats = {}
+    stats.append(m.stats)
+    stats.entries = m.cache.count()
+    watchers = 0
+    for each name in m.watchers
+        watchers += m.watchers[name].count()
+    end for
+    stats.watchers = watchers
+    clients = {}
+    for each clientName in m.clients
+        client = m.clients[clientName]
+        active = 0
+        if client.transport.hasField("activeRequests") then active = client.transport.activeRequests
+        clients[client.name] = { requests: client.requests, errors: client.errors, active: active }
+    end for
+    stats.clients = clients
+    return stats
+end function
+
+'#endregion
+
+'*************************************************************************
+'#region Fetch
+'*************************************************************************
+
+function _fetch(name as string, args = {} as object, options = {} as object) as object
+    definition = m.definitions[name]
+    if definition = invalid then
+        return promises.reject({ message: `sgquery: no query named "${name}"` })
+    end if
+    if type(args) <> "roAssociativeArray" then args = {}
+    if type(options) <> "roAssociativeArray" then options = {}
+
+    if options.mutation = true and definition.cache then
+        return promises.reject({ message: `sgquery: "${name}" is a cached query; mutate() runs cache: false definitions` })
+    end if
+    ' Mutations and per-call resources: straight through the transport, never stored
+    if not definition.cache then return runUncached(definition, args)
+
+    now = nowSeconds()
+    dropOldBuckets(definition, now)
+    key = buildKey(name, definition, args, m.scopes, now)
+    entry = m.cache[key]
+    force = options.force = true
+    revalidate = options.revalidate = true
+
+    if entry <> invalid and not force then
+        ' In flight: share the pending promise
+        if entry.promise <> invalid then
+            emit("dedupe", name, key, "memory", 0)
+            return entry.promise
+        end if
+
+        if entry.hasValue then
+            ' Revalidate: the cached value now, fresh or not, and a background check that
+            ' notifies `changed` if the server's copy differs
+            ' A value served from memory counts as a use: it is the last to be evicted
+            touch(key)
+            if revalidate then
+                m.stats.staleHits++
+                emit("stale", name, key, "memory", 0)
+                startFetch(definition, key, args, now, true)
+                return promises.resolve(entry.value)
+            end if
+            ' Known to be out of date (expire): wait for the server; the kept value answers if
+            ' the request fails
+            if entry.expired then
+                m.stats.misses++
+                return startFetch(definition, key, args, now, false, true)
+            end if
+            if now < entry.freshUntil then
+                m.stats.hits++
+                emit("hit", name, key, "memory", 0)
+                return promises.resolve(entry.value)
+            end if
+
+            if definition.staleWhileRevalidate then
+                m.stats.staleHits++
+                emit("stale", name, key, "memory", 0)
+                startFetch(definition, key, args, now, true)
+                return promises.resolve(entry.value)
+            end if
+        end if
+    end if
+
+    m.stats.misses++
+    ' force asks the server: a disk copy is not an answer to it
+    return startFetch(definition, key, args, now, false, false, force)
+end function
+
+function _peek(name as string, args = {} as object) as dynamic
+    definition = m.definitions[name]
+    if definition = invalid then return invalid
+    entry = m.cache[buildKey(name, definition, args, m.scopes, nowSeconds())]
+    if entry <> invalid and entry.hasValue then return entry.value
+    return invalid
+end function
+
+' Starts (or restarts) a fetch for a key. Returns the pending promise.
+' When background is true an existing value stays served until the refresh lands.
+' fallback: a failed request resolves with the kept value instead of rejecting (expired entries).
+' skipDisk: go straight to the network even when memory has nothing (force).
+function startFetch(definition as object, key as string, args as object, now as integer, background as boolean, fallback = false as boolean, skipDisk = false as boolean) as object
+    entry = m.cache[key]
+    if entry <> invalid and entry.promise <> invalid then return entry.promise
+
+    if entry = invalid then
+        m.nextEntryId++
+        entry = { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0 }
+        insertEntry(key, entry)
+    end if
+
+    pending = promises.create()
+    entry.promise = pending
+    m.sequence++
+
+    ' pending travels with the request: the entry may be dropped or expired before it answers,
+    ' and its callers are owed an answer either way
+    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan") }
+
+    ' Disk first, when allowed and nothing is in memory yet. The read is asynchronous
+    ' (task thread); a miss or a failure falls through to the network.
+    if not background and not skipDisk and not entry.hasValue and definition.persist and isNode(m.persistence) then
+        readPromise = m.persistence.callFunc("execute", { type: "read", path: persistPath(key) })
+        promises.chain(readPromise, context).then(function(text as dynamic, context as object) as dynamic
+            envelope = parseEnvelope(text, context.key)
+            ' A copy stored before an expire() of this query is known to be out of date
+            if envelope <> invalid and diskExpired(context, envelope.storedAt) then envelope = invalid
+            if envelope <> invalid then
+                m.stats.diskHits++
+                context.source = "disk"
+                context.body = envelope.body
+                context.persistedAt = envelope.storedAt
+                context.hash = asString(envelope.hash)
+                context.etag = asString(envelope.etag)
+                context.lastModified = asString(envelope.lastModified)
+                runParseStage(context)
+            else
+                startNetwork(context)
+            end if
+            return invalid
+        end function).catch(function(error as dynamic, context as object) as dynamic
+            startNetwork(context)
+            return invalid
+        end function).toPromise()
+        return pending
+    end if
+
+    startNetwork(context)
+    return pending
+end function
+
+' Issues the transport request for a context created by startFetch. A response whose
+' body hashes the same as the cached value's (or a 304 to a conditional request) only
+' renews the entry: no parse, no disk write, no change notification.
+sub startNetwork(context as object)
+    context.source = "network"
+    client = clientOf(context.definition)
+    if client = invalid then
+        settleError(context, noClientError(context.definition))
+        return
+    end if
+    m.stats.requests++
+    client.requests++
+    spec = buildRequestSpec(context.definition, context.args)
+    spec.hashBody = true
+    entry = m.cache[context.key]
+    if context.definition.conditional and entry <> invalid and entry.hasValue then
+        if entry.etag <> "" then spec.headers["If-None-Match"] = entry.etag
+        if entry.lastModified <> "" then spec.headers["If-Modified-Since"] = entry.lastModified
+        spec.allowNotModified = spec.headers.count() > 0
+    end if
+    requestPromise = client.transport.callFunc("makeRequest", spec)
+
+    promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
+        context.response = response
+        context.etag = headerValue(response.headers, "etag")
+        context.lastModified = headerValue(response.headers, "last-modified")
+        entry = m.cache[context.key]
+        hasValue = entry <> invalid and entry.hasValue
+        if response.notModified = true then
+            if hasValue then
+                settleUnchanged(context)
+            else
+                settleError(context, { message: `sgquery: "${context.definition.name}" got 304 with nothing cached`, code: 304 })
+            end if
+            return invalid
+        end if
+        context.hash = asString(response.bodyHash)
+        if hasValue and context.hash <> "" and context.hash = entry.hash then
+            settleUnchanged(context)
+            return invalid
+        end if
+        context.body = response.body
+        ' Only an answer the entry will keep is stored: not one from before a drop or expire
+        if context.definition.persist and currentEntry(context) <> invalid then writePersisted(context.key, context.body, context)
+        runParseStage(context)
+        return invalid
+    end function).catch(function(error as dynamic, context as object) as dynamic
+        settleError(context, error)
+        return invalid
+    end function).toPromise()
+end sub
+
+' Executes a cache: false definition. Parses if a parser is set, applies the
+' definition's invalidations on success, and never touches the cache.
+function runUncached(definition as object, args as object) as object
+    pending = promises.create()
+    context = { definition: definition, args: args, pending: pending, startedAt: createObject("roTimespan") }
+    client = clientOf(definition)
+    if client = invalid then
+        m.stats.errors++
+        emit("error", definition.name, "", "network", 0, errorDetails(definition, noClientError(definition)))
+        promises.reject(noClientError(definition), pending)
+        return pending
+    end if
+    m.stats.requests++
+    client.requests++
+    requestPromise = client.transport.callFunc("makeRequest", buildRequestSpec(definition, args))
+
+    promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
+        definition = context.definition
+        if isNonEmptyString(definition.parser) then
+            if not isNode(m.parserTask) then
+                return promises.reject({ message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
+            end if
+            return m.parserTask.callFunc("parse", { parser: definition.parser, body: response.body, args: context.args })
+        end if
+        return response.body
+    end function).then(function(value as dynamic, context as object) as dynamic
+        applyInvalidations(context.definition)
+        emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds())
+        promises.resolve(value, context.pending)
+        return invalid
+    end function).catch(function(error as dynamic, context as object) as dynamic
+        m.stats.errors++
+        emit("error", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), errorDetails(context.definition, error))
+        promises.reject(error, context.pending)
+        return invalid
+    end function).toPromise()
+
+    return pending
+end function
+
+sub applyInvalidations(definition as object)
+    for each target in definition.invalidates
+        if isNonEmptyString(target) then _invalidate(target)
+    end for
+    for each target in definition.expires
+        if isNonEmptyString(target) then _expire(target)
+    end for
+end sub
+
+' The entry a request may still write to: the one it started for (not dropped and made again
+' since) and not expired after the request started. invalid otherwise.
+function currentEntry(context as object) as dynamic
+    entry = m.cache[context.key]
+    if entry = invalid or entry.id <> context.entryId then return invalid
+    if context.sequence < entry.expiredSequence then return invalid
+    return entry
+end function
+
+' The request is answered: the entry stops sharing its promise (if it still does)
+sub releaseRequest(context as object)
+    entry = m.cache[context.key]
+    if entry <> invalid and isNode(entry.promise) and entry.promise.isSameNode(context.pending) then entry.promise = invalid
+end sub
+
+' Runs the optional parser, then stores and resolves.
+sub runParseStage(context as object)
+    definition = context.definition
+    if isNonEmptyString(definition.parser) then
+        if not isNode(m.parserTask) then
+            settleError(context, { message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
+            return
+        end if
+        hashResult = definition.compare = "parsed"
+        parsePromise = m.parserTask.callFunc("parse", { parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult })
+        promises.chain(parsePromise, context).then(function(parsed as dynamic, context as object) as dynamic
+            if context.definition.compare = "parsed" and type(parsed) = "roAssociativeArray" then
+                context.parsedHash = asString(parsed.hash)
+                parsed = parsed.value
+            end if
+            settleValue(context, parsed)
+            return invalid
+        end function).catch(function(error as dynamic, context as object) as dynamic
+            settleError(context, error)
+            return invalid
+        end function).toPromise()
+    else
+        settleValue(context, context.body)
+    end if
+end sub
+
+sub settleValue(context as object, value as dynamic)
+    key = context.key
+    definition = context.definition
+    now = nowSeconds()
+    releaseRequest(context)
+    entry = currentEntry(context)
+
+    if entry = invalid then
+        ' Dropped or expired while in flight: the callers that asked get this answer, the
+        ' cache keeps what it has
+        emit("resolve", definition.name, key, context.source, context.startedAt.totalMilliseconds())
+        promises.resolve(value, context.pending)
+        return
+    end if
+
+    ' compare: "parsed": the bytes differed but what the app sees did not (volatile
+    ' fields the parser drops), so keep the value it already has
+    parsedHash = asString(context.parsedHash)
+    if entry.hasValue and definition.compare = "parsed" and parsedHash <> "" and parsedHash = entry.parsedHash then
+        settleUnchanged(context)
+        return
+    end if
+    ' Replacing a value with different content is a change; a first value is not
+    ' (whoever fetched it receives it through the promise)
+    replaced = entry.hasValue and (entry.hash = "" or asString(context.hash) = "" or entry.hash <> context.hash)
+    entry.value = value
+    entry.hasValue = true
+    entry.expired = false
+    entry.hash = asString(context.hash)
+    entry.parsedHash = parsedHash
+    entry.etag = asString(context.etag)
+    entry.lastModified = asString(context.lastModified)
+    entry.storedAt = now
+    ttl = definition.ttl
+    if context.source = "disk" and (type(context.persistedAt) = "roInt" or type(context.persistedAt) = "roInteger") then
+        ' A disk value counts as stored when it was fetched, so it may already be stale
+        entry.storedAt = context.persistedAt
+    end if
+    entry.freshUntil = (ttl < 0) ? 2147483647 : entry.storedAt + ttl
+    emit("resolve", definition.name, key, context.source, context.startedAt.totalMilliseconds())
+    promises.resolve(value, context.pending)
+    if replaced then notifyChange(definition.name, key, context.source, value)
+
+    ' A stale disk value is served now and refreshed in the background
+    if context.source = "disk" and now >= entry.freshUntil and definition.staleWhileRevalidate then
+        startFetch(definition, key, context.args, now, true)
+    end if
+end sub
+
+' The server's copy matches the cached value: renew its freshness and resolve with it.
+' New validators (a 304 or 200 may carry a new etag) replace the old ones.
+sub settleUnchanged(context as object)
+    key = context.key
+    releaseRequest(context)
+    kept = m.cache[key]
+    entry = currentEntry(context)
+    if entry = invalid then
+        ' From before a drop or expire: its callers get the value it matched, nothing is renewed
+        keptValue = invalid
+        if kept <> invalid then keptValue = kept.value
+        promises.resolve(keptValue, context.pending)
+        return
+    end if
+    definition = context.definition
+    entry.expired = false
+    ' A body that parsed the same still has new bytes: remember them so the next
+    ' identical response is settled before parsing
+    if asString(context.hash) <> "" then entry.hash = context.hash
+    if asString(context.etag) <> "" then entry.etag = context.etag
+    if asString(context.lastModified) <> "" then entry.lastModified = context.lastModified
+    entry.storedAt = nowSeconds()
+    entry.freshUntil = (definition.ttl < 0) ? 2147483647 : entry.storedAt + definition.ttl
+    m.stats.unchanged++
+    emit("unchanged", definition.name, key, context.source, context.startedAt.totalMilliseconds())
+    promises.resolve(entry.value, context.pending)
+end sub
+
+sub settleError(context as object, error as dynamic)
+    key = context.key
+    releaseRequest(context)
+    m.stats.errors++
+    emit("error", context.definition.name, key, context.source, context.startedAt.totalMilliseconds(), errorDetails(context.definition, error))
+    ' Keep a previously good value (background refresh failed); drop an empty entry so the next call retries
+    entry = currentEntry(context)
+    if entry <> invalid and not entry.hasValue then removeEntry(key)
+    ' An expired value is still the best answer when the server cannot give a newer one
+    kept = m.cache[key]
+    if context.fallback = true and kept <> invalid and kept.hasValue then
+        promises.resolve(kept.value, context.pending)
+    else
+        promises.reject(error, context.pending)
+    end if
+end sub
+
+' A cached value was replaced by different content: the store's `changed` field, and every
+' watcher of this query whose args key to it now (or that watches every entry)
+sub notifyChange(name as string, key as string, source as string, value as dynamic)
+    m.stats.changes++
+    m.top.changed = { name: name, key: key, source: source }
+    watchers = m.watchers[name]
+    if watchers = invalid then return
+    ' A copy: a watcher's callback may unwatch
+    for each watcher in copyOf(watchers)
+        if watcher.args = invalid or _keyFor(name, watcher.args) = key then
+            watcher.node.changed = { name: name, key: key, source: source, value: value }
+        end if
+    end for
+end sub
+
+function copyOf(items as object) as object
+    copy = []
+    copy.append(items)
+    return copy
+end function
+
+' Resolves the request template against args/scopes for the transport.
+function buildRequestSpec(definition as object, args as object) as object
+    request = definition.request
+    if type(request) <> "roAssociativeArray" then request = {}
+    spec = {
+        url: fillTemplate(isNonEmptyString(request.url) ? request.url : "", args, m.scopes)
+        method: isNonEmptyString(request.method) ? request.method : "GET"
+        headers: {}
+        body: request.body
+        query: request.query
+        parseJson: request.parseJson <> false
+        successCodes: definition.successCodes
+        retries: request.retries
+        timeoutSeconds: definition.timeout
+        includeSharedHeaders: definition.auth
+        useProxy: definition.proxy
+    }
+    if type(spec.headers) <> "roAssociativeArray" then spec.headers = {}
+    ' An unfilled path placeholder still reaches some other route on the server, with a
+    ' body that parses as nothing; say so instead of failing quietly.
+    if createObject("roRegex", "\{[A-Za-z0-9_]+\}", "").isMatch(spec.url) then
+        print `[sgquery] "${definition.name}" url has an unfilled placeholder: ${spec.url}`
+    end if
+    if type(request.headers) = "roAssociativeArray" then
+        for each headerName in request.headers
+            spec.headers[headerName] = fillTemplate(request.headers[headerName].toStr(), args, m.scopes)
+        end for
+    end if
+    if type(spec.query) = "roAssociativeArray" then
+        filled = {}
+        unfilled = createObject("roRegex", "\{[A-Za-z0-9_]+\}", "")
+        wholePlaceholder = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "")
+        for each queryName in spec.query
+            rawValue = spec.query[queryName]
+            if type(rawValue) = "roArray" then
+                ' Repeated parameter (?slug=a&slug=b); array values are passed through as-is
+                filled[queryName] = rawValue
+            else if rawValue <> invalid then
+                template = rawValue.toStr()
+                whole = wholePlaceholder.match(template)
+                if whole.count() = 2 and type(args[whole[1]]) = "roArray" then
+                    ' A value of exactly "{name}" takes an array arg as a repeated parameter
+                    if args[whole[1]].count() > 0 then filled[queryName] = args[whole[1]]
+                    continue for
+                end if
+                value = fillTemplate(template, args, m.scopes)
+                ' A placeholder that found no arg or scope, or filled to an empty value,
+                ' drops the parameter entirely (e.g. an optional profile id).
+                ' Fixed text in the definition is always sent.
+                fromPlaceholder = unfilled.isMatch(template)
+                if not unfilled.isMatch(value) and not (fromPlaceholder and value = "") then filled[queryName] = value
+            end if
+        end for
+        spec.query = filled
+    end if
+    if type(spec.body) = "roString" or type(spec.body) = "String" then
+        ' A body of exactly "{name}" passes args.name through untouched (objects and arrays included)
+        whole = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "").match(spec.body)
+        if whole.count() = 2 and args[whole[1]] <> invalid then
+            spec.body = args[whole[1]]
+        else
+            spec.body = fillTemplate(spec.body, args, m.scopes)
+        end if
+    else if type(spec.body) = "roAssociativeArray" then
+        filledBody = {}
+        for each bodyKey in spec.body
+            bodyValue = spec.body[bodyKey]
+            if type(bodyValue) = "roString" or type(bodyValue) = "String" then
+                filledBody[bodyKey] = fillTemplate(bodyValue, args, m.scopes)
+            else
+                filledBody[bodyKey] = bodyValue
+            end if
+        end for
+        spec.body = filledBody
+    end if
+    return spec
+end function
+
+'#endregion
+
+'*************************************************************************
+'#region Invalidation and eviction
+'*************************************************************************
+
+sub _invalidate(name = invalid as dynamic, args = invalid as dynamic)
+    if name = invalid then
+        for each key in m.cache.keys()
+            removeEntry(key)
+        end for
+        clearPersisted()
+        m.expiries = {}
+        return
+    end if
+
+    if args = invalid then
+        ' Matches the query itself ("favorites|...") and any dotted descendants ("favorites.check|...")
+        exact = name + "|"
+        group = name + "."
+        for each key in m.cache.keys()
+            if key.left(exact.len()) = exact or key.left(group.len()) = group then removeEntry(key)
+        end for
+        ' Disk copies not in memory (evicted, or from an earlier run) go too, and with them
+        ' the expiry records that guarded them
+        clearPersistedQuery(name, true)
+        dropExpiries(name)
+        return
+    end if
+
+    definition = m.definitions[name]
+    if definition <> invalid then
+        removeEntry(buildKey(name, definition, args, m.scopes, nowSeconds()))
+    end if
+end sub
+
+' Every cached value becomes stale (kept, served, revalidated on its next fetch): the app
+' was away long enough that anything may have changed
+sub _expireAll()
+    for each key in m.cache
+        entry = m.cache[key]
+        if entry <> invalid and entry.hasValue then entry.freshUntil = 0
+    end for
+end sub
+
+' The app knows this data changed (it just wrote it): every matching entry keeps its value
+' (peek and revalidate fetches still get it) but a plain fetch waits for the server, and a
+' disk copy stored before now is not served. Name only: the query and its dotted
+' descendants, like invalidate. A request already in flight may hold the old answer: it
+' still answers its callers but is no longer shared or stored.
+sub _expire(name as string, args = invalid as dynamic)
+    if not isNonEmptyString(name) then return
+    m.sequence++
+    now = nowSeconds()
+    if args = invalid then
+        ' Supersedes every record for the query's keys and dotted descendants
+        dropExpiries(name)
+        m.expiries[name] = now
+        exact = name + "|"
+        group = name + "."
+        for each key in m.cache
+            if key.left(exact.len()) = exact or key.left(group.len()) = group then expireEntry(key)
+        end for
+        return
+    end if
+    definition = m.definitions[name]
+    if definition = invalid then return
+    if type(args) <> "roAssociativeArray" then args = {}
+    key = buildKey(name, definition, args, m.scopes, now)
+    ' Only a disk copy can outlive the entry; without one there is nothing to guard
+    if definition.persist then m.expiries[key] = now
+    expireEntry(key)
+end sub
+
+sub expireEntry(key as string)
+    entry = m.cache[key]
+    if entry = invalid then return
+    entry.expired = true
+    entry.freshUntil = 0
+    entry.expiredSequence = m.sequence
+    entry.promise = invalid
+end sub
+
+' Whether a disk copy stored at storedAt predates an expire() of its key, its query or a
+' dotted parent of the query
+function diskExpired(context as object, storedAt as dynamic) as boolean
+    if m.expiries.count() = 0 then return false
+    name = context.definition.name
+    candidates = [context.key, name]
+    parts = name.split(".")
+    prefix = ""
+    for i = 0 to parts.count() - 2
+        if i = 0 then prefix = parts[0] else prefix = prefix + "." + parts[i]
+        candidates.push(prefix)
+    end for
+    latest = 0
+    for each candidate in candidates
+        at = m.expiries[candidate]
+        if at <> invalid and at > latest then latest = at
+    end for
+    if latest = 0 then return false
+    if type(storedAt) <> "roInt" and type(storedAt) <> "roInteger" and type(storedAt) <> "Integer" then return true
+    return storedAt <= latest
+end function
+
+' Drops the expiry records of a query, its keys and its dotted descendants
+sub dropExpiries(name as string)
+    exact = name + "|"
+    group = name + "."
+    for each record in m.expiries.keys()
+        if record = name or record.left(exact.len()) = exact or record.left(group.len()) = group then m.expiries.delete(record)
+    end for
+end sub
+
+'*************************************************************************
+'#region Time buckets
+'*************************************************************************
+
+' The time bucket a key for this definition is made in now, or -1 when it has no bucket
+function bucketOf(definition as object, now as integer) as integer
+    if isWholeNumber(definition.bucket) and definition.bucket > 0 then return now \ definition.bucket
+    return -1
+end function
+
+' Once a bucket query rolls over, its keys from earlier buckets can never be fetched again:
+' drop them (and their disk copies) instead of waiting for eviction. Runs once per rollover;
+' an entry still in flight is left for the next one.
+sub dropOldBuckets(definition as object, now as integer)
+    current = bucketOf(definition, now)
+    if current < 0 then return
+    swept = m.buckets[definition.name]
+    if swept <> invalid and swept = current then return
+    m.buckets[definition.name] = current
+    for each key in m.cache.keys()
+        entry = m.cache[key]
+        if entry <> invalid and entry.name = definition.name and entry.bucket >= 0 and entry.bucket < current and entry.promise = invalid then removeEntry(key)
+    end for
+end sub
+
+'#endregion
+
+'*************************************************************************
+'#region Watchers
+'*************************************************************************
+
+' watcher: a node with an assocarray `changed` field, set to { name, key, source, value }
+' when a value of this query is replaced by different content. args invalid: every entry of
+' the query; args: the entry they key to at the time of the change.
+sub _watch(name as string, args as dynamic, watcher as object)
+    if not isNonEmptyString(name) or not isNode(watcher) then return
+    watchers = m.watchers[name]
+    if watchers = invalid then
+        watchers = []
+        m.watchers[name] = watchers
+    end if
+    if type(args) <> "roAssociativeArray" then args = invalid
+    watchers.push({ node: watcher, args: args })
+end sub
+
+sub _unwatch(watcher as object)
+    if not isNode(watcher) then return
+    for each name in m.watchers.keys()
+        watchers = m.watchers[name]
+        for i = watchers.count() - 1 to 0 step -1
+            if watchers[i].node.isSameNode(watcher) then watchers.delete(i)
+        end for
+        if watchers.count() = 0 then m.watchers.delete(name)
+    end for
+end sub
+
+'#endregion
+
+sub _invalidateScope(scopeName as string)
+    ' Disk copies not in memory go too: every stored body of a query that lists the scope
+    for each name in m.definitions
+        for each definitionScope in m.definitions[name].scopes
+            if definitionScope = scopeName then
+                clearPersistedQuery(name, false)
+                exit for
+            end if
+        end for
+    end for
+    for each key in m.cache.keys()
+        entry = m.cache[key]
+        if entry <> invalid then
+            for each entryScope in entry.scopes
+                if entryScope = scopeName then
+                    removeEntry(key)
+                    exit for
+                end if
+            end for
+        end if
+    end for
+end sub
+
+' m.order runs from least to most recently used: a new entry goes to the back, and so does
+' one served from memory (touch)
+sub touch(key as string)
+    last = m.order.count() - 1
+    if last >= 0 and m.order[last] = key then return
+    for i = 0 to last
+        if m.order[i] = key then
+            m.order.delete(i)
+            m.order.push(key)
+            return
+        end if
+    end for
+end sub
+
+sub insertEntry(key as string, entry as object)
+    m.cache[key] = entry
+    m.order.push(key)
+    ' Evict the least recently used first, skipping in-flight entries. Scan at most one pass
+    ' so a cache made entirely of in-flight entries can temporarily exceed the cap. Only the
+    ' memory copy goes: a persisted body stays on cachefs for the next cold start (the OS
+    ' manages cachefs space; invalidation still deletes it).
+    scanned = 0
+    limit = m.order.count()
+    while m.order.count() > m.maxEntries and scanned < limit
+        scanned++
+        oldest = m.order.shift()
+        oldestEntry = m.cache[oldest]
+        if oldestEntry <> invalid and oldestEntry.promise <> invalid then
+            m.order.push(oldest)
+        else
+            m.cache.delete(oldest)
+        end if
+    end while
+end sub
+
+' Drops the entry and its disk copy; the disk copy even when the entry is not in memory
+' (evicted, or stored by an earlier run)
+sub removeEntry(key as string)
+    deletePersisted(key)
+    m.expiries.delete(key)
+    entry = m.cache[key]
+    if entry = invalid then return
+    m.cache.delete(key)
+    for i = 0 to m.order.count() - 1
+        if m.order[i] = key then
+            m.order.delete(i)
+            exit for
+        end if
+    end for
+end sub
+
+'#endregion
+
+'*************************************************************************
+'#region Persistence (cachefs:/)
+'*************************************************************************
+
+' The file for a key: in its query's directory (so invalidate can find bodies that are not in
+' memory), named by the cache version, the query's request digest (a changed url or parser
+' retires the old bodies on its own) and the key
+function persistPath(key as string) as string
+    return PERSIST_DIR + "/" + persistDirName(key.split("|")[0]) + "/" + hashString(m.version + "|" + requestHashOf(key) + "|" + key) + ".json"
+end function
+
+' A query's directory name: the name with anything but letters, digits, "." , "-" and "_"
+' replaced, so dotted descendants (favorites.check) stay findable by prefix
+function persistDirName(name as string) as string
+    return createObject("roRegex", "[^A-Za-z0-9._-]", "").replaceAll(name, "_")
+end function
+
+' The request digest of the query a key belongs to (the key starts with the query's name)
+function requestHashOf(key as string) as string
+    definition = m.definitions[key.split("|")[0]]
+    if definition = invalid then return ""
+    return asString(definition.requestHash)
+end function
+
+' meta: { hash, etag, lastModified } kept beside the body so a cold start can still tell
+' an unchanged response and send the validators
+sub writePersisted(key as string, body as dynamic, meta = {} as object)
+    if body = invalid or not isNode(m.persistence) then return
+    envelope = { version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), body: body, hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified) }
+    text = formatJson(envelope)
+    if text <> "" then
+        m.persistence.callFunc("execute", { type: "write", path: persistPath(key), text: text })
+        ' The copy on disk is now newer than any expire of this key
+        m.expiries.delete(key)
+    end if
+end sub
+
+' Validates the text read from disk. Returns the envelope, or invalid (and deletes a
+' file written by another cache version, under another request, or for another key).
+function parseEnvelope(text as dynamic, key as string) as dynamic
+    if not isNonEmptyString(text) then return invalid
+    envelope = parseJson(text)
+    if type(envelope) <> "roAssociativeArray" or envelope.version <> m.version or envelope.request <> requestHashOf(key) or envelope.key <> key then
+        deletePersisted(key)
+        return invalid
+    end if
+    return envelope
+end function
+
+sub deletePersisted(key as string)
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "delete", path: persistPath(key) })
+end sub
+
+sub clearPersisted()
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clear", dir: PERSIST_DIR })
+end sub
+
+' Deletes every stored body of a query, and of its dotted descendants when descendants is true
+sub clearPersistedQuery(name as string, descendants as boolean)
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: PERSIST_DIR, name: persistDirName(name), descendants: descendants })
+end sub
+
+'#endregion
+
+' A response header by name, whatever case the server sent it in
+function headerValue(headers as dynamic, name as string) as string
+    if type(headers) <> "roAssociativeArray" then return ""
+    for each headerName in headers
+        if lcase(headerName) = name then return asString(headers[headerName])
+    end for
+    return ""
+end function
+
+function asString(value as dynamic) as string
+    if value = invalid then return ""
+    if type(value) = "roString" or type(value) = "String" then return value
+    return ""
+end function
+
+' The cache key a fetch with these args would use now
+function _keyFor(name as string, args = {} as object) as string
+    definition = m.definitions[name]
+    if definition = invalid then return ""
+    if type(args) <> "roAssociativeArray" then args = {}
+    return buildKey(name, definition, args, m.scopes, nowSeconds())
+end function
+
+' Every event names the client its query belongs to ("default" for the top-level one), so
+' an app can react to one server's auth failures without guessing from query names
+sub emit(eventType as string, name as string, key as string, source as string, ms as integer, extra = invalid as dynamic)
+    clientName = DEFAULT_CLIENT
+    definition = m.definitions[name]
+    if definition <> invalid then clientName = definition.client
+    event = { type: eventType, name: name, key: key, source: source, ms: ms, client: clientName }
+    if type(extra) = "roAssociativeArray" then event.append(extra)
+    if eventType = "error" then
+        client = m.clients[clientName]
+        if client <> invalid then client.errors++
+    end if
+    m.top.lastEvent = event
+end sub
+
+' Error events carry the HTTP status (0 for network or parse failures) and whether the
+' request sent the shared headers, so the app can react to auth failures (401) globally.
+function errorDetails(definition as object, error as dynamic) as object
+    code = 0
+    if type(error) = "roAssociativeArray" and error.code <> invalid then code = error.code
+    return { code: code, auth: definition.auth <> false }
+end function
+
+sub _destroy()
+    for each key in m.cache.keys()
+        m.cache.delete(key)
+    end for
+    m.order = []
+    m.watchers = {}
+    m.expiries = {}
+    m.buckets = {}
+    for each clientName in m.clients
+        transport = m.clients[clientName].transport
+        if transport.hasField("shutdown") then transport.shutdown = true
+    end for
+    m.clients = {}
+    if isNode(m.parserTask) and m.parserTask.hasField("shutdown") then m.parserTask.shutdown = true
+    if isNode(m.persistence) then m.persistence.shutdown = true
+end sub

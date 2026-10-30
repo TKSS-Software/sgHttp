@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="Transport" extends="Task">
+    <interface>
+        <!-- Prefix for relative urls -->
+        <field id="baseUrl" type="string" />
+        <!-- Headers sent with every request; set from the store (e.g. Authorization) -->
+        <field id="headers" type="assocarray" />
+        <!-- Headers sent with every request without exception, even ones that opt out of the
+             shared headers (auth: false), e.g. a Roku-reserved header the firmware fills in -->
+        <field id="baseHeaders" type="assocarray" />
+        <!-- Maximum requests in flight at once -->
+        <field id="maxConcurrent" type="integer" value="4" />
+        <!-- Hard timeout per request, seconds -->
+        <field id="timeoutSeconds" type="integer" value="30" />
+        <!-- Default retries for network failures and 5xx responses (never a POST answered with 502) -->
+        <field id="retries" type="integer" value="1" />
+        <!-- "http2" to request HTTP/2 multiplexing where the firmware supports it -->
+        <field id="httpVersion" type="string" value="" />
+        <!-- Debugging proxy as "host:port" (e.g. Charles). When set, every request url is
+             rewritten to http://host:port/;<url>. Empty disables it. -->
+        <field id="proxy" type="string" value="" />
+
+        <!-- Internal: a request handed to the task thread -->
+        <field id="request" type="assocarray" alwaysNotify="true" />
+        <field id="shutdown" type="boolean" alwaysNotify="true" />
+        <field id="activeRequests" type="integer" value="0" />
+
+        <function name="makeRequest" />
+    </interface>
+</component>

@@ -1,0 +1,219 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "keys.bs"
+
+'************************
+'*** sgquery public API.
+'*** Import this file in any component (not main.brs). After ropm install the
+'*** functions are available as sgquery.initialize(), sgquery.fetch(), etc.
+'*** All state lives in a single Store node attached to the scene, so every
+'*** component shares one cache, exactly like sgRouter's router node.
+'************************
+
+' Creates the Store singleton on the scene and returns it. Idempotent: a second
+' call returns the existing store.
+' @param {Object} params
+'   The top-level baseUrl, proxy, headers, baseHeaders, transport, maxConcurrent, timeout,
+'   retries and httpVersion configure the default client: the server every definition
+'   without a client talks to. An app with one server needs nothing else.
+'   transport   - node exposing makeRequest(spec) that returns a promise node. Default: a Transport task.
+'   parserTask  - component name of a Task extending ParserTask that implements getParser(name). Optional.
+'   baseUrl     - prefix for relative request urls. Optional.
+'   proxy       - debugging proxy as "host:port" (e.g. Charles); every request url to a public host becomes
+'                 http://host:port/;<url>. Empty or missing disables it. Optional.
+'   headers     - associative array of headers sent with every request (e.g. Authorization). Optional.
+'   baseHeaders - headers sent with every request without exception, even where auth is false. Optional.
+'   persist     - enable cachefs:/ persistence for definitions that opt in. Default true.
+'   version     - cache version string; bump to invalidate everything on disk. Default "1".
+'   maxEntries  - in-memory entry cap, least recently used evicted first (the disk copy stays). Default 100.
+'   defaultTtl  - seconds; used by definitions without a ttl. Default 300.
+'   maxConcurrent, timeout, retries, httpVersion - the default client's Transport settings. Optional.
+'   clients     - more servers: { <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent,
+'                 timeout, retries, httpVersion, transport } }, each with its own transport and
+'                 shared headers, inheriting nothing from the default client. A definition picks
+'                 one with client: "<name>". Optional.
+'   store       - an existing Store node (tests). Optional.
+function initialize(params = {} as object) as object
+    scene = m.top.getScene()
+    existing = scene.__sgquery
+    if isNode(existing) then return existing
+    store = params.store
+    if not isNode(store) then store = createObject("roSGNode", "Store")
+    scene.addFields({ __sgquery: store })
+    store.callFunc("_initialize", params)
+    return store
+end function
+
+' Returns the Store node, or invalid if initialize() has not run.
+function getStore() as object
+    return m.top.getScene().__sgquery
+end function
+
+' Registers a query definition.
+' @param {String} name - unique query name, also the first segment of every cache key
+' @param {Object} definition
+'   request  - { url, method, headers, body, query, parseJson } with {arg} placeholders filled from args and scopes
+'   parser   - parser name resolved by the parser task's getParser(name); runs off the render thread. Optional.
+'   ttl      - seconds a resolved value is fresh. Omitted: initialize's defaultTtl (300).
+'              Negative: fresh until expired or invalidated.
+'   staleWhileRevalidate - when true, a stale value is returned immediately and refetched in the background. Default true.
+'   persist  - write the raw response to cachefs:/ and serve it on cold start. Default false.
+'   scopes   - array of scope names (see setScope) that become part of the key, e.g. ["profile"].
+'   bucket   - seconds; floor(now / bucket) joins the key so time-sensitive data rolls over. Optional.
+'   successCodes - array of HTTP codes treated as success. Default 200-299.
+'   cache    - false for mutations and per-call resources (stream urls): runs the request, never stores. Default true.
+'   invalidates - array of query names (prefix match) dropped after a cache: false request succeeds.
+'   expires  - array of query names (prefix match) expired (see expire) after a cache: false request
+'              succeeds: the usual choice for a mutation, since the old value stays available.
+'   client   - the name of a client from initialize({ clients }) this query talks to. Default: the
+'              default client (initialize's top-level settings). Query names are shared by all
+'              clients: give another server's queries its name as a prefix ("partner.homePage").
+'   auth     - false to omit the client's shared headers (auth) from this query. Default true.
+'   proxy    - false to send the request directly even when a debugging proxy is set. Default true.
+'   timeout  - seconds before a request with no answer is given up (and retried); default the
+'              transport's (30). Short for endpoints that can stall, so a retry comes sooner.
+'   conditional - true to send the last response's ETag / Last-Modified back (If-None-Match /
+'              If-Modified-Since); a 304 renews the cached value. Default false.
+'   compare  - "parsed" also compares the parsed value (MD5 of its JSON, computed in the
+'              parser task) when the body differs: the same parsed value renews the entry
+'              without a change notification. For responses with volatile fields the parser
+'              drops. Default "body".
+' Every cached query compares the response body's hash with the cached one: an unchanged
+' payload renews the entry without parsing and without a change notification.
+sub define(name as string, definition as object)
+    getStore().callFunc("_define", name, definition)
+end sub
+
+' Fetches a query. Returns a promise node that resolves with the parsed value.
+' Concurrent calls with the same key share one in-flight request; a fresh cached
+' value resolves without a request.
+' @param {Object} options
+'   force      - true skips the memory and disk copies and waits for a request (sharing one
+'                already in flight)
+'   revalidate - true resolves with the cached value at once, fresh or stale, and checks the
+'                server in the background (a different answer reaches watchers, see watch).
+'                With nothing cached it behaves like a normal fetch.
+function fetch(name as string, args = {} as object, options = {} as object) as object
+    return getStore().callFunc("_fetch", name, args, options)
+end function
+
+' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
+' applies its invalidates and expires. Same as fetch, but rejects for a cached query, so a
+' call site reads as a write and cannot quietly cache one.
+function mutate(name as string, args = {} as object) as object
+    return getStore().callFunc("_fetch", name, args, { mutation: true })
+end function
+
+' Returns the value cached in memory (fresh, stale or expired) synchronously, else invalid.
+' Never makes a request or reads the disk.
+function peek(name as string, args = {} as object) as dynamic
+    return getStore().callFunc("_peek", name, args)
+end function
+
+' Drops cached entries. No arguments: everything. Name only: every entry for that
+' query. Name and args: that one entry.
+sub invalidate(name = invalid as dynamic, args = invalid as dynamic)
+    getStore().callFunc("_invalidate", name, args)
+end sub
+
+' Marks data the app knows has changed (it just wrote it) as out of date without dropping it.
+' peek and revalidate fetches still get the kept value; a plain fetch waits for the server and
+' falls back to the kept value if the request fails; a disk copy stored before now is not
+' served. Name only: every entry of the query and its dotted descendants. Name and args: that
+' one entry. Compare invalidate, which drops the value and its disk copy.
+sub expire(name as string, args = invalid as dynamic)
+    getStore().callFunc("_expire", name, args)
+end sub
+
+' Sets a scope value (e.g. "profile" -> active profile id). Definitions listing
+' this scope get a new key, and entries for the previous value are dropped unless
+' options.keep is true.
+sub setScope(scopeName as string, value as dynamic, options = {} as object)
+    getStore().callFunc("_setScope", scopeName, value, options)
+end sub
+
+' Drops every entry whose definition lists this scope.
+sub invalidateScope(scopeName as string)
+    getStore().callFunc("_invalidateScope", scopeName)
+end sub
+
+' Marks every cached value stale without dropping it: the next fetch of each resolves
+' with the cached value and checks the server in the background (a difference arrives
+' as a change event). For coming back from the background.
+sub expireAll()
+    getStore().callFunc("_expireAll")
+end sub
+
+' Updates the headers sent with every request of a client (merged), the default client's
+' when none is named. Use for auth tokens. A header set to invalid is removed:
+' setHeaders({ Authorization: invalid }) on sign-out.
+sub setHeaders(headers as object, client = "" as string)
+    getStore().callFunc("_setHeaders", headers, client)
+end sub
+
+' Calls functionName(event) in the calling component whenever a cached value is replaced
+' by different content, typically a background refresh that found new data. The event's
+' data is { name, key, source }; match it to a query with isChange(). A first value never
+' notifies (the fetch that asked for it receives it). For one query, watch is simpler: it
+' filters by query and args and delivers the new value.
+sub observeChanges(functionName as string)
+    getStore().observeFieldScoped("changed", functionName)
+end sub
+
+sub unobserveChanges()
+    getStore().unobserveFieldScoped("changed")
+end sub
+
+' Calls functionName(event) in the calling component when this query's cached value is
+' replaced by different content (a refresh found new data). The event's data is
+' { name, key, source, value }: the new value is delivered, no fetch needed. args: only the
+' entry those args key to at the time of the change (current scopes and time bucket);
+' omitted: every entry of the query. Returns the watcher, for unwatch. A first value never
+' notifies (the fetch that asked for it receives it).
+function watch(name as string, functionName as string, args = invalid as dynamic) as object
+    watcher = createObject("roSGNode", "Node")
+    watcher.addField("changed", "assocarray", true)
+    watcher.observeFieldScoped("changed", functionName)
+    getStore().callFunc("_watch", name, args, watcher)
+    return watcher
+end function
+
+' Stops a watch (when the screen or manager that started it goes away).
+sub unwatch(watcher as dynamic)
+    if not isNode(watcher) then return
+    watcher.unobserveFieldScoped("changed")
+    getStore().callFunc("_unwatch", watcher)
+end sub
+
+' Calls functionName(event) in the calling component for every cache event (the data is the
+' store's lastEvent: { type, name, key, source, ms, client }, plus code and auth on errors), e.g. to
+' log, or to send the app to sign-in on a 401.
+sub observeEvents(functionName as string)
+    getStore().observeFieldScoped("lastEvent", functionName)
+end sub
+
+sub unobserveEvents()
+    getStore().unobserveFieldScoped("lastEvent")
+end sub
+
+' Whether a change event (the data of an observeChanges callback) is for this query, and
+' for these args when given. Key matching uses the current scopes and time bucket.
+function isChange(change as dynamic, name as string, args = invalid as dynamic) as boolean
+    if type(change) <> "roAssociativeArray" or change.name <> name then return false
+    if args = invalid then return true
+    return change.key = getStore().callFunc("_keyFor", name, args)
+end function
+
+' Hit/miss/request counters for instrumentation, plus entries, watchers and per client
+' { requests, errors, active } under clients.<name>.
+function getStats() as object
+    return getStore().callFunc("_getStats")
+end function
+
+' Clears the cache, stops the tasks and removes the scene field.
+sub destroy()
+    store = getStore()
+    if isNode(store) then
+        store.callFunc("_destroy")
+        m.top.getScene().removeField("__sgquery")
+    end if
+end sub

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="Store" extends="Node">
+    <interface>
+        <!-- Last cache event, for logging/analytics: { type, name, key, source, ms, client } -->
+        <field id="lastEvent" type="assocarray" alwaysNotify="true" />
+        <!-- A cached value was replaced by different content (a background refresh found
+             new data): { name, key, source }. Not set for a first value or an unchanged one. -->
+        <field id="changed" type="assocarray" alwaysNotify="true" />
+
+        <function name="_initialize" />
+        <function name="_define" />
+        <function name="_fetch" />
+        <function name="_peek" />
+        <function name="_invalidate" />
+        <function name="_invalidateScope" />
+        <function name="_expireAll" />
+        <function name="_expire" />
+        <function name="_watch" />
+        <function name="_unwatch" />
+        <function name="_setScope" />
+        <function name="_setHeaders" />
+        <function name="_getStats" />
+        <function name="_keyFor" />
+        <function name="_destroy" />
+    </interface>
+</component>

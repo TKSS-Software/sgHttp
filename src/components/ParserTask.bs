@@ -1,0 +1,94 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+
+' Runs query parsers off the render thread. Apps extend this component and
+' override getParser(name) to return their own parser instances:
+'
+'   <component name="AppParserTask" extends="sgquery_ParserTask">
+'       <script type="text/brightscript" uri="AppParserTask.bs" />
+'   </component>
+'
+'   function getParser(name as string) as dynamic
+'       if name = "HomePageParser" then return new HomePageParser()
+'       return invalid
+'   end function
+'
+' A parser is any object with parse(body as dynamic, args as object) as dynamic.
+' Nodes created here (e.g. ContentNode trees) are returned to the store by reference.
+
+sub init()
+    m.port = createObject("roMessagePort")
+    m.top.observeField("job", m.port)
+    m.top.observeField("shutdown", m.port)
+    m.top.functionName = "runParser"
+    m.top.control = "RUN"
+end sub
+
+' Render-thread entry point. job: { parser, body, args, hashResult }. Returns a promise
+' node that resolves with the parsed value, or with { value, hash } when hashResult is
+' true (hash: MD5 of the value's JSON, "" when it cannot be serialized, e.g. holds nodes).
+function parse(job as object) as object
+    promise = promises.create()
+    if type(job) <> "roAssociativeArray" or not isNonEmptyString(job.parser) then
+        promises.reject({ message: "sgquery parser: job needs a parser name" }, promise)
+        return promise
+    end if
+    m.top.job = { promise: promise, parser: job.parser, body: job.body, args: job.args, hashResult: job.hashResult = true }
+    return promise
+end function
+
+' Override point. Return an object exposing parse(body, args), or invalid.
+function getParser(name as string) as dynamic
+    return invalid
+end function
+
+sub runParser()
+    m.lastJobId = ""
+    while true
+        message = wait(0, m.port)
+        if type(message) = "roSGNodeEvent" then
+            field = message.getField()
+            if field = "shutdown" then return
+            if field = "job" then runJob(message.getData())
+        end if
+    end while
+end sub
+
+sub runJob(job as object)
+    if type(job) <> "roAssociativeArray" or not isNode(job.promise) then return
+    ' Every set of the job field must arrive once: a repeat means two sets collapsed into
+    ' one event, and the earlier job (and its response) is lost. Collapsed sets arrive back
+    ' to back, so the last id is all that needs remembering.
+    if job.promise.id = m.lastJobId then print `[sgquery] parser: job ${job.promise.id} delivered twice (field events coalesced)`
+    m.lastJobId = job.promise.id
+    parser = getParser(job.parser)
+    if parser = invalid then
+        promises.reject({ message: `sgquery parser: unknown parser "${job.parser}"` }, job.promise)
+        return
+    end if
+    args = job.args
+    if type(args) <> "roAssociativeArray" then args = {}
+    try
+        result = parser.parse(job.body, args)
+        if job.hashResult = true then
+            promises.resolve({ value: result, hash: hashValue(result) }, job.promise)
+        else
+            promises.resolve(result, job.promise)
+        end if
+    catch e
+        promises.reject({ message: `sgquery parser "${job.parser}" threw: ${e.message}`, error: e }, job.promise)
+    end try
+end sub
+
+' MD5 of a parsed value's JSON, so the store can tell two responses apart by what the
+' app will see rather than by their bytes. "" when the value has no JSON form.
+function hashValue(value as dynamic) as string
+    try
+        text = formatJson(value)
+        if type(text) <> "String" and type(text) <> "roString" then return ""
+        if text = "" then return ""
+        return hashString(text)
+    catch e
+        return ""
+    end try
+end function

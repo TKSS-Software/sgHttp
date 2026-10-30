@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="ParserTask" extends="Task">
+    <interface>
+        <!-- Internal: a parse job handed to the task thread -->
+        <field id="job" type="assocarray" alwaysNotify="true" />
+        <field id="shutdown" type="boolean" alwaysNotify="true" />
+
+        <function name="parse" />
+        <!-- Override point for apps extending this task. Declared on the interface so ropm keeps the name. -->
+        <function name="getParser" />
+    </interface>
+</component>
