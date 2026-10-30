@@ -41,7 +41,7 @@ sgquery.fetch({
 
 - **`method`** defaults to `GET`. `GET` and `HEAD` are sent as such. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or an empty body if there isn't one.
 - **`body`**: an associative array or array is sent as JSON, with `Content-Type: application/json` unless the spec sets its own. A string is sent as text.
-- **`query`**: appended as a query string, url-escaped. An array value repeats the parameter (`?genre=drama&genre=comedy`).
+- **`query`**: appended as a query string, url-escaped. Numbers and booleans become their text (`?page=2&hd=true`). An array value repeats the parameter (`?genre=drama&genre=comedy`).
 - **`headers`**: added to the client's shared headers for this request.
 - **`parseJson: false`** leaves the response body as text instead of decoding it.
 

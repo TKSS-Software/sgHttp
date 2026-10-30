@@ -582,6 +582,24 @@ namespace tests
             end function)
         end function
 
+        @describe("request values")
+
+        @it("sends numbers and booleans in the query string, headers and url as their text")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "search", { request: { url: "/search/{page}", query: { page: 2, hd: true, q: "{term}", ratio: 1.5, sizes: [1, 2] }, headers: { "X-Page": "{page}" } } })
+            m.store.callFunc("_query", "search", { term: 7, page: 3 }, {})
+            spec = m.fake.callFunc("requestAt", 0)
+            m.assertEqual(spec.url, "/search/3")
+            m.assertEqual(spec.query.page, "2")
+            m.assertEqual(spec.query.hd, "true")
+            m.assertEqual(spec.query.q, "7")
+            m.assertEqual(spec.query.ratio, "1.5")
+            ' Arrays reach the transport as they are; it writes each item as text
+            m.assertEqual(spec.query.sizes.count(), 2)
+            m.assertEqual(spec.headers["X-Page"], "3")
+        end function
+
         @describe("mutate")
 
         @async
