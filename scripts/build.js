@@ -36,4 +36,19 @@ const walk = (dir) => {
     }
 };
 walk(path.join(pkgDir, 'dist'));
-console.log('sgquery: dist ready');
+
+// Stamp the build (Store.bs BUILD_STAMP) so the device log says which sgquery a sideload carries:
+// commit, "+changes" when the working tree differs from it, and the build time
+let commit = 'no-git';
+try {
+    commit = execSync('git rev-parse --short HEAD', { cwd: pkgDir }).toString().trim();
+    if (execSync('git status --porcelain -- src scripts package.json bsconfig.json', { cwd: pkgDir }).toString().trim() !== '') commit += '+changes';
+} catch {}
+const pad = (n) => String(n).padStart(2, '0');
+const now = new Date();
+const stamp = `${commit} built ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+const storeFile = path.join(pkgDir, 'dist', 'components', 'Store.brs');
+const compiled = fs.readFileSync(storeFile, 'utf8');
+if (!compiled.includes('unstamped (compiled from source)')) throw new Error('sgquery: build stamp placeholder not found in dist/components/Store.brs');
+fs.writeFileSync(storeFile, compiled.split('unstamped (compiled from source)').join(stamp));
+console.log(`sgquery: dist ready, build ${stamp}`);

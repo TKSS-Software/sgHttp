@@ -11,7 +11,14 @@ const cliPath = require.resolve('rooibos-roku/dist/cli.js');
 // The roku-deploy the CLI itself loads (its own nested copy), not the package's
 const { RokuDeploy } = require(require.resolve('roku-deploy', { paths: [path.dirname(cliPath)] }));
 
+// Fail loudly rather than silently resume wiping the registry if rooibos-roku moves to a
+// roku-deploy whose sideload or option name differs from the one this was written against
+const rokuDeployVersion = require(require.resolve('roku-deploy/package.json', { paths: [path.dirname(cliPath)] })).version;
 const sideload = RokuDeploy.prototype.sideload;
+if (typeof sideload !== 'function' || !rokuDeployVersion.startsWith('4.')) {
+    console.error(`scripts/rooibos.js: expected rooibos-roku to sideload through roku-deploy 4.x's RokuDeploy.prototype.sideload (found roku-deploy ${rokuDeployVersion}); check that deleteDevChannel is still the option to disable and update this script`);
+    process.exit(1);
+}
 RokuDeploy.prototype.sideload = function (options) {
     return sideload.call(this, { deleteDevChannel: false, ...options });
 };

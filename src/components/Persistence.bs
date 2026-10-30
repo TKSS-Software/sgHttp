@@ -12,6 +12,7 @@ import "pkg:/source/keys.bs"
 '      { type: "clear", dir }                          everything under dir
 '      { type: "clearQuery", dir, name, descendants }  dir/name, and dir/name.* when descendants
 '      { type: "clearSiblings", dir, prefix, keep }    every dir/<prefix>* folder except dir/keep
+'      { type: "clearLegacy", dir }                     files directly under dir, and folders holding files directly
 
 sub init()
     m.port = createObject("roMessagePort")
@@ -66,41 +67,59 @@ sub runOp(op as object)
         if isNonEmptyString(op.dir) and m.fileSystem.exists(op.dir) then clearDirectory(op.dir)
     else if opType = "clearQuery" then
         ' A query's directory, and its dotted descendants' (name.*) when descendants is true
-        if isNonEmptyString(op.dir) and isNonEmptyString(op.name) and m.fileSystem.exists(op.dir) then
-            group = op.name + "."
-            for each entryName in m.fileSystem.getDirectoryListing(op.dir)
-                if entryName = op.name or (op.descendants = true and entryName.left(group.len()) = group) then
-                    path = op.dir + "/" + entryName
-                    if isDirectory(path) then
-                        clearDirectory(path)
-                        deleteDirectory(path)
-                    end if
-                end if
-            end for
-        end if
+        if isNonEmptyString(op.name) then removeDirectories(op.dir, { exact: op.name, prefix: op.descendants = true ? op.name + "." : "", exclude: "" })
     else if opType = "clearSiblings" then
         ' An app's folders for its other versions
-        if isNonEmptyString(op.dir) and isNonEmptyString(op.prefix) and m.fileSystem.exists(op.dir) then
+        if isNonEmptyString(op.prefix) then removeDirectories(op.dir, { exact: "", prefix: op.prefix, exclude: op.keep })
+    else if opType = "clearLegacy" then
+        ' Before the per-app folders, a query's bodies sat in dir/<query>/ as files: an app folder
+        ' holds only query folders, so any file directly under dir or under one of its folders
+        ' marks a leftover from that layout
+        if isNonEmptyString(op.dir) and m.fileSystem.exists(op.dir) then
             for each entryName in m.fileSystem.getDirectoryListing(op.dir)
-                if entryName <> op.keep and entryName.left(op.prefix.len()) = op.prefix then
-                    path = op.dir + "/" + entryName
-                    if isDirectory(path) then
-                        clearDirectory(path)
-                        deleteDirectory(path)
-                    end if
+                path = op.dir + "/" + entryName
+                if not isDirectory(path) then
+                    deleteFile(path)
+                else if holdsFiles(path) then
+                    removeDirectory(path)
                 end if
             end for
         end if
     end if
 end sub
 
+' Deletes the folders directly under dir whose name is match.exact or starts with match.prefix
+' (when not empty), except match.exclude
+sub removeDirectories(dir as string, match as object)
+    if not isNonEmptyString(dir) or not m.fileSystem.exists(dir) then return
+    for each entryName in m.fileSystem.getDirectoryListing(dir)
+        if entryName <> match.exclude and (entryName = match.exact or (match.prefix <> "" and entryName.left(match.prefix.len()) = match.prefix)) then
+            path = dir + "/" + entryName
+            if isDirectory(path) then removeDirectory(path)
+        end if
+    end for
+end sub
+
+' Deletes a directory and everything under it
+sub removeDirectory(path as string)
+    clearDirectory(path)
+    deleteDirectory(path)
+end sub
+
+' Whether any entry directly under dir is a file
+function holdsFiles(dir as string) as boolean
+    for each entryName in m.fileSystem.getDirectoryListing(dir)
+        if not isDirectory(dir + "/" + entryName) then return true
+    end for
+    return false
+end function
+
 ' Deletes everything under dir, subdirectories included; dir itself stays
 sub clearDirectory(dir as string)
     for each entryName in m.fileSystem.getDirectoryListing(dir)
         path = dir + "/" + entryName
         if isDirectory(path) then
-            clearDirectory(path)
-            deleteDirectory(path)
+            removeDirectory(path)
         else
             deleteFile(path)
         end if

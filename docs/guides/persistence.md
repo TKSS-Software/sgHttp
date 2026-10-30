@@ -30,10 +30,10 @@ The digest covers the cache `version`, the definition's request and parser, and 
 On a developer device, every sideloaded app runs as the same "dev" channel, so they can share `cachefs:/`. Two apps that define the same queries could then read each other's stored bodies, including per-user data. To keep them apart, each app stores its bodies in its own folder, named by its channel id, title and version from `roAppInfo`:
 
 ```
-cachefs:/sgquery/dev_My-Channel_1.4.2/homePage/...
+cachefs:/sgquery/dev_My-Channel-3f9a2c1e_1.4.2/homePage/...
 ```
 
-- Characters other than letters, digits, `.` and `-` become `-`.
+- Characters other than letters, digits, `.` and `-` become `-`. The short hash after the title is of the raw id and title, so two apps whose titles differ only in punctuation (`My App`, `My-App`) still get separate folders.
 - Because the app version is part of the name, **each release of the app starts with an empty disk cache**. When the store starts, it deletes the folders of the same app's other versions (same id and title), so old releases don't leave files behind.
 - To choose the folder yourself, pass `initialize({ namespace: "my-app" })`. The app's other folders are then left alone, and a new release keeps the previous one's bodies, which the cache `version` and the request digest still guard.
 
@@ -52,7 +52,7 @@ A body on disk is never served when:
 - it was saved before an [`expire`](mutations.md#expire) of its query, a parent query or its key;
 - it was stored under a different cache `version`;
 - it was stored under a different `request` or `parser` in the definition. Changing a query's url, query string, method, body or parser retires its old bodies automatically, so a body can't be parsed by a parser written for another shape;
-- it was fetched from a different server: another client, or another `baseUrl`. A build pointed at QA never reads bodies stored against production, and the other way round.
+- it was fetched from a different server: another client, or another `baseUrl` (for relative urls; an absolute `request.url` ignores `baseUrl`, so its bodies are kept). A build pointed at QA never reads bodies stored against production, and the other way round.
 
 The version, request, parser and server are part of the file's digest, so a body stored under different ones is simply never looked up again. Those files stay on disk until `invalidate()` clears the cache or the OS reclaims the space.
 
@@ -78,7 +78,7 @@ Eviction from memory doesn't delete files. The next fetch reads the file back.
 ## Things to know
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
-- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are no longer read. Only the OS removes them.
+- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are deleted at start-up, once the first disk read has answered, as are the same app's other version folders. Clean-up never delays a cold start.
 - All file access runs on the `Persistence` task. `roFileSystem` can't be created on the render thread.
 - `persist` has no effect on `cache: false` queries.
 

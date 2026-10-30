@@ -21,6 +21,9 @@ import "pkg:/source/keys.bs"
 const PERSIST_DIR = "cachefs:/sgquery"
 ' The client made from initialize's top-level settings, used by definitions without a client
 const DEFAULT_CLIENT = "default"
+' Which build of sgquery this is: scripts/build.js writes the commit and build time over this
+' in dist, so the device log shows whether a sideload carries the latest sgquery
+const BUILD_STAMP = "unstamped (compiled from source)"
 
 sub init()
     m.definitions = {}
@@ -40,11 +43,14 @@ sub init()
     ' Counts request starts and expiries, ordering them (see currentEntry)
     m.sequence = 0
     m.nextEntryId = 0
+    ' Persistence ops held back until the first disk read (see runCleanups)
+    m.cleanups = invalid
     m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
     m.initialized = false
 end sub
 
 function _initialize(params = {} as object) as object
+    print `[sgquery] build ${BUILD_STAMP}`
     ' The top-level settings are the default client, as an app with one server has always
     ' passed them; params.clients adds a client per other server
     m.clients = {}
@@ -78,10 +84,14 @@ function _initialize(params = {} as object) as object
         m.persistence = createObject("roSGNode", "Persistence")
         m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
         m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
-        ' A new version of the app starts with an empty disk cache: its earlier versions' folders
-        ' go. Only for the derived namespace; a chosen one is left to the app.
+        ' Clean-ups wait until the first disk read has answered (see runCleanups), so a cold
+        ' start never queues behind them. Bodies from before the per-app folders sat directly
+        ' under PERSIST_DIR and are never read again; and a new version of the app starts with
+        ' an empty disk cache, so its earlier versions' folders go (only for the derived
+        ' namespace; a chosen one is left to the app).
+        m.cleanups = [{ type: "clearLegacy", dir: PERSIST_DIR }]
         if not isNonEmptyString(params.namespace) then
-            m.persistence.callFunc("execute", { type: "clearSiblings", dir: PERSIST_DIR, prefix: m.appPrefix, keep: m.persistDir.mid(PERSIST_DIR.len() + 1) })
+            m.cleanups.push({ type: "clearSiblings", dir: PERSIST_DIR, prefix: m.appPrefix, keep: m.persistDir.mid(PERSIST_DIR.len() + 1) })
         end if
     end if
 
@@ -178,7 +188,9 @@ sub _define(name as string, definition as object)
     requestText = formatJson(definition.request) + "|" + asString(definition.parser)
     if clientName <> DEFAULT_CLIENT then requestText = requestText + "|" + clientName
     client = m.clients[clientName]
-    if client <> invalid and client.baseUrl <> "" then requestText = requestText + "|" + client.baseUrl
+    url = type(definition.request) = "roAssociativeArray" ? asString(definition.request.url) : ""
+    ' An absolute url ignores baseUrl (see Transport.startJob), so its bodies survive a change of API host
+    if client <> invalid and client.baseUrl <> "" and url.left(4) <> "http" then requestText = requestText + "|" + client.baseUrl
     normalized.requestHash = hashString(requestText)
     m.definitions[name] = normalized
 end sub
@@ -339,6 +351,7 @@ function startFetch(definition as object, key as string, args as object, now as 
     if not background and not skipDisk and not entry.hasValue and definition.persist and isNode(m.persistence) then
         readPromise = m.persistence.callFunc("execute", { type: "read", path: persistPath(key) })
         promises.chain(readPromise, context).then(function(text as dynamic, context as object) as dynamic
+            runCleanups()
             envelope = parseEnvelope(text, context.key)
             ' A copy stored before an expire() of this query is known to be out of date
             if envelope <> invalid and diskExpired(context, envelope.storedAt) then envelope = invalid
@@ -356,6 +369,7 @@ function startFetch(definition as object, key as string, args as object, now as 
             end if
             return invalid
         end function).catch(function(error as dynamic, context as object) as dynamic
+            runCleanups()
             startNetwork(context)
             return invalid
         end function).toPromise()
@@ -960,10 +974,11 @@ function persistPath(key as string) as string
     return m.persistDir + "/" + persistDirName(key.split("|")[0]) + "/" + hashString(m.version + "|" + requestHashOf(key) + "|" + key) + ".json"
 end function
 
-' The folder name for this app's bodies: params.namespace when given, else the channel id, title
-' and version (<id>_<title>_<version>). The id alone is "dev" for every sideloaded app; the title
-' tells them apart, and the version gives each release a fresh disk cache. Sets m.appPrefix
-' (<id>_<title>_) for clearing the app's other versions.
+' The folder name for this app's bodies: params.namespace when given, else the channel id,
+' title and version (<id>_<title>-<hash>_<version>). The id alone is "dev" for every sideloaded
+' app; the title tells them apart, and the hash of the raw id and title keeps two titles that
+' sanitize alike ("My App", "My-App") apart. The version gives each release a fresh disk cache.
+' Sets m.appPrefix (<id>_<title>-<hash>_) for clearing the app's other versions.
 ' params.appInfo ({ id, title, version }) stands in for roAppInfo in tests.
 function persistNamespace(params as object) as string
     if isNonEmptyString(params.namespace) then
@@ -975,23 +990,43 @@ function persistNamespace(params as object) as string
         appInfo = createObject("roAppInfo")
         info = { id: appInfo.getID(), title: appInfo.getTitle(), version: appInfo.getVersion() }
     end if
-    m.appPrefix = namespacePart(asString(info.id)) + "_" + namespacePart(asString(info.title)) + "_"
+    id = asString(info.id)
+    title = asString(info.title)
+    m.appPrefix = namespacePart(id) + "_" + namespacePart(title) + "-" + hashString(id + "|" + title).left(8) + "_"
     return m.appPrefix + namespacePart(asString(info.version))
 end function
 
-' One part of the namespace: anything but letters, digits, "." and "-" becomes "-", so a part
-' never holds the "_" that separates them (an app titled "fc_x" cannot match the prefix of "fc")
+' One part of the namespace: never holds the "_" that separates the parts, so an app titled
+' "fc_x" cannot match the prefix of one titled "fc"
 function namespacePart(text as string) as string
-    part = createObject("roRegex", "[^A-Za-z0-9.-]", "").replaceAll(text, "-")
-    if part = "" then part = "-"
-    return part
+    return safeName(text, false)
 end function
 
-' A query's directory name: the name with anything but letters, digits, "." , "-" and "_"
-' replaced, so dotted descendants (favorites.check) stay findable by prefix
+' A query's directory name. Keeps "_" so dotted descendants (favorites.check) stay findable
+' by prefix
 function persistDirName(name as string) as string
-    return createObject("roRegex", "[^A-Za-z0-9._-]", "").replaceAll(name, "_")
+    return safeName(name, true)
 end function
+
+' text as a file name: letters, digits, "." and "-" stay; "_" stays only when allowed; anything
+' else becomes the replacement ("_" when allowed, else "-"). Never empty.
+function safeName(text as string, allowUnderscore as boolean) as string
+    replacement = allowUnderscore ? "_" : "-"
+    pattern = allowUnderscore ? "[^A-Za-z0-9._-]" : "[^A-Za-z0-9.-]"
+    name = createObject("roRegex", pattern, "").replaceAll(text, replacement)
+    if name = "" then name = replacement
+    return name
+end function
+
+' The start-up clean-ups, once the first disk read has answered: the OS may be slow to delete
+' many files, and a cold start should not wait on it
+sub runCleanups()
+    if type(m.cleanups) <> "roArray" or not isNode(m.persistence) then return
+    for each op in m.cleanups
+        m.persistence.callFunc("execute", op)
+    end for
+    m.cleanups = invalid
+end sub
 
 ' The request digest of the query a key belongs to (the key starts with the query's name)
 function requestHashOf(key as string) as string
