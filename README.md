@@ -45,4 +45,4 @@ sgQuery is written in [BrighterScript](https://github.com/rokucommunity/brighter
 ## Get involved
 
 - Build the package and run its specs on a Roku: [Contributing](docs/contributing.md)
-- Report a bug or ask for a feature in the [issue tracker](https://github.com/TKSS-Software/sgQueury/issues)
+- Report a bug or ask for a feature in the [issue tracker](https://github.com/TKSS-Software/sgQuery/issues)

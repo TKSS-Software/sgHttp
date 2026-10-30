@@ -10,7 +10,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TKSS-Software/sgQueury.git"
+    "url": "git+https://github.com/TKSS-Software/sgQuery.git"
   },
   "files": [
     "dist",

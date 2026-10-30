@@ -11,15 +11,15 @@
 sgQuery isn't published to npm. Build it from a checkout, then install it from the folder:
 
 ```sh
-git clone https://github.com/TKSS-Software/sgQueury.git
-cd sgQueury
+git clone https://github.com/TKSS-Software/sgQuery.git
+cd sgQuery
 npm run build          # installs its own tools on the first run, then compiles to dist/
 ```
 
 Then, in your channel:
 
 ```sh
-npx ropm install sgquery@file:../sgQueury
+npx ropm install sgquery@file:../sgQuery
 ```
 
 ropm copies the package into your channel's `roku_modules` folders and prefixes its names with `sgquery_`: the `Store` component becomes `sgquery_Store`, the `ParserTask` component becomes `sgquery_ParserTask`, and so on.
