@@ -70,10 +70,19 @@ function _initialize(params = {} as object) as object
     m.maxEntries = (type(params.maxEntries) = "roInt" or type(params.maxEntries) = "roInteger" or type(params.maxEntries) = "Integer") ? params.maxEntries : 100
     m.defaultTtl = (type(params.defaultTtl) = "roInt" or type(params.defaultTtl) = "roInteger" or type(params.defaultTtl) = "Integer") ? params.defaultTtl : 300
 
+    ' This app's folder: sideloaded apps all run as the "dev" channel and may share cachefs, so
+    ' every app (and every version of it) keeps its bodies apart from the others'
+    m.persistDir = PERSIST_DIR + "/" + persistNamespace(params)
     m.persistence = invalid
     if m.persistEnabled then
         m.persistence = createObject("roSGNode", "Persistence")
         m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
+        m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
+        ' A new version of the app starts with an empty disk cache: its earlier versions' folders
+        ' go. Only for the derived namespace; a chosen one is left to the app.
+        if not isNonEmptyString(params.namespace) then
+            m.persistence.callFunc("execute", { type: "clearSiblings", dir: PERSIST_DIR, prefix: m.appPrefix, keep: m.persistDir.mid(PERSIST_DIR.len() + 1) })
+        end if
     end if
 
     m.initialized = true
@@ -104,7 +113,7 @@ sub addClient(name as string, settings as object)
     setTransportField(transport, "headers", headers)
     ' Started only now that its settings are in (it reads some of them as it starts)
     if ownTransport then transport.control = "RUN"
-    m.clients[name] = { name: name, transport: transport, headers: headers, requests: 0, errors: 0 }
+    m.clients[name] = { name: name, transport: transport, headers: headers, baseUrl: asString(settings.baseUrl), requests: 0, errors: 0 }
 end sub
 
 ' A replacement transport (tests, an app's own) need not have every field
@@ -162,11 +171,14 @@ sub _define(name as string, definition as object)
     }
     ' ttl: invalid -> store default; negative -> fresh until invalidated
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
-    ' Names the persisted file: a body stored under another request (url, query, method)
-    ' or parser is never read again, since the key alone does not say where a value came from
-    ' (and, for any client but the default, which server it goes to)
+    ' Names the persisted file: a body stored under another request (url, query, method),
+    ' parser or server is never read again, since the key alone does not say where a value came
+    ' from. The server is the client (for any but the default) and its baseUrl, so a build
+    ' pointed at QA never reads bodies stored against production.
     requestText = formatJson(definition.request) + "|" + asString(definition.parser)
     if clientName <> DEFAULT_CLIENT then requestText = requestText + "|" + clientName
+    client = m.clients[clientName]
+    if client <> invalid and client.baseUrl <> "" then requestText = requestText + "|" + client.baseUrl
     normalized.requestHash = hashString(requestText)
     m.definitions[name] = normalized
 end sub
@@ -945,7 +957,34 @@ end sub
 ' memory), named by the cache version, the query's request digest (a changed url or parser
 ' retires the old bodies on its own) and the key
 function persistPath(key as string) as string
-    return PERSIST_DIR + "/" + persistDirName(key.split("|")[0]) + "/" + hashString(m.version + "|" + requestHashOf(key) + "|" + key) + ".json"
+    return m.persistDir + "/" + persistDirName(key.split("|")[0]) + "/" + hashString(m.version + "|" + requestHashOf(key) + "|" + key) + ".json"
+end function
+
+' The folder name for this app's bodies: params.namespace when given, else the channel id, title
+' and version (<id>_<title>_<version>). The id alone is "dev" for every sideloaded app; the title
+' tells them apart, and the version gives each release a fresh disk cache. Sets m.appPrefix
+' (<id>_<title>_) for clearing the app's other versions.
+' params.appInfo ({ id, title, version }) stands in for roAppInfo in tests.
+function persistNamespace(params as object) as string
+    if isNonEmptyString(params.namespace) then
+        m.appPrefix = ""
+        return namespacePart(params.namespace)
+    end if
+    info = params.appInfo
+    if type(info) <> "roAssociativeArray" then
+        appInfo = createObject("roAppInfo")
+        info = { id: appInfo.getID(), title: appInfo.getTitle(), version: appInfo.getVersion() }
+    end if
+    m.appPrefix = namespacePart(asString(info.id)) + "_" + namespacePart(asString(info.title)) + "_"
+    return m.appPrefix + namespacePart(asString(info.version))
+end function
+
+' One part of the namespace: anything but letters, digits, "." and "-" becomes "-", so a part
+' never holds the "_" that separates them (an app titled "fc_x" cannot match the prefix of "fc")
+function namespacePart(text as string) as string
+    part = createObject("roRegex", "[^A-Za-z0-9.-]", "").replaceAll(text, "-")
+    if part = "" then part = "-"
+    return part
 end function
 
 ' A query's directory name: the name with anything but letters, digits, "." , "-" and "_"
@@ -991,12 +1030,12 @@ sub deletePersisted(key as string)
 end sub
 
 sub clearPersisted()
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clear", dir: PERSIST_DIR })
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clear", dir: m.persistDir })
 end sub
 
 ' Deletes every stored body of a query, and of its dotted descendants when descendants is true
 sub clearPersistedQuery(name as string, descendants as boolean)
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: PERSIST_DIR, name: persistDirName(name), descendants: descendants })
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
 end sub
 
 '#endregion

@@ -11,6 +11,7 @@ import "pkg:/source/keys.bs"
 '      { type: "delete", path }
 '      { type: "clear", dir }                          everything under dir
 '      { type: "clearQuery", dir, name, descendants }  dir/name, and dir/name.* when descendants
+'      { type: "clearSiblings", dir, prefix, keep }    every dir/<prefix>* folder except dir/keep
 
 sub init()
     m.port = createObject("roMessagePort")
@@ -69,6 +70,19 @@ sub runOp(op as object)
             group = op.name + "."
             for each entryName in m.fileSystem.getDirectoryListing(op.dir)
                 if entryName = op.name or (op.descendants = true and entryName.left(group.len()) = group) then
+                    path = op.dir + "/" + entryName
+                    if isDirectory(path) then
+                        clearDirectory(path)
+                        deleteDirectory(path)
+                    end if
+                end if
+            end for
+        end if
+    else if opType = "clearSiblings" then
+        ' An app's folders for its other versions
+        if isNonEmptyString(op.dir) and isNonEmptyString(op.prefix) and m.fileSystem.exists(op.dir) then
+            for each entryName in m.fileSystem.getDirectoryListing(op.dir)
+                if entryName <> op.keep and entryName.left(op.prefix.len()) = op.prefix then
                     path = op.dir + "/" + entryName
                     if isDirectory(path) then
                         clearDirectory(path)

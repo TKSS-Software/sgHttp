@@ -209,13 +209,20 @@ namespace tests
         @describe("invalidate")
 
         ' A store that persists to cachefs, holding one entry in memory, so a second key evicts
-        ' the first to disk only. Starts from an empty disk cache.
+        ' the first to disk only. Starts with an empty disk cache: invalidate() clears only this
+        ' app's folder, never another sideloaded app's.
         function makePersistingStore()
+            m.makeAppStore("spec app", "1.0.0")
+            m.store.callFunc("_invalidate", invalid, invalid)
+        end function
+
+        ' A persisting store as the app with this title and version would make it (its disk folder
+        ' is named by them), talking to baseUrl
+        function makeAppStore(title as string, version as string, baseUrl = "" as string)
             m.fake = createObject("roSGNode", "FakeTransport")
             m.store = createObject("roSGNode", "Store")
-            m.store.callFunc("_initialize", { transport: m.fake, persist: true, maxEntries: 1, version: "spec" })
+            m.store.callFunc("_initialize", { transport: m.fake, baseUrl: baseUrl, persist: true, maxEntries: 1, version: "spec", appInfo: { id: "dev", title: title, version: version } })
             m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300, persist: true })
-            m.store.callFunc("_invalidate", invalid, invalid)
         end function
 
         ' Stores "a" for item 1 on disk, then "b" for item 2, which evicts item 1 from memory
@@ -262,6 +269,91 @@ namespace tests
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("apps sharing cachefs")
+
+        @async
+        @it("keeps each app's disk copies apart")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                ' Another sideloaded app with the same query clears its cache and fetches
+                suite.makeAppStore("other app", "1.0.0")
+                suite.store.callFunc("_invalidate", invalid, invalid)
+                suite.fake.callFunc("answerNext", "other")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "other")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                ' The first app starts again: its own copy is still on disk
+                suite.makeAppStore("spec app", "1.0.0")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("drops the app's earlier versions when a new version starts")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                ' Version 1.0.1 starts: 1.0.0's folder is cleared before its first read
+                suite.makeAppStore("spec app", "1.0.1")
+                suite.fake.callFunc("answerNext", "new")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "new")
+                ' Back on 1.0.0, its copy is gone
+                suite.makeAppStore("spec app", "1.0.0")
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("keeps bodies from another server apart (QA and production)")
+        function _()
+            m.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
+            m.store.callFunc("_invalidate", invalid, invalid)
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                ' The same build pointed at production does not read QA's copy
+                suite.makeAppStore("spec app", "1.0.0", "https://api.example.com")
+                suite.fake.callFunc("answerNext", "production")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "production")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                ' Pointed at QA again, its copy is still there
+                suite.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
+                return suite.fetch("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.fake.requestCount, 0)
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

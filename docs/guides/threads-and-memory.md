@@ -35,7 +35,7 @@ Values are cached by reference. Every fetch of a key returns the **same** node, 
 | Expiry records (to skip old disk copies) | About one per expired query, plus one per expired persisted key not yet fetched again |
 | Watchers | Until you call `unwatch` |
 | Observers from `observeEvents` / `observeChanges` | Until you call `unobserveEvents` / `unobserveChanges` |
-| Files on `cachefs:/` | Managed by the OS; removed by `invalidate` and scope changes |
+| Files on `cachefs:/` | Managed by the OS; removed by `invalidate`, scope changes, and the next app version's startup |
 
 The `maxEntries` cap counts entries, not bytes. A hundred small objects and a hundred trees of a thousand nodes each are both at the cap. For queries with large results:
 

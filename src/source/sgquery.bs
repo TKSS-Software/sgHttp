@@ -23,7 +23,12 @@ import "keys.bs"
 '   headers     - associative array of headers sent with every request (e.g. Authorization). Optional.
 '   baseHeaders - headers sent with every request without exception, even where auth is false. Optional.
 '   persist     - enable cachefs:/ persistence for definitions that opt in. Default true.
-'   version     - cache version string; bump to invalidate everything on disk. Default "1".
+'   version     - cache version string; bump to stop every body on disk from being read. Rarely needed:
+'                 the app version (namespace), the server (baseUrl) and the definition already keep
+'                 bodies apart. Default "1".
+'   namespace   - this app's folder under cachefs:/sgquery/. Default: <channel id>_<title>_<app version>
+'                 from roAppInfo, so sideloaded apps (all "dev") never share bodies, and each release
+'                 starts empty (the same app's other versions' folders are deleted). Optional.
 '   maxEntries  - in-memory entry cap, least recently used evicted first (the disk copy stays). Default 100.
 '   defaultTtl  - seconds; used by definitions without a ttl. Default 300.
 '   maxConcurrent, timeout, retries, httpVersion - the default client's Transport settings. Optional.

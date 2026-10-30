@@ -35,10 +35,12 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `clients` | none | More servers: `{ <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout, retries, httpVersion, transport } }`. See [More than one server](../guides/multiple-servers.md). |
 | `parserTask` | none | Component name of your `ParserTask` subclass. See [Parsers](../guides/parsers.md). |
 | `persist` | `true` | `false` turns persistence off for every query |
-| `version` | `"1"` | Cache version; change it to retire every body on disk |
+| `version` | `"1"` | Cache version; change it to stop every body on disk from being read. Rarely needed: app releases, servers and definition changes already keep bodies apart. |
+| `namespace` | `<id>_<title>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sgquery/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
 | `maxEntries` | 100 | In-memory entry cap |
 | `defaultTtl` | 300 | Seconds, for definitions without a `ttl` |
 | `store` | none | An existing `Store` node to attach instead of creating one (tests) |
+| `appInfo` | `roAppInfo` | `{ id, title, version }` to name the namespace with instead of `roAppInfo` (tests) |
 
 Returns the store node.
 
@@ -106,7 +108,7 @@ sgquery.invalidate(name = invalid as dynamic, args = invalid as dynamic)
 
 Drops values from memory and disk.
 
-- No arguments: everything, including every file under `cachefs:/sgquery/`.
+- No arguments: everything, including every file in this app's folder under `cachefs:/sgquery/`.
 - Name only: every entry of the query and its dotted descendants, and their files.
 - Name and args: the one entry those args key to now, and its file.
 

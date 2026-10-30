@@ -20,10 +20,22 @@ Each file is a small JSON envelope holding the body, the time it was saved, the 
 Files live at:
 
 ```
-cachefs:/sgquery/<query name>/<digest>.json
+cachefs:/sgquery/<namespace>/<query name>/<digest>.json
 ```
 
-The digest covers the cache `version`, the definition's request and parser, and the cache key.
+The digest covers the cache `version`, the definition's request and parser, and the cache key. The namespace is described below.
+
+## One folder per app
+
+On a developer device, every sideloaded app runs as the same "dev" channel, so they can share `cachefs:/`. Two apps that define the same queries could then read each other's stored bodies, including per-user data. To keep them apart, each app stores its bodies in its own folder, named by its channel id, title and version from `roAppInfo`:
+
+```
+cachefs:/sgquery/dev_My-Channel_1.4.2/homePage/...
+```
+
+- Characters other than letters, digits, `.` and `-` become `-`.
+- Because the app version is part of the name, **each release of the app starts with an empty disk cache**. When the store starts, it deletes the folders of the same app's other versions (same id and title), so old releases don't leave files behind.
+- To choose the folder yourself, pass `initialize({ namespace: "my-app" })`. The app's other folders are then left alone, and a new release keeps the previous one's bodies, which the cache `version` and the request digest still guard.
 
 ## When the disk copy is used
 
@@ -39,9 +51,12 @@ A body on disk is never served when:
 
 - it was saved before an [`expire`](mutations.md#expire) of its query, a parent query or its key;
 - it was stored under a different cache `version`;
-- it was stored under a different `request` or `parser` in the definition. Changing a query's url, query string, method, body or parser retires its old bodies automatically, so a body can't be parsed by a parser written for another shape.
+- it was stored under a different `request` or `parser` in the definition. Changing a query's url, query string, method, body or parser retires its old bodies automatically, so a body can't be parsed by a parser written for another shape;
+- it was fetched from a different server: another client, or another `baseUrl`. A build pointed at QA never reads bodies stored against production, and the other way round.
 
-The version, request and parser are part of the file's digest, so a body stored under different ones is simply never looked up again. Those files stay on disk until `invalidate()` clears the cache or the OS reclaims the space. To retire every stored body at once, after a change to the response format for example, bump the version:
+The version, request, parser and server are part of the file's digest, so a body stored under different ones is simply never looked up again. Those files stay on disk until `invalidate()` clears the cache or the OS reclaims the space.
+
+With the app version in the [folder name](#one-folder-per-app) and the server in the digest, you rarely need `version`. It is there to drop every stored body at once without changing anything else, for example while developing a parser against a response whose shape changed:
 
 ```brightscript
 sgquery.initialize({ version: "2" })
@@ -51,7 +66,7 @@ sgquery.initialize({ version: "2" })
 
 - `invalidate(name, args)` deletes that key's file.
 - `invalidate(name)` deletes the folder of the query and of its dotted descendants, including files for entries no longer in memory.
-- `invalidate()` deletes everything under `cachefs:/sgquery/`.
+- `invalidate()` deletes everything in this app's folder. Other apps' folders are never touched.
 - Changing a [scope](scopes-and-buckets.md#changing-a-scope) deletes the files of every query that lists it.
 
 Eviction from memory doesn't delete files. The next fetch reads the file back.
@@ -63,6 +78,7 @@ Eviction from memory doesn't delete files. The next fetch reads the file back.
 ## Things to know
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
+- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are no longer read. Only the OS removes them.
 - All file access runs on the `Persistence` task. `roFileSystem` can't be created on the render thread.
 - `persist` has no effect on `cache: false` queries.
 
