@@ -28,6 +28,31 @@ end function)
 
 When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists. Nothing is applied when it fails.
 
+## Showing the change at once
+
+A mutation takes a round trip, and the queries it expires are only refetched when next asked. For a change the user made and can see, that's a visible delay. Two tools close it.
+
+**`set`** writes a value into the cache as if the server had just answered with it: fresh for the definition's `ttl`, delivered to every watcher of that query with `source: "local"`, and safe from any request that was already in flight (its callers still get their answer, but it doesn't overwrite the write). The disk copy is deleted, since it predates the change. `set` returns the previous value, and `set(name, args, invalid)` removes the entry.
+
+```brightscript
+sgquery.set("favorites.check", { model: "show", slug: "abc" }, { favorite: true })
+```
+
+**`optimistic` on `mutate`** does the writes for you, before the request, and undoes them if it fails:
+
+```brightscript
+promises.chain(sgquery.mutate("favorites.add", { slug: "abc" }, {
+    optimistic: [{ name: "favorites.check", args: { model: "show", slug: "abc" }, value: { favorite: true } }]
+}), m).catch(function(error as object, m as object) as dynamic
+    m.toast.text = "Couldn't add the favorite"   ' the cache already shows it un-favorited again
+    return invalid
+end function)
+```
+
+Every screen watching `favorites.check` for that title flips at once; if the server says no, they flip back. A write is only undone if its value is still the one in the cache: a newer `set`, or a response that landed since, stays. On success the mutation's `expires` applies as usual, so the server confirms the value the next time it's queried.
+
+For a query with pages, `set` replaces the first page; the pages after it are kept when the first page's cursor is unchanged, as for a refresh (see [Pages](pagination.md)).
+
 ## Telling the cache what changed
 
 After a write, some cached data is out of date. sgQuery has two ways to handle that.
@@ -81,6 +106,7 @@ sgquery.define("profile.update", {
 | The old data gone everywhere, including disk | `invalidate`, or `invalidates: [...]` |
 | Everything refreshed after a long time in the background, served from cache meanwhile | `expireAll()` |
 | One screen to check for new data as it opens | `query(name, args, { revalidate: true })` |
+| The change shown everywhere now, confirmed by the server later | `optimistic` on `mutate`, or `set` |
 | A profile or account switch | `setScope`, which drops that scope's entries for you (see [Scopes](scopes-and-buckets.md#scopes)) |
 
 Neither expiry nor invalidation notifies watchers. Watchers hear about a value only when a later request replaces it with different content (see [Keeping data fresh](keeping-data-fresh.md)).

@@ -9,7 +9,7 @@ Delivered to [`observeEvents`](api.md#observeevents) callbacks as `event.getData
 | `type` | string | `hit`, `stale`, `dedupe`, `resolve`, `unchanged` or `error` |
 | `name` | string | Query name |
 | `key` | string | Cache key; `""` for `cache: false` queries |
-| `source` | string | `memory`, `disk` or `network` |
+| `source` | string | `memory`, `disk`, `network`, or `local` for a value written with `set` |
 | `ms` | integer | Time from the start of the request to this event; `0` for answers from memory |
 | `client` | string | The query's client; `"default"` for the top-level one |
 | `code` | integer | Errors only. See [Errors](#errors). |
@@ -22,6 +22,7 @@ Delivered to [`observeEvents`](api.md#observeevents) callbacks as `event.getData
 | `dedupe` | A query joins a request already in flight |
 | `resolve` | A value arrives from the network or disk (or a `cache: false` query succeeds) |
 | `unchanged` | A response matches the cached value (same body hash, same parsed hash, or `304`) and the entry is renewed |
+| `set` | A value is written with `set` or an optimistic mutation (source `local`) |
 | `error` | A request or parse fails, including background refreshes and mutations |
 
 A query whose name was never defined rejects without an event.

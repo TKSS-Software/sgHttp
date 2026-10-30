@@ -600,6 +600,106 @@ namespace tests
             m.assertEqual(spec.headers["X-Page"], "3")
         end function
 
+        @describe("set")
+
+        @it("stores a fresh value, tells the watcher, and invalid removes it")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            m.assertInvalid(m.store.callFunc("_set", "items", { id: "1" }, "local"))
+            m.assertEqual(m.store.callFunc("_peek", "items", { id: "1" }), "local")
+            m.assertEqual(m.watchedOne.changed.value, "local")
+            m.assertEqual(m.watchedOne.changed.source, "local")
+            m.assertEqual(m.store.lastEvent.type, "set")
+            ' Fresh: a query is answered from memory
+            m.query("1")
+            m.assertEqual(m.fake.requestCount, 0)
+            m.assertEqual(m.store.callFunc("_set", "items", { id: "1" }, invalid), "local")
+            m.assertInvalid(m.store.callFunc("_peek", "items", { id: "1" }))
+            m.assertEqual(m.store.callFunc("_getStats").entries, 0)
+        end function
+
+        @async
+        @it("is not replaced by the answer to a request from before it, which its caller still gets")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.store.callFunc("_set", "items", { id: "1" }, "local")
+            m.fake.callFunc("answer", 0, "server")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "server")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "local")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("optimistic mutations")
+
+        @async
+        @it("applies the writes before the request and puts them back when it fails")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: "saved" }] })
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "saved")
+                suite.assertEqual(suite.watchedOne.changed.value, "saved")
+                suite.fake.callFunc("fail", 1, 500)
+                return saving
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.fail("the mutation resolved")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 500)
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.assertEqual(suite.watchedOne.changed.value, "a")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("keeps a newer write when the request fails, and the write itself when it succeeds")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: "saved" }] })
+                suite.store.callFunc("_set", "items", { id: "1" }, "newer")
+                suite.fake.callFunc("fail", 1, 500)
+                return promises.chain(saving).catch(function(error as dynamic) as dynamic
+                    return "failed"
+                end function).toPromise()
+            end function).then(function(outcome as dynamic, suite as object) as dynamic
+                suite.assertEqual(outcome, "failed")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "newer")
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: "saved2" }] })
+                suite.fake.callFunc("answer", 2, "ok")
+                return saving
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "ok")
+                ' Kept, and expired by the mutation: the next plain query confirms with the server
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "saved2")
+                suite.query("1")
+                suite.assertEqual(suite.fake.requestCount, 4)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("mutate")
 
         @async

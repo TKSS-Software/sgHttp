@@ -43,6 +43,7 @@ sub init()
     ' Counts request starts and expiries, ordering them (see currentEntry)
     m.sequence = 0
     m.nextEntryId = 0
+    m.lastSetId = 0
     ' Persistence ops held back until the first disk read (see runCleanups)
     m.cleanups = invalid
     m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
@@ -314,7 +315,10 @@ function _query(name as string, args = {} as object, options = {} as object) as 
         return promises.reject({ message: `sgquery: "${name}" is a cached query; mutate() runs cache: false definitions` })
     end if
     ' Mutations and per-call resources: straight through the transport, never stored
-    if not definition.cache then return runUncached(definition, args)
+    if not definition.cache then
+        if type(options.optimistic) = "roArray" and options.optimistic.count() > 0 then return runOptimistic(definition, args, options.optimistic)
+        return runUncached(definition, args)
+    end if
 
     raw = runQuery(definition, args, options)
     if definition.pages = invalid then return raw
@@ -396,6 +400,109 @@ function _peek(name as string, args = {} as object) as dynamic
     if definition.pages <> invalid then return assemblePages(definition, key)
     return entry.value
 end function
+
+'#endregion
+
+'*************************************************************************
+'#region Local writes
+'*************************************************************************
+
+' Puts a value in the cache for these args, as fresh as a response now, and hands it to
+' watchers (source "local"): for a change the app made and already knows the result of.
+' invalid removes the entry. Returns the previous value, or invalid, so a failed write can
+' put it back. A response to a request that started before the write does not replace it
+' (its callers still get it); the disk copy is deleted, since it is from before the change.
+function _set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
+    definition = m.definitions[name]
+    if definition = invalid then
+        print `[sgquery] set: no query named "${name}"`
+        return invalid
+    end if
+    if not definition.cache then
+        print `[sgquery] set: "${name}" is cache: false, nothing to set`
+        return invalid
+    end if
+    if type(args) <> "roAssociativeArray" then args = {}
+    now = nowSeconds()
+    key = buildKey(name, definition, args, m.scopes, now)
+    entry = m.cache[key]
+    previous = invalid
+    if entry <> invalid and entry.hasValue then previous = entry.value
+    if value = invalid then
+        _invalidate(name, args)
+        return previous
+    end if
+
+    if entry = invalid then
+        entry = newEntry(definition, now)
+        insertEntry(key, entry)
+    else
+        touch(key)
+    end if
+    ' A request in flight answers its callers but is not stored over this value; a query
+    ' from now on is answered from memory rather than joining it
+    m.sequence++
+    entry.expiredSequence = m.sequence
+    entry.promise = invalid
+    recut = definition.pages <> invalid and entry.hasValue and asString(nextCursor(definition, entry)) <> asString(cursorOf(definition, value))
+    entry.value = value
+    entry.hasValue = true
+    entry.expired = false
+    ' No server bytes behind this value: the next response is always a change
+    entry.hash = ""
+    entry.parsedHash = ""
+    entry.etag = ""
+    entry.lastModified = ""
+    entry.storedAt = now
+    entry.freshUntil = (definition.ttl < 0) ? 2147483647 : now + definition.ttl
+    m.lastSetId++
+    entry.setId = m.lastSetId
+    deletePersisted(key)
+    emit("set", name, key, "local", 0)
+    if definition.pages <> invalid then
+        if recut then resetPagesAfter(key, entry)
+        headKey = isNonEmptyString(entry.head) ? entry.head : key
+        notifyChange(name, headKey, "local", assemblePages(definition, headKey))
+    else
+        notifyChange(name, key, "local", value)
+    end if
+    return previous
+end function
+
+' A mutation with optimistic writes: the writes go in first, and come back out if the
+' mutation fails, unless a newer write or a response has replaced one meanwhile
+function runOptimistic(definition as object, args as object, writes as object) as object
+    undo = []
+    for each write in writes
+        if type(write) = "roAssociativeArray" and isNonEmptyString(write.name) then
+            previous = _set(write.name, write.args, write.value)
+            undo.push({ name: write.name, args: write.args, previous: previous, setId: m.lastSetId })
+        end if
+    end for
+    pending = promises.create()
+    context = { undo: undo, pending: pending }
+    promises.chain(runUncached(definition, args), context).then(function(value as dynamic, context as object) as dynamic
+        promises.resolve(value, context.pending)
+        return invalid
+    end function).catch(function(error as dynamic, context as object) as dynamic
+        for each write in context.undo
+            rollback(write)
+        end for
+        promises.reject(error, context.pending)
+        return invalid
+    end function).toPromise()
+    return pending
+end function
+
+' Puts the value from before an optimistic write back, if the write's value is still there
+sub rollback(write as object)
+    definition = m.definitions[write.name]
+    if definition = invalid then return
+    args = type(write.args) = "roAssociativeArray" ? write.args : {}
+    entry = m.cache[buildKey(write.name, definition, args, m.scopes, nowSeconds())]
+    if entry = invalid or entry.setId <> write.setId then return
+    _set(write.name, args, write.previous)
+end sub
 
 '#endregion
 
@@ -566,6 +673,12 @@ function valueAtPath(value as dynamic, path as string) as dynamic
     return current
 end function
 
+' An entry with no value yet. setId: which local write (set) put the value there, 0 for none
+function newEntry(definition as object, now as integer) as object
+    m.nextEntryId++
+    return { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid, setId: 0 }
+end function
+
 ' Starts (or restarts) a fetch for a key. Returns the pending promise.
 ' When background is true an existing value stays served until the refresh lands.
 ' fallback: a failed request resolves with the kept value instead of rejecting (expired entries).
@@ -575,8 +688,7 @@ function startFetch(definition as object, key as string, args as object, now as 
     if entry <> invalid and entry.promise <> invalid then return entry.promise
 
     if entry = invalid then
-        m.nextEntryId++
-        entry = { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid }
+        entry = newEntry(definition, now)
         insertEntry(key, entry)
     end if
 

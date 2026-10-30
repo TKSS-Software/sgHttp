@@ -132,8 +132,22 @@ end function
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
 ' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.
-function mutate(name as string, args = {} as object) as object
-    return getStore().callFunc("_query", name, args, { mutation: true })
+' @param {Object} options
+'   optimistic - [{ name, args, value }]: values set (see set) before the request goes out, so
+'                every screen shows the change at once, and put back if the request fails,
+'                unless a newer set or a response has replaced one by then.
+function mutate(name as string, args = {} as object, options = {} as object) as object
+    return getStore().callFunc("_query", name, args, { mutation: true, optimistic: options.optimistic })
+end function
+
+' Puts a value in the cache for a query and args, as if the server had just answered with it:
+' fresh for the definition's ttl, handed to watchers with source "local". For a change the app
+' made and already knows the result of. invalid removes the entry. Returns the previous value
+' (or invalid), so a failed write can put it back with another set. A response to a request
+' that started before the call does not replace the value, though its callers still get it.
+' The disk copy is deleted, since it is from before the change.
+function set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
+    return getStore().callFunc("_set", name, args, value)
 end function
 
 ' Returns the value cached in memory (fresh, stale or expired) synchronously, else invalid.

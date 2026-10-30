@@ -55,7 +55,8 @@ end function)
 - Persistence to `cachefs:/`, so a cold start draws before the network answers
 - Background refreshes that skip parsing and redraws when the server's data hasn't changed
 - Paged listings: load the next page by name and get every page back, cached, expired and watched as one
-- Mutations that expire or invalidate the queries they affect, scopes for per-profile data, time buckets for schedules
+- Mutations that expire or invalidate the queries they affect, with optimistic updates that show on every screen at once and roll back on failure
+- Scopes for per-profile data, time buckets for schedules
 - Change watchers and stats
 
 **Either way**

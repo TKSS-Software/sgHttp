@@ -8,7 +8,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch)
-- Queries: [`define`](#define), [`query`](#query), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate)
+- Queries: [`define`](#define), [`query`](#query), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -100,10 +100,22 @@ Returns the value cached in memory for those args (fresh, stale or expired), or 
 ## mutate
 
 ```brightscript
-sgquery.mutate(name as string, args = {} as object) as object
+sgquery.mutate(name as string, args = {} as object, options = {} as object) as object
 ```
 
 Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `invalidates`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
+
+| Option | Meaning |
+|---|---|
+| `optimistic: [{ name, args, value }]` | Values to [`set`](#set) before the request goes out, put back if it fails unless a newer `set` or a response has replaced them. See [Showing the change at once](../guides/mutations.md#showing-the-change-at-once). |
+
+## set
+
+```brightscript
+sgquery.set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
+```
+
+Puts `value` in the cache for a query and args as if the server had just answered with it: fresh for the definition's `ttl`, delivered to watchers with `source: "local"`, with a `set` event. A response to a request that started before the call doesn't replace it (its callers still get it). The disk copy is deleted. `invalid` removes the entry. Returns the previous value, or `invalid`. For a query with pages, sets the first page. Prints a warning and returns `invalid` for an unknown or `cache: false` query.
 
 ## expire
 
