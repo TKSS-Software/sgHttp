@@ -6,7 +6,29 @@ class UpperParser
     end function
 end class
 
+' body.word when the body reached the parser decoded, else "text:" and the body, so a spec can
+' tell whether the parser task decoded it
+class FieldParser
+    function parse(body as dynamic, args as object) as dynamic
+        if type(body) = "roAssociativeArray" then return body.word
+        return "text:" + body
+    end function
+end class
+
+' Holds its task for half a second, then answers "slow", so a spec can tell whether another
+' parse waited behind it
+class SlowParser
+    function parse(body as dynamic, args as object) as dynamic
+        timer = createObject("roTimespan")
+        while timer.totalMilliseconds() < 500
+        end while
+        return "slow"
+    end function
+end class
+
 function getParser(name as string) as dynamic
     if name = "Upper" then return new UpperParser()
+    if name = "Field" then return new FieldParser()
+    if name = "Slow" then return new SlowParser()
     return invalid
 end function

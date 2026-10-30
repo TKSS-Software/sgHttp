@@ -5,11 +5,13 @@
 | Work | Where |
 |---|---|
 | Cache lookups, keys, freshness, bookkeeping | `Store` node, on the render thread |
-| HTTP, gzip, JSON decoding, body hashing | `Transport` task, one per client |
-| Parsers, parsed-value hashing | Your `ParserTask` subclass |
+| HTTP, gzip, body hashing, JSON decoding of bodies without a parser | `Transport` task, one per client |
+| JSON decoding of bodies with a parser, parsers, parsed-value hashing | Your `ParserTask` subclass, two of them by default |
 | Reading, writing and deleting `cachefs:/` files | `Persistence` task |
 
 The store does only bookkeeping, so a query costs the render thread very little: a key, a lookup, and a promise. Everything slow happens on tasks, and results come back through promise nodes.
+
+A decoded body that crosses from one thread to another is copied, field by field, and the copy costs time on the render thread. A body that goes to a parser therefore travels as the text the server sent, which copies cheaply, and is decoded on the parser task. Only the parser's result reaches the render thread, and ContentNodes in it aren't copied.
 
 `roFileSystem` can't be created on the render thread. Never add file access to the store.
 

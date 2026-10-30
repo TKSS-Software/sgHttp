@@ -9,8 +9,9 @@ import "pkg:/source/keys.bs"
 ' and base headers when it starts.
 '
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
-'         allowNotModified, timeoutSeconds }
-' response: { code, body, headers, url, ms, bodyHash, notModified }
+'         allowNotModified, timeoutSeconds, keepRawBody }
+' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody }
+'   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
 '   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
 '                 render thread), so the store can tell an unchanged payload without parsing
 '   notModified - true for a 304 answering a conditional request (spec.allowNotModified)
@@ -235,7 +236,12 @@ sub onUrlEvent(event as object)
     if success and job.spec.hashBody = true and rawBody <> "" then response.bodyHash = hashString(rawBody)
     if success and job.spec.parseJson <> false and rawBody <> "" then
         parsed = parseJson(rawBody)
-        if parsed <> invalid then response.body = parsed
+        if parsed <> invalid then
+            response.body = parsed
+            ' The text too, for a body the store keeps on disk: writing it saves encoding the
+            ' decoded body again on the render thread
+            if job.spec.keepRawBody = true then response.rawBody = rawBody
+        end if
     end if
 
     retryable = isRetryable(job.spec, code) and job.attempts < job.maxAttempts

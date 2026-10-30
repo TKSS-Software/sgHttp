@@ -14,6 +14,7 @@ namespace tests
         public watchedTwo = invalid
         public partner = invalid
         public legacyPath = ""
+        public slow = invalid
 
         ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
         function makeStore()
@@ -946,6 +947,99 @@ namespace tests
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.assertTrue(error.message.instr("parserTask") >= 0)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        ' A store with the spec parser task; persisting (to the shared disk, as the app "parser
+        ' app") when persist is true
+        function makeParsingStore(persist = false as boolean)
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persistence: m.disk(), persist: persist, parserTask: "SpecParserTask", version: "spec", appInfo: { id: "dev", title: "parser app", version: "1" } })
+            m.store.callFunc("_define", "words", { request: { url: "/words/{id}" }, parser: "Field", ttl: 300, persist: true })
+        end function
+
+        @async
+        @it("hands the parser the body decoded on its own task")
+        function _()
+            m.makeParsingStore()
+            waiting = m.store.callFunc("_fetch", { url: "/word", parser: "Field" }, {})
+            m.fake.callFunc("answer", 0, `{"word":"abc"}`)
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body, "abc")
+                ' The transport was asked for the text, not a decoded body
+                suite.assertFalse(suite.fake.callFunc("requestAt", 0).parseJson)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("hands the parser the text when the request has parseJson false")
+        function _()
+            m.makeParsingStore()
+            waiting = m.store.callFunc("_fetch", { url: "/word", parser: "Field", parseJson: false }, {})
+            m.fake.callFunc("answer", 0, `{"word":"abc"}`)
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body, `text:{"word":"abc"}`)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("keeps a parsed body on disk as its text and parses it again after a restart")
+        function _()
+            m.makeParsingStore(true)
+            m.store.callFunc("_invalidate", invalid, invalid)
+            m.fake.callFunc("answerNext", `{"word":"abc"}`)
+            promises.chain(m.store.callFunc("_query", "words", { id: "1" }, {}), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "abc")
+                ' A new store for the same app reads the body back from the shared disk task,
+                ' queued behind the write
+                suite.makeParsingStore(true)
+                return suite.store.callFunc("_query", "words", { id: "1" }, {})
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "abc")
+                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("parses a small body on a second parser task while a slow parse runs")
+        function _()
+            m.makeParsingStore()
+            m.slow = m.store.callFunc("_fetch", { url: "/slow", parser: "Slow" }, {})
+            fast = m.store.callFunc("_fetch", { url: "/word", parser: "Field" }, {})
+            m.fake.callFunc("answer", 0, "x")
+            m.fake.callFunc("answer", 1, `{"word":"abc"}`)
+            promises.chain(fast, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body, "abc")
+                suite.assertFalse(promises.isComplete(suite.slow))
+                return suite.slow
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body, "slow")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
                 suite.done()
                 return invalid
             end function)

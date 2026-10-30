@@ -24,16 +24,18 @@ sub init()
     m.top.control = "RUN"
 end sub
 
-' Render-thread entry point. job: { parser, body, args, hashResult }. Returns a promise
+' Render-thread entry point. job: { parser, body, args, hashResult, decode }. Returns a promise
 ' node that resolves with the parsed value, or with { value, hash } when hashResult is
 ' true (hash: MD5 of the value's JSON, "" when it cannot be serialized, e.g. holds nodes).
+' decode: body is the response's text, to be JSON-decoded here before the parser sees it (when
+' it is JSON), so a large body crosses threads as one string rather than as a decoded tree.
 function parse(job as object) as object
     promise = promises.create()
     if type(job) <> "roAssociativeArray" or not isNonEmptyString(job.parser) then
         promises.reject({ message: "sgquery parser: job needs a parser name" }, promise)
         return promise
     end if
-    m.top.job = { promise: promise, parser: job.parser, body: job.body, args: job.args, hashResult: job.hashResult = true }
+    m.top.job = { promise: promise, parser: job.parser, body: job.body, args: job.args, hashResult: job.hashResult = true, decode: job.decode = true }
     return promise
 end function
 
@@ -68,8 +70,13 @@ sub runJob(job as object)
     end if
     args = job.args
     if type(args) <> "roAssociativeArray" then args = {}
+    body = job.body
+    if job.decode = true and isNonEmptyString(body) then
+        decoded = parseJson(body)
+        if decoded <> invalid then body = decoded
+    end if
     try
-        result = parser.parse(job.body, args)
+        result = parser.parse(body, args)
         if job.hashResult = true then
             promises.resolve({ value: result, hash: hashValue(result) }, job.promise)
         else

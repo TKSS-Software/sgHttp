@@ -87,7 +87,7 @@ promises.chain(sgquery.fetch({ url: "/home/main", parser: "HomePageParser" }), m
 end function)
 ```
 
-A parser is any class with `parse(body, args)`; `args` are the second argument to `fetch`. Parsers live on one Task for the whole app, named once in `initialize({ parserTask: "AppParserTask" })`, whose `getParser(name)` maps names to instances. A `fetch` picks a parser by name; it doesn't pick the task. If no `parserTask` was configured, a spec that names a parser rejects with a message saying so. Writing the parser and the task is covered in [Parsers](parsers.md).
+A parser is any class with `parse(body, args)`; `args` are the second argument to `fetch`. Parsers live on a Task component of the app's, named once in `initialize({ parserTask: "AppParserTask" })`, whose `getParser(name)` maps names to instances. sgQuery runs two copies of it so one large body doesn't hold up the rest. A `fetch` picks a parser by name; it doesn't pick the task. The body reaches the parser task as text and is decoded there, so a large body is never copied through the render thread as a decoded tree. If no `parserTask` was configured, a spec that names a parser rejects with a message saying so. Writing the parser and the task is covered in [Parsers](parsers.md).
 
 ## Failures
 

@@ -59,16 +59,23 @@ sgquery.fetch({ url: "/shows/{id}", parser: "ShowParser" }, { id: "abc" })
 - `getParser` is called for every response, so each parse gets a new instance. Don't rely on state kept between parses.
 - An unknown name (`getParser` returns `invalid`) rejects with `sgquery parser: unknown parser "..."`.
 - Naming a parser when no `parserTask` was configured rejects with a message saying so.
-- There is one parser task per app, and a request names a parser on it, not a task of its own.
+- A request names a parser, not a task: any of the app's parser tasks can run it.
+- The parser gets the decoded body, as before. The text is decoded on the parser task, so a large body never passes through the render thread as a decoded tree.
 - Without a `parser`, a query resolves with the decoded body itself, and a `fetch`'s `response.body` is the decoded body.
 
 ## Nodes come back by reference
 
 ContentNode trees built in the parser are handed to the render thread by reference, not copied. The cache stores that same tree, and every query of the key returns it. See [Threads and memory](threads-and-memory.md#cached-nodes-are-shared) for what that means when you attach it to the screen.
 
-## One parser task, one thread
+## Parser threads
 
-All parses run on the same task, one at a time, in the order the responses arrive. A slow parser delays the parses behind it, but never the UI. Keep parsers to building the value; do any further work where the value is used.
+`initialize` starts two copies of `parserTask`, each on its own thread. Each parse goes to the copy with the fewest parses waiting, so a small body, like a menu, isn't held behind a large page of rows. Each copy parses one body at a time, in the order they reach it. A slow parser delays only the parses behind it on its own task, and never the UI.
+
+```brightscript
+sgquery.initialize({ parserTask: "AppParserTask", parserThreads: 3 })
+```
+
+Each copy calls `getParser` for itself, so parsers must not share state through the task. Keep parsers to building the value; do any further work where the value is used.
 
 ## Next
 

@@ -15,7 +15,9 @@ sgquery.define("homePage", {
 
 The **raw body** is stored, not the parsed value, because ContentNode trees can't be written to a file. A body read from disk goes through the parser again, on the parser task.
 
-Each file is a small JSON envelope holding the body, the time it was saved, the body's hash, and any `ETag` / `Last-Modified` validators. A later refresh of a disk-loaded value can therefore still detect an unchanged body and send [conditional](keeping-data-fresh.md#conditional-requests-conditional-true) headers.
+Each file starts with one line of JSON holding the time the body was saved, its hash, and any `ETag` / `Last-Modified` validators. The body follows, exactly as the server sent it. A later refresh of a disk-loaded value can therefore still detect an unchanged body and send [conditional](keeping-data-fresh.md#conditional-requests-conditional-true) headers.
+
+Writing and reading a file costs the render thread only that first line. A body with a parser goes from the disk to the parser task as text and is decoded there. A body without a parser is decoded on the render thread, as its value has to be.
 
 Files live at:
 

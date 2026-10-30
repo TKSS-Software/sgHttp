@@ -102,6 +102,7 @@ end interface
 ' What initialize takes (see initialize for each key's meaning and default)
 interface InitializeParams extends ClientSettings
     optional parserTask as string
+    optional parserThreads as integer
     optional persist as boolean
     optional version as string
     optional namespace as string
@@ -194,6 +195,7 @@ end interface
 '   without a client talks to. An app with one server needs nothing else.
 '   transport   - node exposing makeRequest(spec) that returns a promise node. Default: a Transport task.
 '   parserTask  - component name of a Task extending ParserTask that implements getParser(name). Optional.
+'   parserThreads - how many of parserTask to run, each parse going to the least busy. Default 2.
 '   baseUrl     - prefix for relative request urls. Optional.
 '   proxy       - debugging proxy as "host:port" (e.g. Charles); every request url to a public host becomes
 '                 http://host:port/;<url>. Empty or missing disables it. Optional.

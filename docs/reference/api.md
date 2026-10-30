@@ -38,6 +38,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `transport` | a new `Transport` task | A node with `makeRequest(spec)` (default client). See [The transport](../guides/transport.md#replacing-the-transport). |
 | `clients` | none | More servers: `{ <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout, retries, httpVersion, transport } }`. See [More than one server](../guides/multiple-servers.md). |
 | `parserTask` | none | Component name of your `ParserTask` subclass. See [Parsers](../guides/parsers.md). |
+| `parserThreads` | 2 | How many of `parserTask` to run. Each parse goes to the one with the fewest parses waiting. See [Parsers](../guides/parsers.md#parser-threads). |
 | `persist` | `true` | `false` turns persistence off for every query |
 | `version` | `"1"` | Cache version; change it to stop every body on disk from being read. Rarely needed: app releases, servers and definition changes already keep bodies apart. |
 | `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sgquery/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |

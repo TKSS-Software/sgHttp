@@ -19,6 +19,12 @@ import "pkg:/source/keys.bs"
 '   bucket   - the time bucket the key was made in (bucket definitions), -1 otherwise
 
 const PERSIST_DIR = "cachefs:/sgquery"
+' A file is one line of JSON describing the body (its format, the cache version, request and
+' key it belongs to, when it was stored, its hash and validators, and whether it is decoded as
+' JSON), then the body's text exactly as the server sent it. Only the first line is decoded on
+' the render thread; a parser's body goes to its task as text.
+const ENVELOPE_FORMAT = 2
+
 ' The client made from initialize's top-level settings, used by definitions without a client
 const DEFAULT_CLIENT = "default"
 ' Which build of sgquery this is: scripts/build.js writes the commit and build time over this
@@ -47,6 +53,7 @@ sub init()
     ' Persistence ops held back until the first disk read (see runCleanups)
     m.cleanups = invalid
     m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
+    m.parsers = []
     m.initialized = false
 end sub
 
@@ -67,9 +74,15 @@ function _initialize(params = {} as object) as object
         end for
     end if
 
-    m.parserTask = invalid
+    ' A few parser tasks, so a small body is never parsed behind a large one while another
+    ' task sits idle (see parseOnTask). Each is its own thread with its own parser instances.
+    m.parsers = []
     if isNonEmptyString(params.parserTask) then
-        m.parserTask = createObject("roSGNode", params.parserTask)
+        count = 2
+        if isWholeNumber(params.parserThreads) and params.parserThreads > 0 then count = params.parserThreads
+        for i = 1 to count
+            m.parsers.push({ node: createObject("roSGNode", params.parserTask), pending: 0 })
+        end for
     end if
 
     m.persistEnabled = params.persist <> false
@@ -721,9 +734,15 @@ function startFetch(definition as object, key as string, args as object, now as 
             ' A copy stored before an expire() of this query is known to be out of date
             if envelope <> invalid and diskExpired(context, envelope.storedAt) then envelope = invalid
             if envelope <> invalid then
+                ' A parser decodes the text on its own task; without one the value is the
+                ' decoded body, as the transport would have made it
+                context.decode = envelope.decode = true
+                context.body = envelope.body
+                if not isNonEmptyString(context.definition.parser) then context.body = decodeBody(envelope.body, context.decode)
+            end if
+            if envelope <> invalid then
                 m.stats.diskHits++
                 context.source = "disk"
-                context.body = envelope.body
                 context.persistedAt = envelope.storedAt
                 context.hash = asString(envelope.hash)
                 context.etag = asString(envelope.etag)
@@ -759,6 +778,14 @@ sub startNetwork(context as object)
     client.requests++
     spec = buildRequestSpec(context.definition, context.args)
     spec.hashBody = true
+    ' A parser's body comes back as text and is decoded on its task (see parseOnTask). Without
+    ' a parser the body is decoded here, and a persisted one keeps its text for the disk too.
+    context.decode = spec.parseJson
+    if isNonEmptyString(context.definition.parser) then
+        spec.parseJson = false
+    else if context.definition.persist then
+        spec.keepRawBody = true
+    end if
     entry = m.cache[context.key]
     if context.definition.conditional and entry <> invalid and entry.hasValue then
         if entry.etag <> "" then spec.headers["If-None-Match"] = entry.etag
@@ -788,7 +815,7 @@ sub startNetwork(context as object)
         end if
         context.body = response.body
         ' Only an answer the entry will keep is stored: not one from before a drop or expire
-        if context.definition.persist and currentEntry(context) <> invalid then writePersisted(context.key, context.body, context)
+        if context.definition.persist and currentEntry(context) <> invalid then writePersisted(context.key, bodyText(response), context)
         runParseStage(context)
         return invalid
     end function).catch(function(error as dynamic, context as object) as dynamic
@@ -812,16 +839,20 @@ function runUncached(definition as object, args as object, raw = false as boolea
     end if
     m.stats.requests++
     client.requests++
-    requestPromise = client.transport.callFunc("makeRequest", buildRequestSpec(definition, args))
+    spec = buildRequestSpec(definition, args)
+    ' A parser's body crosses to its task as text and is decoded there (see parseOnTask)
+    context.decode = spec.parseJson
+    if isNonEmptyString(definition.parser) then spec.parseJson = false
+    requestPromise = client.transport.callFunc("makeRequest", spec)
 
     promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
         definition = context.definition
         context.response = response
         if isNonEmptyString(definition.parser) then
-            if not isNode(m.parserTask) then
+            if m.parsers.count() = 0 then
                 return promises.reject({ message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             end if
-            return m.parserTask.callFunc("parse", { parser: definition.parser, body: response.body, args: context.args })
+            return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode })
         end if
         return response.body
     end function).then(function(value as dynamic, context as object) as dynamic
@@ -875,12 +906,12 @@ end sub
 sub runParseStage(context as object)
     definition = context.definition
     if isNonEmptyString(definition.parser) then
-        if not isNode(m.parserTask) then
+        if m.parsers.count() = 0 then
             settleError(context, { message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             return
         end if
         hashResult = definition.compare = "parsed"
-        parsePromise = m.parserTask.callFunc("parse", { parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult })
+        parsePromise = parseOnTask({ parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult, decode: context.decode = true })
         promises.chain(parsePromise, context).then(function(parsed as dynamic, context as object) as dynamic
             if context.definition.compare = "parsed" and type(parsed) = "roAssociativeArray" then
                 context.parsedHash = asString(parsed.hash)
@@ -896,6 +927,28 @@ sub runParseStage(context as object)
         settleValue(context, context.body)
     end if
 end sub
+
+' Hands a job to the parser task with the fewest jobs waiting, so a small body (the menu) is
+' not held behind a large one (a page of rows) while another task is free
+function parseOnTask(job as object) as object
+    index = 0
+    for i = 1 to m.parsers.count() - 1
+        if m.parsers[i].pending < m.parsers[index].pending then index = i
+    end for
+    worker = m.parsers[index]
+    worker.pending++
+    parsePromise = worker.node.callFunc("parse", job)
+    ' Settled either way: the task has one job fewer
+    promises.onThen(parsePromise, function(value as dynamic, worker as object) as dynamic
+        worker.pending--
+        return invalid
+    end function, worker)
+    promises.onCatch(parsePromise, function(error as dynamic, worker as object) as dynamic
+        worker.pending--
+        return invalid
+    end function, worker)
+    return parsePromise
+end function
 
 sub settleValue(context as object, value as dynamic)
     key = context.key
@@ -1485,12 +1538,31 @@ function requestHashOf(key as string) as string
     return asString(definition.requestHash)
 end function
 
-' meta: { hash, etag, lastModified } kept beside the body so a cold start can still tell
-' an unchanged response and send the validators
+' The response body as the text the server sent: the transport's copy of it, or the body
+' itself when it was never decoded. A decoded body without its text (a replacement transport)
+' is encoded again.
+function bodyText(response as object) as dynamic
+    if isNonEmptyString(response.rawBody) then return response.rawBody
+    body = response.body
+    if type(body) = "roString" or type(body) = "String" then return body
+    if body = invalid then return invalid
+    return formatJson(body)
+end function
+
+' The body as the transport would have made it: decoded when it is JSON and decode is true
+function decodeBody(text as dynamic, decode as boolean) as dynamic
+    if not decode or not isNonEmptyString(text) then return text
+    decoded = parseJson(text)
+    if decoded = invalid then return text
+    return decoded
+end function
+
+' meta: { hash, etag, lastModified, decode } kept beside the body so a cold start can still
+' tell an unchanged response and send the validators
 sub writePersisted(key as string, body as dynamic, meta = {} as object)
-    if body = invalid or not isNode(m.persistence) then return
-    envelope = { version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), body: body, hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified) }
-    text = formatJson(envelope)
+    if not isNonEmptyString(body) or not isNode(m.persistence) then return
+    header = { format: ENVELOPE_FORMAT, version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified), decode: meta.decode <> false }
+    text = formatJson(header) + chr(10) + body
     if text <> "" then
         m.persistence.callFunc("execute", { type: "write", path: persistPath(key), text: text })
         ' The copy on disk is now newer than any expire of this key
@@ -1498,15 +1570,19 @@ sub writePersisted(key as string, body as dynamic, meta = {} as object)
     end if
 end sub
 
-' Validates the text read from disk. Returns the envelope, or invalid (and deletes a
-' file written by another cache version, under another request, or for another key).
+' Validates the text read from disk. Returns its first line's fields with body set to the
+' body's text, or invalid (and deletes a file in another format, written by another cache
+' version, under another request, or for another key).
 function parseEnvelope(text as dynamic, key as string) as dynamic
     if not isNonEmptyString(text) then return invalid
-    envelope = parseJson(text)
-    if type(envelope) <> "roAssociativeArray" or envelope.version <> m.version or envelope.request <> requestHashOf(key) or envelope.key <> key then
+    newline = text.instr(chr(10))
+    envelope = invalid
+    if newline > 0 then envelope = parseJson(text.left(newline))
+    if type(envelope) <> "roAssociativeArray" or envelope.format <> ENVELOPE_FORMAT or envelope.version <> m.version or envelope.request <> requestHashOf(key) or envelope.key <> key then
         deletePersisted(key)
         return invalid
     end if
+    envelope.body = text.mid(newline + 1)
     return envelope
 end function
 
@@ -1586,6 +1662,9 @@ sub _destroy()
         if transport.hasField("shutdown") then transport.shutdown = true
     end for
     m.clients = {}
-    if isNode(m.parserTask) and m.parserTask.hasField("shutdown") then m.parserTask.shutdown = true
+    for each worker in m.parsers
+        if worker.node.hasField("shutdown") then worker.node.shutdown = true
+    end for
+    m.parsers = []
     if isNode(m.persistence) and m.ownsPersistence then m.persistence.shutdown = true
 end sub
