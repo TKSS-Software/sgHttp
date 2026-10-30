@@ -13,6 +13,7 @@
         <function name="_query" />
         <function name="_nextPage" />
         <function name="_set" />
+        <function name="_refresh" />
         <function name="_peek" />
         <function name="_invalidate" />
         <function name="_invalidateScope" />

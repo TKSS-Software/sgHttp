@@ -434,7 +434,7 @@ function _set(name as string, args = {} as object, value = invalid as dynamic) a
     end if
 
     if entry = invalid then
-        entry = newEntry(definition, now)
+        entry = newEntry(definition, now, args)
         insertEntry(key, entry)
     else
         touch(key)
@@ -673,10 +673,11 @@ function valueAtPath(value as dynamic, path as string) as dynamic
     return current
 end function
 
-' An entry with no value yet. setId: which local write (set) put the value there, 0 for none
-function newEntry(definition as object, now as integer) as object
+' An entry with no value yet. args: what it was asked for with, to ask again (refresh).
+' setId: which local write (set) put the value there, 0 for none
+function newEntry(definition as object, now as integer, args as object) as object
     m.nextEntryId++
-    return { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid, setId: 0 }
+    return { id: m.nextEntryId, name: definition.name, args: args, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid, setId: 0 }
 end function
 
 ' Starts (or restarts) a fetch for a key. Returns the pending promise.
@@ -688,7 +689,7 @@ function startFetch(definition as object, key as string, args as object, now as 
     if entry <> invalid and entry.promise <> invalid then return entry.promise
 
     if entry = invalid then
-        entry = newEntry(definition, now)
+        entry = newEntry(definition, now, args)
         insertEntry(key, entry)
     end if
 
@@ -837,7 +838,11 @@ sub applyInvalidations(definition as object)
         if isNonEmptyString(target) then _invalidate(target)
     end for
     for each target in definition.expires
-        if isNonEmptyString(target) then _expire(target)
+        if isNonEmptyString(target) then
+            _expire(target)
+            ' The screens showing it get the server's word on the change without asking
+            _refresh(target)
+        end if
     end for
 end sub
 
@@ -1267,6 +1272,56 @@ sub _unwatch(watcher as object)
         if watchers.count() = 0 then m.watchers.delete(name)
     end for
 end sub
+
+' Asks the server again, now, for every entry of the query (and its dotted descendants) that
+' has a watcher; with args, that one entry when it is watched; with no name, every watched
+' entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers
+' (see watch). Entries nobody watches are left as they are: revalidate is for one of those.
+' Resolves once every refresh has settled, with the number started.
+function _refresh(name = invalid as dynamic, args = invalid as dynamic) as object
+    started = []
+    now = nowSeconds()
+    targetKey = ""
+    if isNonEmptyString(name) and type(args) = "roAssociativeArray" then
+        definition = m.definitions[name]
+        if definition = invalid then return promises.resolve(0)
+        targetKey = buildKey(name, definition, args, m.scopes, now)
+    end if
+    for each key in m.cache.keys()
+        entry = m.cache[key]
+        if entry = invalid or not entry.hasValue or entry.promise <> invalid then continue for
+        ' A page after the first follows its listing's first page
+        if isNonEmptyString(entry.head) then continue for
+        if targetKey <> "" then
+            if key <> targetKey then continue for
+        else if isNonEmptyString(name) and not keyIsOf(key, name) then
+            continue for
+        end if
+        definition = m.definitions[entry.name]
+        if definition = invalid or not isWatched(entry.name, key) then continue for
+        started.push(startFetch(definition, key, entry.args, now, true))
+    end for
+    return promises.chain(promises.allSettled(started)).then(function(results as dynamic) as dynamic
+        return results.count()
+    end function).toPromise()
+end function
+
+' Whether a key belongs to the query, or to one of its dotted descendants
+function keyIsOf(key as string, name as string) as boolean
+    exact = name + "|"
+    group = name + "."
+    return key.left(exact.len()) = exact or key.left(group.len()) = group
+end function
+
+' Whether any watcher of the query covers this key
+function isWatched(name as string, key as string) as boolean
+    watchers = m.watchers[name]
+    if watchers = invalid then return false
+    for each watcher in watchers
+        if watcher.args = invalid or _keyFor(name, watcher.args) = key then return true
+    end for
+    return false
+end function
 
 '#endregion
 

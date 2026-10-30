@@ -9,7 +9,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch)
 - Queries: [`define`](#define), [`query`](#query), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
-- Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
+- Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
 
@@ -150,7 +150,15 @@ A request in flight for a dropped entry still answers its callers, but isn't sto
 sgquery.expireAll()
 ```
 
-Marks every cached value stale. Each is served from the cache on its next query and refreshed in the background. For coming back from the background.
+Marks every cached value stale. Each is served from the cache on its next query and refreshed in the background. For coming back from the background; follow it with [`refresh`](#refresh) to update the open screens too.
+
+## refresh
+
+```brightscript
+sgquery.refresh(name = invalid as dynamic, args = invalid as dynamic) as object
+```
+
+Sends the request again, now, for every entry of the query and its dotted descendants that has a [watcher](#watch); with `args`, that one entry when watched; with no name, every watched entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), as are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/mutations.md#refreshing-whats-on-screen).
 
 ## setScope
 

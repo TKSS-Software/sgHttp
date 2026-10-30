@@ -700,6 +700,77 @@ namespace tests
             end function)
         end function
 
+        @describe("refresh")
+
+        @async
+        @it("asks the server again for the watched entries only, and tells the watcher of a different answer")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            one = m.query("1")
+            two = m.query("2")
+            m.fake.callFunc("answer", 0, "a")
+            m.fake.callFunc("answer", 1, "b")
+            promises.chain(promises.all([one, two]), m).then(function(_ as dynamic, suite as object) as dynamic
+                refreshing = suite.store.callFunc("_refresh", "items", invalid)
+                ' Only item 1 is watched: one request, for it
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 2).url, "/items/1")
+                ' Served meanwhile
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.fake.callFunc("answer", 2, "a2")
+                return refreshing
+            end function).then(function(count as dynamic, suite as object) as dynamic
+                suite.assertEqual(count, 1)
+                suite.assertEqual(suite.watchedOne.changed.value, "a2")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "2" }), "b")
+                ' By args: the watched one again; an unwatched one is left alone; with no name, every watched one
+                suite.store.callFunc("_refresh", "items", { id: "2" })
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.store.callFunc("_refresh", invalid, invalid)
+                suite.assertEqual(suite.fake.requestCount, 4)
+                ' In flight already: not started twice
+                suite.store.callFunc("_refresh", "items", { id: "1" })
+                suite.assertEqual(suite.fake.requestCount, 4)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("follows a mutation's expires for the watched entries")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(_ as dynamic, suite as object) as dynamic
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true })
+                suite.fake.callFunc("answer", 1, "ok")
+                return saving
+            end function).then(function(_ as dynamic, suite as object) as dynamic
+                ' Expired, and the watched entry is already asking the server
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 2).url, "/items/1")
+                suite.fake.callFunc("answer", 2, "a2")
+                ' A query joins that request, so its answer tells when the refresh landed
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a2")
+                suite.assertEqual(suite.watchedOne.changed.value, "a2")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("mutate")
 
         @async

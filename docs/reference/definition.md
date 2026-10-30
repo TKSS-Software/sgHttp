@@ -53,7 +53,7 @@ See [Filling the request from args](../guides/queries.md#filling-the-request-fro
 
 | Key | Default | Meaning |
 |---|---|---|
-| `expires` | `[]` | Query names [expired](../guides/mutations.md#expire) after a `cache: false` request succeeds. Each covers its dotted descendants. |
+| `expires` | `[]` | Query names [expired](../guides/mutations.md#expire) after a `cache: false` request succeeds, and [refreshed](../guides/mutations.md#refreshing-whats-on-screen) where watched. Each covers its dotted descendants. |
 | `invalidates` | `[]` | Query names [invalidated](../guides/mutations.md#invalidate) (memory and disk) after a `cache: false` request succeeds |
 
 ## Transport

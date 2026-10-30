@@ -70,7 +70,8 @@ end function
 '   cache    - false for mutations and per-call resources (stream urls): runs the request, never stores. Default true.
 '   invalidates - array of query names (prefix match) dropped after a cache: false request succeeds.
 '   expires  - array of query names (prefix match) expired (see expire) after a cache: false request
-'              succeeds: the usual choice for a mutation, since the old value stays available.
+'              succeeds, and refreshed where watched (see refresh): the usual choice for a mutation,
+'              since the old value stays available and the screens showing it get the server's word.
 '   client   - the name of a client from initialize({ clients }) this query talks to. Default: the
 '              default client (initialize's top-level settings). Query names are shared by all
 '              clients: give another server's queries its name as a prefix ("partner.homePage").
@@ -183,6 +184,16 @@ end sub
 sub invalidateScope(scopeName as string)
     getStore().callFunc("_invalidateScope", scopeName)
 end sub
+
+' Asks the server again, now, for every entry of the query (and its dotted descendants) that
+' has a watcher: the ones on screen. With args, that one entry when it is watched; with no
+' name, every watched entry. Each keeps serving its value meanwhile, and a different answer
+' reaches its watchers. Entries nobody watches are left alone (query with revalidate is for
+' one of those). A mutation's expires does this for the queries it expires. Returns a promise
+' that resolves, with the number of refreshes started, once they have all settled.
+function refresh(name = invalid as dynamic, args = invalid as dynamic) as object
+    return getStore().callFunc("_refresh", name, args)
+end function
 
 ' Marks every cached value stale without dropping it: the next query of each resolves
 ' with the cached value and checks the server in the background (a difference arrives

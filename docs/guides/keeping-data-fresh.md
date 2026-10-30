@@ -92,9 +92,13 @@ end function)
 
 `revalidate` plus a watcher is the usual pair: the query draws the screen now, and the watcher redraws it if the check finds something.
 
+## Refreshing every screen at once
+
+`sgquery.refresh(name)` sends the request again for every entry of the query that has a watcher, so the screens showing it pick up a change without being reopened; `sgquery.refresh()` does it for everything watched. A mutation's `expires` list calls it for the queries it expires. See [Refreshing what's on screen](mutations.md#refreshing-whats-on-screen).
+
 ## Coming back from the background
 
-`sgquery.expireAll()` marks every cached value stale. Each one is served from the cache on its next query and refreshed in the background. See [Caching and freshness](caching.md#marking-everything-stale).
+`sgquery.expireAll()` marks every cached value stale. Each one is served from the cache on its next query and refreshed in the background. To also bring the screens that are open up to date, follow it with `sgquery.refresh()`. See [Caching and freshness](caching.md#marking-everything-stale).
 
 ## Next
 
