@@ -6,7 +6,8 @@ import "keys.bs"
 '*** Import this file in any component (not main.brs). After ropm install the
 '*** functions are available as sgquery.initialize(), sgquery.fetch(), etc.
 '*** All state lives in a single Store node attached to the scene, so every
-'*** component shares one cache, exactly like sgRouter's router node.
+'*** component shares one cache (the same shape as sgRouter's router node,
+'*** though sgRouter is not required).
 '************************
 
 ' Creates the Store singleton on the scene and returns it. Idempotent: a second

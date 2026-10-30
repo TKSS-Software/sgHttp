@@ -15,9 +15,9 @@ The store does only bookkeeping, so a fetch costs the render thread very little:
 
 ## One store for the whole app
 
-`initialize` attaches the store to the scene as a field, `__sgquery`, and every sgquery function finds it there. Every component that imports `sgquery.brs` uses the same store, the same cache and the same tasks. There is nothing to pass between components.
+`initialize` attaches the store to the scene as a field, `__sgquery`, and every sgQuery function finds it there. Every component that imports `sgquery.brs` uses the same store, the same cache and the same tasks. There is nothing to pass between components.
 
-Call sgquery from components on the render thread. Task functions shouldn't call it.
+Call sgQuery from components on the render thread. Task functions shouldn't call it.
 
 ## Cached nodes are shared
 

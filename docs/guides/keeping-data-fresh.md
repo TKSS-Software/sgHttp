@@ -1,6 +1,6 @@
 # Keeping data fresh
 
-Data changes behind the app's back, on another device or on the server, while the screen shows a cached copy. sgquery keeps checking cheap: a refresh that finds nothing new costs a request and nothing more, and a refresh that finds something new can redraw the screen without it asking.
+Data changes behind the app's back, on another device or on the server, while the screen shows a cached copy. sgQuery keeps checking cheap: a refresh that finds nothing new costs a request and nothing more, and a refresh that finds something new can redraw the screen without it asking.
 
 ## Unchanged payloads cost a request, not a parse
 
@@ -41,7 +41,7 @@ The validators are saved with persisted bodies, so a cold start can send them to
 
 ## Watching a query
 
-When a refresh replaces a cached value with **different** content, sgquery notifies that query's watchers with the new value:
+When a refresh replaces a cached value with **different** content, sgQuery notifies that query's watchers with the new value:
 
 ```brightscript
 sub init()

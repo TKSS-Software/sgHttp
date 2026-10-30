@@ -1,6 +1,6 @@
 # Overview
 
-sgquery manages **server state** in Roku SceneGraph apps: the data your channel fetches from its APIs. You describe each endpoint once, then ask for it by name. sgquery makes the request on a task thread, parses the response off the render thread, caches the result for every component to share, saves it to disk for the next launch, and refreshes it in the background when it goes out of date.
+sgQuery manages **server state** in Roku SceneGraph apps: the data your channel fetches from its APIs. You describe each endpoint once, then ask for it by name. sgQuery makes the request on a task thread, parses the response off the render thread, caches the result for every component to share, saves it to disk for the next launch, and refreshes it in the background when it goes out of date.
 
 ## Motivation
 
@@ -23,7 +23,7 @@ Handling that well means solving the same set of problems in every channel:
 - **Per-user data.** Switching profile must never show the previous profile's data.
 - **Memory.** A Roku has little of it, so the cache needs a bound.
 
-sgquery handles these for you. A typical screen asks for its data and draws it; the cache, threads, disk and refresh policy are configured once, when the query is defined.
+sgQuery handles these for you. A typical screen asks for its data and draws it; the cache, threads, disk and refresh policy are configured once, when the query is defined.
 
 ## Enough talk, show me some code
 
@@ -63,12 +63,12 @@ end sub
 
 What happens on the first call:
 
-1. sgquery builds the url `https://api.example.com/home/main` and checks the cache. It is empty.
+1. sgQuery builds the url `https://api.example.com/home/main` and checks the cache. It is empty.
 2. Since `persist` is on, it checks `cachefs:/` for a body saved by an earlier launch. On a first install there isn't one.
 3. The request goes out on the transport task. The JSON is decoded there, and the `HomePageParser` builds a ContentNode tree on the parser task.
 4. The tree is cached, the raw body is written to disk, and the promise resolves.
 
-Within the next five minutes, a fetch with the same args from any component resolves at once from memory. After that, it still resolves at once with the cached tree, and sgquery refreshes it in the background. If the server's answer is byte-for-byte the same, the refresh doesn't parse anything and no watcher is notified.
+Within the next five minutes, a fetch with the same args from any component resolves at once from memory. After that, it still resolves at once with the cached tree, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, the refresh doesn't parse anything and no watcher is notified.
 
 ## What next
 

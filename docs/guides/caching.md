@@ -1,6 +1,6 @@
 # Caching and freshness
 
-Each cached value is either **fresh** or **stale**. A fresh value is served from memory without a request. A stale value is still served, but sgquery checks the server for a newer one.
+Each cached value is either **fresh** or **stale**. A fresh value is served from memory without a request. A stale value is still served, but sgQuery checks the server for a newer one.
 
 ## How long a value is fresh
 

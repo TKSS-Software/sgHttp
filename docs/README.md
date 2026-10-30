@@ -1,8 +1,8 @@
-# sgquery documentation
+# sgQuery documentation
 
 ## Getting started
 
-- [Overview](overview.md): what sgquery is, the problem it solves, and a first look at the code
+- [Overview](overview.md): what sgQuery is, the problem it solves, and a first look at the code
 - [Installation](installation.md): requirements, installing with ropm, and calling `initialize`
 - [Quick start](quick-start.md): a query, a parser and a screen that uses them, end to end
 
@@ -18,14 +18,14 @@
 - [More than one server](guides/multiple-servers.md): clients, their headers and their transports
 - [The transport](guides/transport.md): the built-in HTTP task, retries, timeouts, and replacing it
 - [Debugging](guides/debugging.md): cache events, stats, console warnings and routing traffic through Charles
-- [Testing your app](guides/testing.md): driving sgquery from specs with a fake transport
+- [Testing your app](guides/testing.md): driving sgQuery from specs with a fake transport
 - [Threads and memory](guides/threads-and-memory.md): what runs where, what is shared, and what the cache holds on to
 
 ## API reference
 
 - [Functions](reference/api.md): `initialize`, `define`, `fetch`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
-- [Events, stats and errors](reference/events-and-stats.md): the shapes sgquery reports
+- [Events, stats and errors](reference/events-and-stats.md): the shapes sgQuery reports
 
 ## Project
 

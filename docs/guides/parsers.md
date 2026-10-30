@@ -25,7 +25,7 @@ end class
 
 ## The parser task
 
-Parsers are looked up by name on a Task that extends sgquery's `ParserTask`. Override `getParser` to map names to instances:
+Parsers are looked up by name on a Task that extends sgQuery's `ParserTask`. Override `getParser` to map names to instances:
 
 ```xml
 <component name="AppParserTask" extends="sgquery_ParserTask">

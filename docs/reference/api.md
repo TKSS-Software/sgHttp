@@ -1,6 +1,6 @@
 # API reference
 
-Every function is in the `sgquery` namespace (`sgquery_` prefixed in plain BrightScript; see [Installation](../installation.md#calling-from-plain-brightscript)). Call them from render-thread components that import `pkg:/source/roku_modules/sgquery/sgquery.brs`.
+Every function is in the `sgquery` namespace. Call them from render-thread components that import `pkg:/source/roku_modules/sgquery/sgquery.brs`.
 
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 

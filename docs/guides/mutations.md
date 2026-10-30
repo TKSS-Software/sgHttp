@@ -26,11 +26,11 @@ end function)
 
 `mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call site that reads as a write can't quietly cache. `fetch` also runs `cache: false` queries; use it for per-call resources that aren't writes, such as a stream url.
 
-When a mutation succeeds, sgquery applies the definition's `expires` and `invalidates` lists. Nothing is applied when it fails.
+When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists. Nothing is applied when it fails.
 
 ## Telling the cache what changed
 
-After a write, some cached data is out of date. sgquery has two ways to handle that.
+After a write, some cached data is out of date. sgQuery has two ways to handle that.
 
 ### Expire
 

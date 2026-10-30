@@ -57,7 +57,7 @@ Useful checks:
 
 ## Console warnings
 
-sgquery prints to the BrightScript console (port 8085) when something is probably a mistake:
+sgQuery prints to the BrightScript console (port 8085) when something is probably a mistake:
 
 | Message | Meaning |
 |---|---|

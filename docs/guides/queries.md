@@ -42,7 +42,7 @@ Defining a name a second time replaces the first definition and prints a warning
 request: { url: "/shows/{showId}" }
 ```
 
-A relative url is prefixed with the client's `baseUrl`. A url starting with `http` is used as is. If a placeholder in the url is left unfilled, sgquery still sends the request (it usually reaches some other route) and prints a warning: `[sgquery] "show" url has an unfilled placeholder: /shows/{showId}`.
+A relative url is prefixed with the client's `baseUrl`. A url starting with `http` is used as is. If a placeholder in the url is left unfilled, sgQuery still sends the request (it usually reaches some other route) and prints a warning: `[sgquery] "show" url has an unfilled placeholder: /shows/{showId}`.
 
 ### Query string
 

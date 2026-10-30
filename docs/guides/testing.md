@@ -1,6 +1,6 @@
 # Testing your app
 
-Code that fetches through sgquery can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
+Code that fetches through sgQuery can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
 
 ## A fake transport
 
@@ -58,7 +58,7 @@ function requestAt(index as integer) as dynamic
 end function
 ```
 
-sgquery's own specs use the same approach; see [`tests/components/FakeTransport.bs`](../../tests/components/FakeTransport.bs).
+sgQuery's own specs use the same approach; see [`tests/components/FakeTransport.bs`](../../tests/components/FakeTransport.bs).
 
 ## Setting up a spec
 

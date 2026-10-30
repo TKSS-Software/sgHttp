@@ -1,4 +1,8 @@
-# sgquery
+<p align="center">
+  <img src="media/logo.png" alt="sgQuery" width="640">
+</p>
+
+# sgQuery
 
 Server-state management for Roku SceneGraph apps: fetching, caching, de-duplicating, persisting and refreshing the data your channel gets from its APIs, without blocking the render thread.
 
@@ -10,6 +14,7 @@ Server-state management for Roku SceneGraph apps: fetching, caching, de-duplicat
 - Mutations that expire or invalidate the queries they affect
 - Scopes (per-profile data), time buckets (now-and-next schedules) and more than one API server
 - Change watchers, cache events and stats for redraws, auth handling and debugging
+- No framework needed: works with any SceneGraph navigation, and plays nicely with [sgRouter](https://github.com/rokucommunity/sgRouter)
 
 ```brightscript
 sgquery.define("homePage", {
@@ -30,12 +35,12 @@ end function)
 
 ## Get started
 
-- [Overview](docs/overview.md): why sgquery exists and what it does for you
+- [Overview](docs/overview.md): why sgQuery exists and what it does for you
 - [Installation](docs/installation.md): add it to your channel with ropm
 - [Quick start](docs/quick-start.md): your first query, parser and screen in ten minutes
 - [API reference](docs/reference/api.md): every function, its parameters and what it returns
 
-sgquery is written in [BrighterScript](https://github.com/rokucommunity/brighterscript), ships as a [ropm](https://github.com/rokucommunity/ropm) package and builds on [promises](https://github.com/rokucommunity/promises). It is shaped like [sgRouter](https://github.com/rokucommunity/sgRouter): a namespace of stateless functions plus one node, attached to the scene, that owns all state.
+sgQuery is written in [BrighterScript](https://github.com/rokucommunity/brighterscript), ships as a [ropm](https://github.com/rokucommunity/ropm) package and builds on [promises](https://github.com/rokucommunity/promises). Its only dependency is promises. It is a namespace of stateless functions plus one node, attached to the scene, that owns all state, so if you know sgRouter the shape will be familiar, but sgRouter is not required.
 
 ## Get involved
 

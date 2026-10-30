@@ -11,7 +11,7 @@ This walkthrough builds a home screen whose rows come from `GET https://api.exam
 }
 ```
 
-You will write a parser that turns that JSON into a ContentNode tree, a task that runs it, a query definition, and a screen that fetches and draws it. It assumes sgquery is [installed](installation.md).
+You will write a parser that turns that JSON into a ContentNode tree, a task that runs it, a query definition, and a screen that fetches and draws it. It assumes sgQuery is [installed](installation.md).
 
 ## 1. Write a parser
 
@@ -42,7 +42,7 @@ Parsers run on a task thread, so building a large tree here never stalls the UI.
 
 ## 2. Register it with a parser task
 
-Extend sgquery's `ParserTask` (prefixed `sgquery_ParserTask` after installing) and override `getParser`, which maps a parser name to an instance:
+Extend sgQuery's `ParserTask` (prefixed `sgquery_ParserTask` after installing) and override `getParser`, which maps a parser name to an instance:
 
 ```xml
 <!-- components/AppParserTask.xml -->
@@ -110,9 +110,9 @@ end sub
 
 `fetch` returns a promise node. It resolves with whatever the parser returned, or rejects with an error object (see [Errors](reference/events-and-stats.md#errors)).
 
-### With sgRouter
+### Optional: if your app uses sgRouter
 
-sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so the screen appears with its data already drawn:
+sgQuery needs no router; the screen above is the normal way to use it. If your app happens to use [sgRouter](https://github.com/rokucommunity/sgRouter), the two fit together: sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so you can hand it the fetch and the screen appears with its data already drawn:
 
 ```brightscript
 function beforeViewOpen(params as object) as dynamic
@@ -125,7 +125,7 @@ end function
 
 ## 5. Redraw when the data changes
 
-When a background refresh brings different data, sgquery can hand it to you. Watch the query while the screen is open:
+When a background refresh brings different data, sgQuery can hand it to you. Watch the query while the screen is open:
 
 ```brightscript
 sub init()
@@ -147,7 +147,7 @@ end sub
 ## What you get
 
 - Opening the home screen a second time within five minutes draws it immediately, with no request.
-- After five minutes, it still draws immediately from the cache, and sgquery checks the server in the background. If the server's response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
+- After five minutes, it still draws immediately from the cache, and sgQuery checks the server in the background. If the server's response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
 - Two components fetching `homePage` with the same args at the same time share one request.
 - On the next launch, the home screen is drawn from the body saved on `cachefs:/`, then refreshed if it's older than five minutes.
 
