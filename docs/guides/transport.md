@@ -33,7 +33,7 @@ Per query, `timeout` and `request.retries` override the client's values, and `su
 
 ### What counts as a failure
 
-Any status outside the success codes is a failure: the fetch rejects with the response, including its `code` and its `body` as raw text (failure bodies aren't JSON-decoded). For network failures (DNS, connection refused, timeout), `code` is the negative error code `roUrlTransfer` reports, such as `-28` for a timeout. See [Errors](../reference/events-and-stats.md#errors).
+Any status outside the success codes is a failure: the promise rejects with the response, including its `code` and its `body` as raw text (failure bodies aren't JSON-decoded). For network failures (DNS, connection refused, timeout), `code` is the negative error code `roUrlTransfer` reports, such as `-28` for a timeout. See [Errors](../reference/events-and-stats.md#errors).
 
 ## Replacing the transport
 

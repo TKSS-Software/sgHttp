@@ -17,8 +17,8 @@ end sub
 |---|---|
 | `hit` | A fresh value was served from memory |
 | `stale` | A cached value was served and a background refresh started (a stale value, or any value fetched with `revalidate`) |
-| `dedupe` | The fetch joined a request already in flight |
-| `resolve` | A value arrived from the network or disk and the fetch resolved |
+| `dedupe` | The query joined a request already in flight |
+| `resolve` | A value arrived from the network or disk and the query resolved |
 | `unchanged` | The server's answer matched the cached value; the entry was renewed |
 | `error` | A request or parse failed |
 

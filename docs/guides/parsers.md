@@ -19,9 +19,9 @@ end class
 ```
 
 - `body` is the decoded JSON (an associative array or array), or the raw string when the response wasn't JSON or the request set `parseJson: false`.
-- `args` are the args passed to `fetch` or `mutate`, or `{}`.
-- The return value is what `fetch` resolves with and what the cache stores. Return anything: a node, an associative array, a string.
-- If `parse` throws, the fetch rejects with `{ message: "sgquery parser \"ShowParser\" threw: ...", error }`.
+- `args` are the args passed to `query` or `mutate`, or `{}`.
+- The return value is what `query` resolves with and what the cache stores. Return anything: a node, an associative array, a string.
+- If `parse` throws, the query rejects with `{ message: "sgquery parser \"ShowParser\" threw: ...", error }`.
 
 ## The parser task
 
@@ -52,13 +52,13 @@ sgquery.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser" }
 ```
 
 - `getParser` is called for every response, so each parse gets a new instance. Don't rely on state kept between parses.
-- An unknown name (`getParser` returns `invalid`) rejects the fetch with `sgquery parser: unknown parser "..."`.
+- An unknown name (`getParser` returns `invalid`) rejects the query with `sgquery parser: unknown parser "..."`.
 - A definition naming a parser when no `parserTask` was configured rejects with a message saying so.
 - Queries without a `parser` resolve with the decoded body itself.
 
 ## Nodes come back by reference
 
-ContentNode trees built in the parser are handed to the render thread by reference, not copied. The cache stores that same tree, and every fetch of the key returns it. See [Threads and memory](threads-and-memory.md#cached-nodes-are-shared) for what that means when you attach it to the screen.
+ContentNode trees built in the parser are handed to the render thread by reference, not copied. The cache stores that same tree, and every query of the key returns it. See [Threads and memory](threads-and-memory.md#cached-nodes-are-shared) for what that means when you attach it to the screen.
 
 ## One parser task, one thread
 

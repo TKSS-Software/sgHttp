@@ -89,7 +89,21 @@ sub define(name as string, definition as object)
     getStore().callFunc("_define", name, definition)
 end sub
 
-' Fetches a query. Returns a promise node that resolves with the parsed value.
+' Sends one request with no definition and never caches it: sgquery as a plain HTTP client.
+' The request goes through a client (the default one, or spec.client), so it gets the baseUrl,
+' shared headers, proxy, retries and timeout set up by initialize. Resolves with the whole
+' response { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when
+' spec names one. Rejects with the same shape plus message on a failing status or a network
+' failure (code negative).
+' @param {Dynamic} spec - a url (relative, or starting with http), or { url, method, headers,
+'   body, query, parseJson, retries } as in a definition's request, with {arg} placeholders
+'   filled from args and scopes; plus client, auth, proxy, timeout, successCodes and parser as
+'   in define; and name, for events. A query name here rejects at once: use query() for those.
+function fetch(spec as dynamic, args = {} as object) as object
+    return getStore().callFunc("_fetch", spec, args)
+end function
+
+' Runs a query. Returns a promise node that resolves with the parsed value.
 ' Concurrent calls with the same key share one in-flight request; a fresh cached
 ' value resolves without a request.
 ' @param {Object} options
@@ -97,29 +111,16 @@ end sub
 '                already in flight)
 '   revalidate - true resolves with the cached value at once, fresh or stale, and checks the
 '                server in the background (a different answer reaches watchers, see watch).
-'                With nothing cached it behaves like a normal fetch.
-function fetch(name as string, args = {} as object, options = {} as object) as object
-    return getStore().callFunc("_fetch", name, args, options)
+'                With nothing cached it behaves like a normal query.
+function query(name as string, args = {} as object, options = {} as object) as object
+    return getStore().callFunc("_query", name, args, options)
 end function
 
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
-' applies its invalidates and expires. Same as fetch, but rejects for a cached query, so a
+' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.
 function mutate(name as string, args = {} as object) as object
-    return getStore().callFunc("_fetch", name, args, { mutation: true })
-end function
-
-' Sends one request with no definition and never caches it: sgquery as a plain HTTP client.
-' The request goes through a client (the default one, or spec.client), so it gets the baseUrl,
-' shared headers, proxy, retries and timeout set up by initialize. Resolves with the whole
-' response { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when
-' spec names one. Rejects with the same shape plus message on a failing status or a network
-' failure (code negative).
-' @param {Object} spec - url, method, headers, body, query, parseJson and retries as in a
-'   definition's request, with {arg} placeholders filled from args and scopes; plus client,
-'   auth, proxy, timeout, successCodes and parser as in define; and name, for events.
-function request(spec as object, args = {} as object) as object
-    return getStore().callFunc("_request", spec, args)
+    return getStore().callFunc("_query", name, args, { mutation: true })
 end function
 
 ' Returns the value cached in memory (fresh, stale or expired) synchronously, else invalid.
@@ -135,7 +136,7 @@ sub invalidate(name = invalid as dynamic, args = invalid as dynamic)
 end sub
 
 ' Marks data the app knows has changed (it just wrote it) as out of date without dropping it.
-' peek and revalidate fetches still get the kept value; a plain fetch waits for the server and
+' peek and revalidate queries still get the kept value; a plain query waits for the server and
 ' falls back to the kept value if the request fails; a disk copy stored before now is not
 ' served. Name only: every entry of the query and its dotted descendants. Name and args: that
 ' one entry. Compare invalidate, which drops the value and its disk copy.
@@ -155,7 +156,7 @@ sub invalidateScope(scopeName as string)
     getStore().callFunc("_invalidateScope", scopeName)
 end sub
 
-' Marks every cached value stale without dropping it: the next fetch of each resolves
+' Marks every cached value stale without dropping it: the next query of each resolves
 ' with the cached value and checks the server in the background (a difference arrives
 ' as a change event). For coming back from the background.
 sub expireAll()
@@ -172,7 +173,7 @@ end sub
 ' Calls functionName(event) in the calling component whenever a cached value is replaced
 ' by different content, typically a background refresh that found new data. The event's
 ' data is { name, key, source }; match it to a query with isChange(). A first value never
-' notifies (the fetch that asked for it receives it). For one query, watch is simpler: it
+' notifies (the query call that asked for it receives it). For one query, watch is simpler: it
 ' filters by query and args and delivers the new value.
 sub observeChanges(functionName as string)
     getStore().observeFieldScoped("changed", functionName)
@@ -184,10 +185,10 @@ end sub
 
 ' Calls functionName(event) in the calling component when this query's cached value is
 ' replaced by different content (a refresh found new data). The event's data is
-' { name, key, source, value }: the new value is delivered, no fetch needed. args: only the
+' { name, key, source, value }: the new value is delivered, no query needed. args: only the
 ' entry those args key to at the time of the change (current scopes and time bucket);
 ' omitted: every entry of the query. Returns the watcher, for unwatch. A first value never
-' notifies (the fetch that asked for it receives it).
+' notifies (the query call that asked for it receives it).
 function watch(name as string, functionName as string, args = invalid as dynamic) as object
     watcher = createObject("roSGNode", "Node")
     watcher.addField("changed", "assocarray", true)

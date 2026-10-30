@@ -19,12 +19,12 @@ Delivered to [`observeEvents`](api.md#observeevents) callbacks as `event.getData
 |---|---|
 | `hit` | A fresh value is served from memory |
 | `stale` | A cached value is served and a background refresh starts: a stale value, or any value fetched with `revalidate` |
-| `dedupe` | A fetch joins a request already in flight |
+| `dedupe` | A query joins a request already in flight |
 | `resolve` | A value arrives from the network or disk (or a `cache: false` query succeeds) |
 | `unchanged` | A response matches the cached value (same body hash, same parsed hash, or `304`) and the entry is renewed |
 | `error` | A request or parse fails, including background refreshes and mutations |
 
-A fetch for a query name that was never defined rejects without an event.
+A query whose name was never defined rejects without an event.
 
 ## Change events
 
@@ -36,9 +36,9 @@ Returned by [`getStats`](api.md#getstats). Counters run from `initialize`.
 
 | Field | Meaning |
 |---|---|
-| `hits` | Fetches answered by a fresh value in memory |
-| `staleHits` | Fetches answered by a cached value while a background refresh ran |
-| `misses` | Fetches that had to wait: nothing in memory, a stale value without `staleWhileRevalidate`, an expired value, or `force` |
+| `hits` | Queries answered by a fresh value in memory |
+| `staleHits` | Queries answered by a cached value while a background refresh ran |
+| `misses` | Queries that had to wait: nothing in memory, a stale value without `staleWhileRevalidate`, an expired value, or `force` |
 | `diskHits` | Values served from `cachefs:/` |
 | `requests` | Requests sent, including background refreshes and mutations |
 | `errors` | Failed requests and parses |
@@ -52,7 +52,7 @@ Returned by [`getStats`](api.md#getstats). Counters run from `initialize`.
 
 ## Errors
 
-A rejected `fetch`, `mutate` or `request` promise carries one of these:
+A rejected `fetch`, `query` or `mutate` promise carries one of these:
 
 **An HTTP failure** (a status outside `successCodes`), straight from the transport:
 

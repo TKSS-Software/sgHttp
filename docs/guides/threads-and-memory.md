@@ -9,7 +9,7 @@
 | Parsers, parsed-value hashing | Your `ParserTask` subclass |
 | Reading, writing and deleting `cachefs:/` files | `Persistence` task |
 
-The store does only bookkeeping, so a fetch costs the render thread very little: a key, a lookup, and a promise. Everything slow happens on tasks, and results come back through promise nodes.
+The store does only bookkeeping, so a query costs the render thread very little: a key, a lookup, and a promise. Everything slow happens on tasks, and results come back through promise nodes.
 
 `roFileSystem` can't be created on the render thread. Never add file access to the store.
 
@@ -21,17 +21,17 @@ Call sgQuery from components on the render thread. Task functions shouldn't call
 
 ## Cached nodes are shared
 
-Values are cached by reference. Every fetch of a key returns the **same** node, not a copy:
+Values are cached by reference. Every query of a key returns the **same** node, not a copy:
 
 - A node has one parent. Attaching a cached tree to a second container moves it out of the first. If two screens show the same data at once, give the second one a copy (`node.clone(true)`) or build its own view of the data.
-- Changing a field on a cached node changes it for every later fetch of that key. Treat cached values as read-only. To change data, write to the server and expire the query.
+- Changing a field on a cached node changes it for every later query of that key. Treat cached values as read-only. To change data, write to the server and expire the query.
 
 ## What the cache holds on to
 
 | Kept | Bounded by |
 |---|---|
 | Cached values | `maxEntries` (default 100), least recently used evicted first |
-| Old time-bucket entries | Dropped at the first fetch after each rollover |
+| Old time-bucket entries | Dropped at the first query after each rollover |
 | Expiry records (to skip old disk copies) | About one per expired query, plus one per expired persisted key not yet fetched again |
 | Watchers | Until you call `unwatch` |
 | Observers from `observeEvents` / `observeChanges` | Until you call `unobserveEvents` / `unobserveChanges` |

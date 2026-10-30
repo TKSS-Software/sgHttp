@@ -4,7 +4,7 @@
 
 - A SceneGraph channel built with [BrighterScript](https://github.com/rokucommunity/brighterscript).
 - [ropm](https://github.com/rokucommunity/ropm) to install the package.
-- [promises](https://github.com/rokucommunity/promises), which ropm installs with sgQuery. Every fetch returns one of its promise nodes.
+- [promises](https://github.com/rokucommunity/promises), which ropm installs with sgQuery. Every `fetch` and `query` returns one of its promise nodes.
 
 ## Install with ropm
 
@@ -28,7 +28,7 @@ After changing sgQuery itself, rebuild it (`npm run build`), then run `npx ropm 
 
 ## Initialize the store
 
-All of sgQuery's state lives in one node, created by `initialize` and attached to the scene. Call it once, early, from the main scene's `init()`, before any screen fetches. (If your app uses sgRouter, that means before the router starts.)
+All of sgQuery's state lives in one node, created by `initialize` and attached to the scene. Call it once, early, from the main scene's `init()`, before any screen asks for data. (If your app uses sgRouter, that means before the router starts.)
 
 ```brightscript
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"

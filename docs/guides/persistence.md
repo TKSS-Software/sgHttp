@@ -1,6 +1,6 @@
 # Persistence
 
-With `persist: true`, a query's raw response body is written to `cachefs:/`. On the next launch, the first fetch reads it, parses it and serves it before the network answers, so the first screen can draw at once.
+With `persist: true`, a query's raw response body is written to `cachefs:/`. On the next launch, the first query reads it, parses it and serves it before the network answers, so the first screen can draw at once.
 
 ```brightscript
 sgquery.define("homePage", {
@@ -69,7 +69,7 @@ sgquery.initialize({ version: "2" })
 - `invalidate()` deletes everything in this app's folder. Other apps' folders are never touched.
 - Changing a [scope](scopes-and-buckets.md#changing-a-scope) deletes the files of every query that lists it.
 
-Eviction from memory doesn't delete files. The next fetch reads the file back.
+Eviction from memory doesn't delete files. The next query reads the file back.
 
 ## Turning it off
 

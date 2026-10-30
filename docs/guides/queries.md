@@ -1,6 +1,6 @@
 # Queries and keys
 
-A **query** is a [request](requests.md) with a name: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then fetch it by name with args. Where `request` gives you the whole response and forgets it, `fetch` gives you the value and keeps it.
+A **query** is a [request](requests.md) with a name: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then query it by name with args. Where `fetch` gives you the whole response and forgets it, `query` gives you the value and keeps it.
 
 ```brightscript
 sgquery.define("episodes", {
@@ -12,7 +12,7 @@ sgquery.define("episodes", {
     ttl: 600
 })
 
-sgquery.fetch("episodes", { showId: "abc", season: 2, page: 1 })
+sgquery.query("episodes", { showId: "abc", season: 2, page: 1 })
 ' GET https://api.example.com/shows/abc/seasons/2/episodes?page=1&limit=50
 ```
 
@@ -34,7 +34,7 @@ Defining a name a second time replaces the first definition and prints a warning
 
 ## Filling the request from args
 
-`{name}` placeholders anywhere in the request are filled from the fetch's args first, then from the current [scopes](scopes-and-buckets.md). Strings, numbers and booleans fill a placeholder. Arrays, associative arrays and nodes don't.
+`{name}` placeholders anywhere in the request are filled from the query's args first, then from the current [scopes](scopes-and-buckets.md). Strings, numbers and booleans fill a placeholder. Arrays, associative arrays and nodes don't.
 
 ### Url
 
@@ -89,7 +89,7 @@ Successful responses are JSON-decoded on the transport task. A body that isn't J
 
 ## Cache keys
 
-Every fetch of a cached query is stored under a **key** made of:
+Every query of a cached query is stored under a **key** made of:
 
 ```
 name | scope=value ... | bucket=N | args

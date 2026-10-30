@@ -35,7 +35,7 @@ See [Filling the request from args](../guides/queries.md#filling-the-request-fro
 |---|---|---|
 | `cache` | `true` | `false` for mutations and per-call resources: the request runs and parses, but is never stored or shared |
 | `ttl` | `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: until expired, invalidated or `expireAll`. |
-| `staleWhileRevalidate` | `true` | Serve a stale value at once and refresh in the background. `false`: a fetch of a stale value waits for the server. |
+| `staleWhileRevalidate` | `true` | Serve a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
 | `bucket` | none | Seconds. `floor(now / bucket)` joins the key; earlier buckets are dropped when it rolls over. See [Time buckets](../guides/scopes-and-buckets.md#time-buckets). |
 | `persist` | `false` | Save the raw body to `cachefs:/` and serve it when memory has nothing. See [Persistence](../guides/persistence.md). |

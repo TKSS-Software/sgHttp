@@ -36,7 +36,7 @@ From any component that imports `sgquery.brs`:
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 
 sub load()
-    promises.chain(sgquery.request({ url: "/home/main" }), m).then(function(response as object, m as object) as dynamic
+    promises.chain(sgquery.fetch("/home/main"), m).then(function(response as object, m as object) as dynamic
         m.titleLabel.text = response.body.rows[0].title
         return invalid
     end function).catch(function(error as object, m as object) as dynamic
@@ -47,7 +47,7 @@ sub load()
 end sub
 ```
 
-The request goes out on the transport task, the JSON is decoded there, and the promise resolves on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. Nothing is remembered. Open the screen twice and the request is sent twice. That's the base of sgQuery, and for a one-off call it's all you need (see [Requests](guides/requests.md)).
+The request goes out on the transport task, the JSON is decoded there, and the promise resolves on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. Nothing is remembered. Open the screen twice and the request is sent twice. That's the base of sgQuery, and for a one-off call it's all you need. `fetch` also takes a spec with a `method`, `headers` and `body`; see [Requests](guides/requests.md).
 
 ## 3. Give it a name
 
@@ -55,15 +55,15 @@ A request the app makes more than once deserves a name. Define it next to `initi
 
 ```brightscript
 sgquery.define("homePage", {
-    request: { url: "/home/{slug}" }   ' {slug} is filled from the fetch's args
+    request: { url: "/home/{slug}" }   ' {slug} is filled from the query's args
 })
 ```
 
-and fetch it by name:
+and query it by name:
 
 ```brightscript
 sub load()
-    promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
+    promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
         m.titleLabel.text = page.rows[0].title
         return invalid
     end function).catch(function(error as object, m as object) as dynamic
@@ -73,7 +73,7 @@ sub load()
 end sub
 ```
 
-Two things changed. `fetch` resolves with the body alone (the decoded JSON), since a query is about the data, not the exchange. And the result is **cached**: a second `fetch("homePage", { slug: "main" })` from any component, within the default five minutes, resolves at once with no request. Two components fetching it at the same moment share one request. The request is also where the url, query string, headers and body get filled from args; see [Queries and keys](guides/queries.md).
+Two things changed. `query` resolves with the body alone (the decoded JSON), since a query is about the data, not the exchange. And the result is **cached**: a second `query("homePage", { slug: "main" })` from any component, within the default five minutes, resolves at once with no request. Two components querying it at the same moment share one request. The request is also where the url, query string, headers and body get filled from args; see [Queries and keys](guides/queries.md).
 
 ## 4. Say how long it stays fresh
 
@@ -84,7 +84,7 @@ sgquery.define("homePage", {
 })
 ```
 
-Within `ttl` seconds, a fetch is answered from memory. After that the cached value is **stale**: a fetch still resolves at once with it, and sgQuery checks the server in the background. If the server's response is byte-for-byte the same, nothing else happens. See [Caching and freshness](guides/caching.md) for every case.
+Within `ttl` seconds, a query is answered from memory. After that the cached value is **stale**: a query still resolves at once with it, and sgQuery checks the server in the background. If the server's response is byte-for-byte the same, nothing else happens. See [Caching and freshness](guides/caching.md) for every case.
 
 ## 5. Build the screen's content off the render thread
 
@@ -147,10 +147,10 @@ sgquery.define("homePage", {
 })
 ```
 
-`fetch` now resolves with the parser's tree, and the cache stores that tree, so a cached fetch costs no parsing either:
+`query` now resolves with the parser's tree, and the cache stores that tree, so a cached query costs no parsing either:
 
 ```brightscript
-promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
+promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
     m.rowList.content = page
     return invalid
 end function)
@@ -169,7 +169,7 @@ sgquery.define("homePage", {
 })
 ```
 
-On the next launch, the first fetch reads the saved body from disk, parses it, and resolves before the network answers, then refreshes it in the background if it's older than `ttl`. See [Persistence](guides/persistence.md).
+On the next launch, the first query reads the saved body from disk, parses it, and resolves before the network answers, then refreshes it in the background if it's older than `ttl`. See [Persistence](guides/persistence.md).
 
 ## 7. Redraw when the data changes
 
@@ -196,11 +196,11 @@ See [Keeping data fresh](guides/keeping-data-fresh.md).
 
 ### Optional: if your app uses sgRouter
 
-sgQuery needs no router; the screen above is the normal way to use it. If your app happens to use [sgRouter](https://github.com/rokucommunity/sgRouter), the two fit together: sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so you can hand it the fetch and the screen appears with its data already drawn:
+sgQuery needs no router; the screen above is the normal way to use it. If your app happens to use [sgRouter](https://github.com/rokucommunity/sgRouter), the two fit together: sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so you can hand it the query and the screen appears with its data already drawn:
 
 ```brightscript
 function beforeViewOpen(params as object) as dynamic
-    return promises.chain(sgquery.fetch("homePage", { slug: "home-page" }), m).then(function(page as object, m as object) as dynamic
+    return promises.chain(sgquery.query("homePage", { slug: "home-page" }), m).then(function(page as object, m as object) as dynamic
         m.rowList.content = page
         return invalid
     end function).toPromise()
@@ -211,9 +211,9 @@ end function
 
 - Opening the home screen a second time within five minutes draws it immediately, with no request and no parsing.
 - After five minutes, it still draws immediately from the cache, and sgQuery checks the server in the background. If the response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
-- Two components fetching `homePage` with the same args at the same time share one request.
+- Two components querying `homePage` with the same args at the same time share one request.
 - On the next launch, the home screen is drawn from the body saved on `cachefs:/`, then refreshed if it's older than five minutes.
-- A one-off call anywhere in the app is still just `sgquery.request(...)`.
+- A one-off call anywhere in the app is still just `sgquery.fetch(...)`.
 
 ## Next
 

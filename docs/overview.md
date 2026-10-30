@@ -40,7 +40,7 @@ end sub
 That's an HTTP client. From any component that imports `sgquery.brs`:
 
 ```brightscript
-promises.chain(sgquery.request({ url: "/home/main" }), m).then(function(response as object, m as object) as dynamic
+promises.chain(sgquery.fetch("/home/main"), m).then(function(response as object, m as object) as dynamic
     m.titleLabel.text = response.body.rows[0].title
     return invalid
 end function)
@@ -54,10 +54,10 @@ Now give the request a name:
 sgquery.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
 ```
 
-and fetch it instead:
+and query it instead:
 
 ```brightscript
-promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
+promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
     m.titleLabel.text = page.rows[0].title
     return invalid
 end function)
@@ -69,7 +69,7 @@ What happens on the first call:
 2. The request goes out on the transport task, where the JSON is decoded.
 3. The body is cached under the query's name and args, and the promise resolves with it.
 
-Within the next five minutes, a fetch with the same args from any component resolves at once from memory, and two components fetching at the same moment share one request. After five minutes, a fetch still resolves at once with the cached value, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, nothing changes and no one is told.
+Within the next five minutes, a query with the same args from any component resolves at once from memory, and two components querying at the same moment share one request. After five minutes, a query still resolves at once with the cached value, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, nothing changes and no one is told.
 
 From here, each need is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so the next launch draws the screen before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds them in that order.
 
@@ -77,5 +77,5 @@ From here, each need is one more key on the definition. `parser: "HomePageParser
 
 - Install it: [Installation](installation.md)
 - Build a screen with it, one step at a time: [Quick start](quick-start.md)
-- Learn how a fetch decides what to do: [Caching and freshness](guides/caching.md)
+- Learn how a query decides what to do: [Caching and freshness](guides/caching.md)
 - Look something up: [API reference](reference/api.md)

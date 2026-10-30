@@ -5,8 +5,8 @@ Every function is in the `sgquery` namespace. Call them from render-thread compo
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
-- Requests: [`request`](#request)
-- Queries: [`define`](#define), [`fetch`](#fetch), [`peek`](#peek), [`mutate`](#mutate)
+- Requests: [`fetch`](#fetch)
+- Queries: [`define`](#define), [`query`](#query), [`peek`](#peek), [`mutate`](#mutate)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -44,6 +44,14 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 
 Returns the store node.
 
+## fetch
+
+```brightscript
+sgquery.fetch(spec as dynamic, args = {} as object) as object
+```
+
+Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a url, or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`) with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }` without sending anything when the spec has no url, when the client doesn't exist, or when the string isn't a url (doesn't start with `/` or `http`), which is what a query name passed here by mistake looks like: the message says to call [`query`](#query). See [Requests](../guides/requests.md).
+
 ## define
 
 ```brightscript
@@ -56,17 +64,17 @@ Registers a query. Defining a name again replaces the definition, with a console
 sgquery.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser", ttl: 600, persist: true })
 ```
 
-## fetch
+## query
 
 ```brightscript
-sgquery.fetch(name as string, args = {} as object, options = {} as object) as object
+sgquery.query(name as string, args = {} as object, options = {} as object) as object
 ```
 
-Returns a promise that resolves with the query's value (the parser's result, or the decoded body). See [Caching and freshness](../guides/caching.md#what-a-fetch-does) for how it decides between memory, disk and network.
+Returns a promise that resolves with the query's value (the parser's result, or the decoded body). See [Caching and freshness](../guides/caching.md#what-a-query-does) for how it decides between memory, disk and network.
 
 | Option | Meaning |
 |---|---|
-| `revalidate: true` | Resolve with the cached value at once (fresh, stale or expired) and check the server in the background. With nothing cached, a normal fetch. |
+| `revalidate: true` | Resolve with the cached value at once (fresh, stale or expired) and check the server in the background. With nothing cached, a normal query. |
 | `force: true` | Skip the memory and disk copies and wait for a request. Shares a request already in flight. |
 
 Rejects with an [error](events-and-stats.md#errors) when the request or parse fails, or with `{ message }` when no query has that name. For a `cache: false` query, runs it like [`mutate`](#mutate), without the cached-query check.
@@ -87,21 +95,13 @@ sgquery.mutate(name as string, args = {} as object) as object
 
 Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `invalidates`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
 
-## request
-
-```brightscript
-sgquery.request(spec as object, args = {} as object) as object
-```
-
-Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error, with `{ message, code: 0 }` when the spec has no url, and without sending anything when the client doesn't exist. See [Requests](../guides/requests.md).
-
 ## expire
 
 ```brightscript
 sgquery.expire(name as string, args = invalid as dynamic)
 ```
 
-Marks values out of date without dropping them. `peek` and `revalidate` fetches still get them. A plain fetch waits for the server and falls back to the kept value on failure. Disk copies saved before now aren't served.
+Marks values out of date without dropping them. `peek` and `revalidate` queries still get them. A plain query waits for the server and falls back to the kept value on failure. Disk copies saved before now aren't served.
 
 - Name only: every entry of the query and its dotted descendants.
 - Name and args: the one entry those args key to now.
@@ -128,7 +128,7 @@ A request in flight for a dropped entry still answers its callers, but isn't sto
 sgquery.expireAll()
 ```
 
-Marks every cached value stale. Each is served from the cache on its next fetch and refreshed in the background. For coming back from the background.
+Marks every cached value stale. Each is served from the cache on its next query and refreshed in the background. For coming back from the background.
 
 ## setScope
 

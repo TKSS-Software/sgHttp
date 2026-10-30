@@ -10,7 +10,7 @@ An HTTP client for Roku SceneGraph apps, with a query cache that grows on top of
 sgquery.initialize({ baseUrl: "https://api.example.com" })
 
 ' A request: sent from a pooled task thread, back as a promise with the whole response
-promises.chain(sgquery.request({ url: "/home/main" }), m).then(function(response as object, m as object) as dynamic
+promises.chain(sgquery.fetch("/home/main"), m).then(function(response as object, m as object) as dynamic
     print response.code, response.body.rows.count()
     return invalid
 end function)
@@ -18,8 +18,8 @@ end function)
 ' A query: the same request with a name, cached for every component to share
 sgquery.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
 
-promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
-    ' a second fetch within 5 minutes needs no request
+promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
+    ' a second query within 5 minutes needs no request
     m.titleLabel.text = page.rows[0].title
     return invalid
 end function)
@@ -28,8 +28,8 @@ end function)
 Everything beyond that is a key on the definition: a `parser` that builds ContentNode trees off the render thread, `persist` for a cold start that shows data before the network answers, `scopes` for per-profile data, `expires` on the mutations that change it.
 
 - A pooled, queued HTTP client on a task thread: retries with backoff, timeouts, shared headers, a debugging proxy and JSON decoding, with promises back on the render thread
-- `request` for one-off calls: no definition, no cache, the whole response back
-- Declarative queries: define an endpoint once, then fetch it by name from any component
+- `fetch` for one-off calls: no definition, no cache, the whole response back
+- Declarative queries: define an endpoint once, then query it by name from any component
 - One shared cache for the whole app, with request de-duplication and stale-while-revalidate
 - Parsers that turn responses into ContentNode trees on a task thread, never on the render thread
 - Persistence to `cachefs:/`, so a cold start shows data before the network answers

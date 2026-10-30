@@ -60,7 +60,7 @@ end sub
 
 - **With args**, a watcher hears only the entry those args key to at the moment of the change, using the current scopes and time bucket.
 - **Without args**, it hears every entry of the query.
-- A **first** value never notifies; the fetch that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
+- A **first** value never notifies; the query that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
 - The callback runs in the component that called `watch`. Call `unwatch` when that component goes away, because the store holds on to every watcher until you do. `getStats().watchers` counts the live ones.
 
 ### Every change, from one place
@@ -80,21 +80,21 @@ Stop with `sgquery.unobserveChanges()`.
 
 ## Checking when a screen opens
 
-To show cached data immediately and still pick up anything new, fetch with `revalidate`:
+To show cached data immediately and still pick up anything new, query with `revalidate`:
 
 ```brightscript
-promises.chain(sgquery.fetch("recordings", args, { revalidate: true }), m).then(function(value as dynamic, m as object) as dynamic
+promises.chain(sgquery.query("recordings", args, { revalidate: true }), m).then(function(value as dynamic, m as object) as dynamic
     drawRows(value)   ' the cached value, right away
     return invalid
 end function)
 ' if the server's copy differs, the watcher above receives it
 ```
 
-`revalidate` plus a watcher is the usual pair: the fetch draws the screen now, and the watcher redraws it if the check finds something.
+`revalidate` plus a watcher is the usual pair: the query draws the screen now, and the watcher redraws it if the check finds something.
 
 ## Coming back from the background
 
-`sgquery.expireAll()` marks every cached value stale. Each one is served from the cache on its next fetch and refreshed in the background. See [Caching and freshness](caching.md#marking-everything-stale).
+`sgquery.expireAll()` marks every cached value stale. Each one is served from the cache on its next query and refreshed in the background. See [Caching and freshness](caching.md#marking-everything-stale).
 
 ## Next
 

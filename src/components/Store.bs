@@ -203,15 +203,23 @@ function normalize(name as string, definition as object) as object
 end function
 
 ' One request with no definition and no cache: sgquery as a plain HTTP client. The spec is a
-' define request (url, method, headers, body, query, parseJson, retries) plus the definition
-' keys a request can use (client, auth, proxy, timeout, successCodes, parser) and a name for
-' events. Resolves with the whole response, since a caller here wants the status and headers.
-function _request(spec as object, args = {} as object) as object
+' url, or a define request (url, method, headers, body, query, parseJson, retries) plus the
+' definition keys a request can use (client, auth, proxy, timeout, successCodes, parser) and a
+' name for events. Resolves with the whole response, since a caller here wants the status and
+' headers.
+function _fetch(spec as dynamic, args = {} as object) as object
+    if type(spec) = "roString" or type(spec) = "String" then
+        ' A query name passed here by mistake would quietly become a request to baseUrl/<name>
+        if spec.left(1) <> "/" and lcase(spec.left(4)) <> "http" then
+            return promises.reject({ message: `sgquery: fetch takes a url; to run the query "${spec}", call query()`, code: 0 })
+        end if
+        spec = { url: spec }
+    end if
     if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
-        return promises.reject({ message: "sgquery: request needs a url", code: 0 })
+        return promises.reject({ message: "sgquery: fetch needs a url", code: 0 })
     end if
     if type(args) <> "roAssociativeArray" then args = {}
-    name = isNonEmptyString(spec.name) ? spec.name : "request"
+    name = isNonEmptyString(spec.name) ? spec.name : "fetch"
     definition = normalize(name, {
         request: spec
         client: spec.client
@@ -281,7 +289,7 @@ end function
 '#region Fetch
 '*************************************************************************
 
-function _fetch(name as string, args = {} as object, options = {} as object) as object
+function _query(name as string, args = {} as object, options = {} as object) as object
     definition = m.definitions[name]
     if definition = invalid then
         return promises.reject({ message: `sgquery: no query named "${name}"` })

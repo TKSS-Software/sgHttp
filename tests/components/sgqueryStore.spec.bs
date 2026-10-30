@@ -33,8 +33,8 @@ namespace tests
             m.store = invalid
         end function
 
-        function fetch(id as string, options = {} as object) as object
-            return m.store.callFunc("_fetch", "items", { id: id }, options)
+        function query(id as string, options = {} as object) as object
+            return m.store.callFunc("_query", "items", { id: id }, options)
         end function
 
         function watcher(id as string) as object
@@ -53,16 +53,16 @@ namespace tests
         @describe("expire")
 
         @async
-        @it("keeps the value for peek, and a plain fetch waits for the server")
+        @it("keeps the value for peek, and a plain query waits for the server")
         function _()
             m.makeStore()
-            first = m.fetch("1")
+            first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "a")
                 suite.store.callFunc("_expire", "items", invalid)
                 suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
-                again = suite.fetch("1")
+                again = suite.query("1")
                 suite.assertEqual(suite.fake.requestCount, 2)
                 suite.fake.callFunc("answer", 1, "b")
                 return again
@@ -79,14 +79,14 @@ namespace tests
         end function
 
         @async
-        @it("answers with the kept value when the refetch fails")
+        @it("answers with the kept value when the refresh fails")
         function _()
             m.makeStore()
-            first = m.fetch("1")
+            first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
                 suite.store.callFunc("_expire", "items", { id: "1" })
-                again = suite.fetch("1")
+                again = suite.query("1")
                 suite.fake.callFunc("fail", 1, 500)
                 return again
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -104,14 +104,14 @@ namespace tests
         @it("never lets an answer from before the expire replace a newer one")
         function _()
             m.makeStore()
-            first = m.fetch("1")
+            first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
                 ' A background check starts (request 1), then the data changes
-                suite.fetch("1", { revalidate: true })
-                suite.oldCheck = suite.fetch("1")
+                suite.query("1", { revalidate: true })
+                suite.oldCheck = suite.query("1")
                 suite.store.callFunc("_expire", "items", invalid)
-                fresh = suite.fetch("1")
+                fresh = suite.query("1")
                 suite.assertEqual(suite.fake.requestCount, 3)
                 suite.fake.callFunc("answer", 2, "new")
                 return fresh
@@ -133,18 +133,18 @@ namespace tests
         end function
 
         @async
-        @it("is what a mutation's expires does: the next plain fetch asks the server")
+        @it("is what a mutation's expires does: the next plain query asks the server")
         function _()
             m.makeStore()
-            first = m.fetch("1")
+            first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
-                saved = suite.store.callFunc("_fetch", "items.save", { id: "1" }, { mutation: true })
+                saved = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true })
                 suite.fake.callFunc("answer", 1, "ok")
                 return saved
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "ok")
-                again = suite.fetch("1")
+                again = suite.query("1")
                 suite.assertEqual(suite.fake.requestCount, 3)
                 suite.fake.callFunc("answer", 2, "b")
                 return again
@@ -167,15 +167,15 @@ namespace tests
             m.makeStore()
             m.watchedOne = m.watcher("1")
             m.watchedTwo = m.watcher("2")
-            first = m.fetch("1")
+            first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
                 ' A first value is not a change
                 suite.assertTrue(suite.heardNothing(suite.watchedOne))
                 suite.store.callFunc("_expire", "items", invalid)
                 ' revalidate: the kept value now, the server checked in the background
-                suite.fetch("1", { revalidate: true })
-                inFlight = suite.fetch("1")
+                suite.query("1", { revalidate: true })
+                inFlight = suite.query("1")
                 suite.fake.callFunc("answer", 1, "b")
                 return inFlight
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -198,10 +198,10 @@ namespace tests
         @describe("requests in flight")
 
         @async
-        @it("still answers a fetch whose entry was dropped while it waited")
+        @it("still answers a query whose entry was dropped while it waited")
         function _()
             m.makeStore()
-            waiting = m.fetch("1")
+            waiting = m.query("1")
             m.store.callFunc("_invalidate", "items", invalid)
             m.fake.callFunc("answer", 0, "a")
             promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
@@ -237,12 +237,12 @@ namespace tests
         end function
 
         ' Stores "a" for item 1 on disk, then "b" for item 2, which evicts item 1 from memory
-        ' (each fetch reads the disk first, so its request starts later: answerNext)
+        ' (each query reads the disk first, so its request starts later: answerNext)
         function storeAndEvict() as object
             m.fake.callFunc("answerNext", "a")
-            return promises.chain(m.fetch("1"), m).then(function(value as dynamic, suite as object) as dynamic
+            return promises.chain(m.query("1"), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.fake.callFunc("answerNext", "b")
-                return suite.fetch("2")
+                return suite.query("2")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
                 return invalid
@@ -256,7 +256,7 @@ namespace tests
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.store.callFunc("_invalidate", "items", { id: "1" })
                 suite.fake.callFunc("answerNext", "fresh")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -276,7 +276,7 @@ namespace tests
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.store.callFunc("_invalidate", "items", invalid)
                 suite.fake.callFunc("answerNext", "fresh")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -301,13 +301,13 @@ namespace tests
                 suite.makeAppStore("spec-app", "1.0.0")
                 suite.store.callFunc("_invalidate", invalid, invalid)
                 suite.fake.callFunc("answerNext", "other")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "other")
                 suite.assertEqual(suite.fake.requestCount, 1)
                 ' The first app starts again: its own copy is still on disk
                 suite.makeAppStore("spec app", "1.0.0")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "a")
                 suite.assertEqual(suite.fake.requestCount, 0)
@@ -328,19 +328,19 @@ namespace tests
                 ' Version 1.0.1 starts: 1.0.0's folder is cleared before its first read
                 suite.makeAppStore("spec app", "1.0.1")
                 suite.fake.callFunc("answerNext", "new")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "new")
                 suite.assertEqual(suite.fake.requestCount, 1)
                 ' The clean-up was queued when that first read answered; a second read, queued
                 ' behind it on the same task, tells when it has run
                 suite.fake.callFunc("answerNext", "new2")
-                return suite.fetch("2")
+                return suite.query("2")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 ' Back on 1.0.0, its copy is gone
                 suite.makeAppStore("spec app", "1.0.0")
                 suite.fake.callFunc("answerNext", "fresh")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 1)
@@ -362,13 +362,13 @@ namespace tests
                 ' The same build pointed at production does not read QA's copy
                 suite.makeAppStore("spec app", "1.0.0", "https://api.example.com")
                 suite.fake.callFunc("answerNext", "production")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "production")
                 suite.assertEqual(suite.fake.requestCount, 1)
                 ' Pointed at QA again, its copy is still there
                 suite.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "a")
                 suite.assertEqual(suite.fake.requestCount, 0)
@@ -395,10 +395,10 @@ namespace tests
                 ' read, queued behind it on the store's task, tells when it has run
                 suite.makePersistingStore()
                 suite.fake.callFunc("answerNext", "a")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.fake.callFunc("answerNext", "b")
-                return suite.fetch("2")
+                return suite.query("2")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 return suite.files.callFunc("execute", { type: "read", path: suite.legacyPath })
             end function).then(function(text as dynamic, suite as object) as dynamic
@@ -421,7 +421,7 @@ namespace tests
             m.makePersistingStore()
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.fake.callFunc("answerNext", "fresh")
-                return suite.fetch("1", { force: true })
+                return suite.query("1", { force: true })
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -443,7 +443,7 @@ namespace tests
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.store.callFunc("_expire", "items", { id: "1" })
                 suite.fake.callFunc("answerNext", "fresh")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "fresh")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -461,17 +461,17 @@ namespace tests
         function _()
             m.makePersistingStore()
             m.fake.callFunc("answerNext", "a")
-            promises.chain(m.fetch("1"), m).then(function(value as dynamic, suite as object) as dynamic
+            promises.chain(m.query("1"), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.store.callFunc("_expire", "items", { id: "1" })
                 suite.fake.callFunc("answerNext", "b")
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "b")
                 ' Evicts item 1 to disk only
                 suite.fake.callFunc("answerNext", "c")
-                return suite.fetch("2")
+                return suite.query("2")
             end function).then(function(value as dynamic, suite as object) as dynamic
-                return suite.fetch("1")
+                return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "b")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -491,7 +491,7 @@ namespace tests
         function _()
             m.makeStore()
             m.store.callFunc("_define", "clock", { request: { url: "/clock" }, ttl: 300, bucket: 1 })
-            first = m.store.callFunc("_fetch", "clock", {}, {})
+            first = m.store.callFunc("_query", "clock", {}, {})
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
                 ' Into the next one-second bucket
@@ -499,7 +499,7 @@ namespace tests
                 while createObject("roDateTime").asSeconds() = start
                     sleep(20)
                 end while
-                rolled = suite.store.callFunc("_fetch", "clock", {}, {})
+                rolled = suite.store.callFunc("_query", "clock", {}, {})
                 suite.assertEqual(suite.fake.requestCount, 2)
                 ' Only the new bucket's entry is left
                 suite.assertEqual(suite.store.callFunc("_getStats").entries, 1)
@@ -536,7 +536,7 @@ namespace tests
             m.assertInvalid(m.partner.headers["X-Main"])
             m.assertEqual(m.fake.headers.Authorization, "main-token")
 
-            waiting = m.store.callFunc("_fetch", "partner.items", { id: "1" }, {})
+            waiting = m.store.callFunc("_query", "partner.items", { id: "1" }, {})
             m.assertEqual(m.partner.requestCount, 1)
             m.assertEqual(m.fake.requestCount, 0)
             m.partner.callFunc("answer", 0, "p")
@@ -570,7 +570,7 @@ namespace tests
         function _()
             m.makeStore()
             m.store.callFunc("_define", "ghost.items", { client: "ghost", request: { url: "/x" } })
-            promises.chain(m.store.callFunc("_fetch", "ghost.items", {}, {}), m).then(function(value as dynamic, suite as object) as dynamic
+            promises.chain(m.store.callFunc("_query", "ghost.items", {}, {}), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.fail("resolved a query with no client")
                 suite.done()
                 return invalid
@@ -588,7 +588,7 @@ namespace tests
         @it("refuses a cached query")
         function _()
             m.makeStore()
-            promises.chain(m.store.callFunc("_fetch", "items", { id: "1" }, { mutation: true }), m).then(function(value as dynamic, suite as object) as dynamic
+            promises.chain(m.store.callFunc("_query", "items", { id: "1" }, { mutation: true }), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.fail("resolved a cached query as a mutation")
                 suite.done()
                 return invalid
@@ -599,13 +599,13 @@ namespace tests
             end function)
         end function
 
-        @describe("request")
+        @describe("fetch")
 
         @async
         @it("sends an ad-hoc request, filled from args, and resolves with the whole response")
         function _()
             m.makeStore()
-            waiting = m.store.callFunc("_request", { url: "/ping/{id}", method: "POST", body: { echo: "{id}" }, headers: { "X-Trace": "{id}" } }, { id: "7" })
+            waiting = m.store.callFunc("_fetch", { url: "/ping/{id}", method: "POST", body: { echo: "{id}" }, headers: { "X-Trace": "{id}" } }, { id: "7" })
             m.assertEqual(m.fake.requestCount, 1)
             spec = m.fake.callFunc("requestAt", 0)
             m.assertEqual(spec.url, "/ping/7")
@@ -618,7 +618,7 @@ namespace tests
                 suite.assertEqual(response.body, "pong")
                 suite.assertEqual(type(response.headers), "roAssociativeArray")
                 suite.assertEqual(suite.store.lastEvent.type, "resolve")
-                suite.assertEqual(suite.store.lastEvent.name, "request")
+                suite.assertEqual(suite.store.lastEvent.name, "fetch")
                 ' Nothing was cached: a query of the same url still asks the server
                 suite.assertEqual(suite.store.callFunc("_getStats").entries, 0)
                 suite.done()
@@ -634,7 +634,7 @@ namespace tests
         @it("rejects with the status when the server fails it")
         function _()
             m.makeStore()
-            waiting = m.store.callFunc("_request", { url: "/missing", name: "probe" }, {})
+            waiting = m.store.callFunc("_fetch", { url: "/missing", name: "probe" }, {})
             m.fake.callFunc("fail", 0, 404)
             promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
                 suite.fail("resolved a 404")
@@ -658,7 +658,7 @@ namespace tests
             m.partner = createObject("roSGNode", "FakeTransport")
             m.store = createObject("roSGNode", "Store")
             m.store.callFunc("_initialize", { transport: m.fake, persist: false, clients: { partner: { transport: m.partner } } })
-            waiting = m.store.callFunc("_request", { url: "/status", client: "partner" }, {})
+            waiting = m.store.callFunc("_fetch", { url: "/status", client: "partner" }, {})
             m.assertEqual(m.partner.requestCount, 1)
             m.assertEqual(m.fake.requestCount, 0)
             m.partner.callFunc("fail", 0, 500)
@@ -680,9 +680,44 @@ namespace tests
         @it("refuses a spec without a url, without sending anything")
         function _()
             m.makeStore()
-            rejected = m.store.callFunc("_request", { method: "POST" }, {})
+            rejected = m.store.callFunc("_fetch", { method: "POST" }, {})
             m.assertEqual(m.fake.requestCount, 0)
             m.assertEqual(rejected.promiseState, "rejected")
+        end function
+
+        @async
+        @it("takes a url string")
+        function _()
+            m.makeStore()
+            waiting = m.store.callFunc("_fetch", "/status", {})
+            m.assertEqual(m.fake.requestCount, 1)
+            m.assertEqual(m.fake.callFunc("requestAt", 0).url, "/status")
+            m.fake.callFunc("answer", 0, "ok")
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body, "ok")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("refuses a query name in place of a url, and says to call query()")
+        function _()
+            m.makeStore()
+            promises.chain(m.store.callFunc("_fetch", "items", {}), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("sent a request for a query name")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.assertTrue(error.message.instr("query()") >= 0)
+                suite.done()
+                return invalid
+            end function)
         end function
     end class
 end namespace

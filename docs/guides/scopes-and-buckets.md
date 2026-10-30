@@ -11,7 +11,7 @@ sgquery.define("continueWatching", {
 })
 
 sgquery.setScope("profile", "p-123")
-sgquery.fetch("continueWatching")   ' GET /continue-watching?profile_id=p-123
+sgquery.query("continueWatching")   ' GET /continue-watching?profile_id=p-123
 ```
 
 ### Changing a scope
@@ -56,8 +56,8 @@ sgquery.define("guide.onNow", {
 ```
 
 - Within a window, the query caches and refreshes like any other, following its `ttl`.
-- The first fetch after the window rolls over finds a new, empty key and waits for the server. The previous window's value isn't served.
-- At that first fetch, the query's entries from earlier windows are dropped, in memory and on disk, since no fetch can reach them again. Entries with a request still in flight are dropped at the next rollover instead.
+- The first query after the window rolls over finds a new, empty key and waits for the server. The previous window's value isn't served.
+- At that first query, the query's entries from earlier windows are dropped, in memory and on disk, since no query can reach them again. Entries with a request still in flight are dropped at the next rollover instead.
 
 Windows are aligned to the Unix epoch in UTC: `bucket: 3600` rolls over on the hour, and `bucket: 1800` on the hour and half hour.
 

@@ -1,6 +1,6 @@
 # Testing your app
 
-Code that fetches through sgQuery can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
+Code that asks sgQuery for data can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
 
 ## A fake transport
 
@@ -78,13 +78,13 @@ function tearDown()
 end function
 ```
 
-Then fetch, answer, and check the result:
+Then query, answer, and check the result:
 
 ```brightscript
 @async
-@it("fetches the home rows")
+@it("loads the home rows")
 function _()
-    promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as dynamic, suite as object) as dynamic
+    promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as dynamic, suite as object) as dynamic
         ' No parserTask in this setup, so the value is the decoded JSON
         suite.assertEqual(page.rows.count(), 2)
         suite.done()
@@ -99,7 +99,7 @@ Because the spec answers each request itself, it controls the order responses ar
 
 ## Things to know
 
-- **Requests can start late.** A `persist: true` query reads the disk before it makes its request, so the request doesn't exist yet right after `fetch` returns. Turn persistence off in specs, or have the fake answer requests as they arrive.
+- **Requests can start late.** A `persist: true` query reads the disk before it makes its request, so the request doesn't exist yet right after `query` returns. Turn persistence off in specs, or have the fake answer requests as they arrive.
 - **Parsers need a parser task.** Pass `parserTask` to `initialize` in specs that test parsing. Or test parser classes directly: `new HomePageParser().parse(json, {})` needs no task.
 - **`spec.url` has no base url or query string.** It is the filled url as the definition wrote it; check `spec.query` for parameters.
 - **Destroy between specs.** `initialize` returns the existing store if there is one, so without `destroy` one spec's cache and definitions leak into the next.

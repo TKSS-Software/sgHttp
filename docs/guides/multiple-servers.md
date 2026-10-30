@@ -36,7 +36,7 @@ sgquery.define("partner.homePage", { client: "partner", request: { url: "/home/{
 
 Query names are shared by every client, so prefix another server's queries with its name. Each call then says which server it reaches, and `invalidate("partner")` or `expire("partner")` covers that whole server.
 
-Defining a query that names a client `initialize` didn't set up prints a warning. Its fetches reject with `sgquery: query "..." names client "...", which initialize did not set up`, without sending anything.
+Defining a query that names a client `initialize` didn't set up prints a warning. Its queries reject with `sgquery: query "..." names client "...", which initialize did not set up`, without sending anything.
 
 ## Headers per client
 

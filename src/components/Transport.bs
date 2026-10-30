@@ -320,12 +320,15 @@ function proxyAddress() as string
     return proxy
 end function
 
-function appendQuery(url as string, query as dynamic) as string
-    if type(query) <> "roAssociativeArray" or query.count() = 0 then return url
+' params, not query: ropm prefixes any name matching a function in source/sgquery.bs
+' (query(), fetch(), ...) when it copies sgquery into an app, so a local named query
+' became sgquery_query (the function) there and every query string was dropped
+function appendQuery(url as string, params as dynamic) as string
+    if type(params) <> "roAssociativeArray" or params.count() = 0 then return url
     transfer = createObject("roUrlTransfer")
     parts = []
-    for each key in query
-        value = query[key]
+    for each key in params
+        value = params[key]
         if type(value) = "roArray" then
             for each item in value
                 if item <> invalid then parts.push(transfer.escape(key) + "=" + transfer.escape(item.toStr()))
