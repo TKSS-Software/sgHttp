@@ -80,7 +80,11 @@ promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(pag
 end function)
 ```
 
-The first call sends the request as `fetch` would and caches the body under the query's name and args. Within the next five minutes, a query with the same args from any component resolves at once from memory, and two components querying at the same moment share one request. After five minutes, a query still resolves at once with the cached value, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, nothing changes and no one is told.
+The first call sends the request, exactly as `fetch` would, and keeps the body in memory under the query's name and args. From then on:
+
+- **For the next five minutes** (the `ttl`), a query with the same args, from any component, is answered from memory. No request is sent.
+- **After that**, the value is stale. A query is still answered from memory at once, and sgQuery sends a request in the background to check. If the server's answer is different, the cache is updated and any watcher of the query hears about it. If it's byte-for-byte the same, nothing happens.
+- **At any moment**, if a request for this query is already in flight, a second query joins it instead of sending another.
 
 From here, each need is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so the next launch draws the screen before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds them in that order, after the HTTP client.
 
