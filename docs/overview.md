@@ -25,6 +25,8 @@ Handling that well means solving the same set of problems in every channel:
 
 sgQuery handles these for you. A typical screen asks for its data and draws it; the cache, threads, disk and refresh policy are configured once, when the query is defined.
 
+Underneath the cache is an ordinary HTTP client: a pooled `roUrlTransfer` task with retries, timeouts, shared headers and JSON decoding. It's there on its own too, as [`request`](guides/requests.md), for the calls that don't need a cache.
+
 ## Enough talk, show me some code
 
 Set the library up once, in the main scene:

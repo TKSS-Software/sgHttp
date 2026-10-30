@@ -155,6 +155,24 @@ sub _define(name as string, definition as object)
     if m.definitions[name] <> invalid then
         print `[sgquery] "${name}" is defined again: the new definition replaces the first`
     end if
+    normalized = normalize(name, definition)
+    clientName = normalized.client
+    ' Names the persisted file: a body stored under another request (url, query, method),
+    ' parser or server is never read again, since the key alone does not say where a value came
+    ' from. The server is the client (for any but the default) and its baseUrl, so a build
+    ' pointed at QA never reads bodies stored against production.
+    requestText = formatJson(definition.request) + "|" + asString(definition.parser)
+    if clientName <> DEFAULT_CLIENT then requestText = requestText + "|" + clientName
+    client = m.clients[clientName]
+    url = type(definition.request) = "roAssociativeArray" ? asString(definition.request.url) : ""
+    ' An absolute url ignores baseUrl (see Transport.startJob), so its bodies survive a change of API host
+    if client <> invalid and client.baseUrl <> "" and url.left(4) <> "http" then requestText = requestText + "|" + client.baseUrl
+    normalized.requestHash = hashString(requestText)
+    m.definitions[name] = normalized
+end sub
+
+' A definition with every key present and defaulted, as the fetch path reads it
+function normalize(name as string, definition as object) as object
     clientName = isNonEmptyString(definition.client) ? definition.client : DEFAULT_CLIENT
     if m.clients[clientName] = invalid then
         print `[sgquery] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
@@ -181,19 +199,31 @@ sub _define(name as string, definition as object)
     }
     ' ttl: invalid -> store default; negative -> fresh until invalidated
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
-    ' Names the persisted file: a body stored under another request (url, query, method),
-    ' parser or server is never read again, since the key alone does not say where a value came
-    ' from. The server is the client (for any but the default) and its baseUrl, so a build
-    ' pointed at QA never reads bodies stored against production.
-    requestText = formatJson(definition.request) + "|" + asString(definition.parser)
-    if clientName <> DEFAULT_CLIENT then requestText = requestText + "|" + clientName
-    client = m.clients[clientName]
-    url = type(definition.request) = "roAssociativeArray" ? asString(definition.request.url) : ""
-    ' An absolute url ignores baseUrl (see Transport.startJob), so its bodies survive a change of API host
-    if client <> invalid and client.baseUrl <> "" and url.left(4) <> "http" then requestText = requestText + "|" + client.baseUrl
-    normalized.requestHash = hashString(requestText)
-    m.definitions[name] = normalized
-end sub
+    return normalized
+end function
+
+' One request with no definition and no cache: sgquery as a plain HTTP client. The spec is a
+' define request (url, method, headers, body, query, parseJson, retries) plus the definition
+' keys a request can use (client, auth, proxy, timeout, successCodes, parser) and a name for
+' events. Resolves with the whole response, since a caller here wants the status and headers.
+function _request(spec as object, args = {} as object) as object
+    if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
+        return promises.reject({ message: "sgquery: request needs a url", code: 0 })
+    end if
+    if type(args) <> "roAssociativeArray" then args = {}
+    name = isNonEmptyString(spec.name) ? spec.name : "request"
+    definition = normalize(name, {
+        request: spec
+        client: spec.client
+        auth: spec.auth
+        proxy: spec.proxy
+        timeout: spec.timeout
+        successCodes: spec.successCodes
+        parser: spec.parser
+        cache: false
+    })
+    return runUncached(definition, args, true)
+end function
 
 sub _setScope(scopeName as string, value as dynamic, options = {} as object)
     previous = m.scopes[scopeName]
@@ -434,9 +464,10 @@ end sub
 
 ' Executes a cache: false definition. Parses if a parser is set, applies the
 ' definition's invalidations on success, and never touches the cache.
-function runUncached(definition as object, args as object) as object
+' raw: resolve with the whole response (its body parsed) rather than the value alone
+function runUncached(definition as object, args as object, raw = false as boolean) as object
     pending = promises.create()
-    context = { definition: definition, args: args, pending: pending, startedAt: createObject("roTimespan") }
+    context = { definition: definition, args: args, pending: pending, startedAt: createObject("roTimespan"), raw: raw }
     client = clientOf(definition)
     if client = invalid then
         m.stats.errors++
@@ -450,6 +481,7 @@ function runUncached(definition as object, args as object) as object
 
     promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
         definition = context.definition
+        context.response = response
         if isNonEmptyString(definition.parser) then
             if not isNode(m.parserTask) then
                 return promises.reject({ message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
@@ -459,7 +491,11 @@ function runUncached(definition as object, args as object) as object
         return response.body
     end function).then(function(value as dynamic, context as object) as dynamic
         applyInvalidations(context.definition)
-        emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds())
+        emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), { client: context.definition.client })
+        if context.raw then
+            context.response.body = value
+            value = context.response
+        end if
         promises.resolve(value, context.pending)
         return invalid
     end function).catch(function(error as dynamic, context as object) as dynamic
@@ -1100,6 +1136,7 @@ end function
 
 ' Every event names the client its query belongs to ("default" for the top-level one), so
 ' an app can react to one server's auth failures without guessing from query names
+' extra.client names the client when the name is not a definition's (an ad-hoc request)
 sub emit(eventType as string, name as string, key as string, source as string, ms as integer, extra = invalid as dynamic)
     clientName = DEFAULT_CLIENT
     definition = m.definitions[name]
@@ -1107,7 +1144,7 @@ sub emit(eventType as string, name as string, key as string, source as string, m
     event = { type: eventType, name: name, key: key, source: source, ms: ms, client: clientName }
     if type(extra) = "roAssociativeArray" then event.append(extra)
     if eventType = "error" then
-        client = m.clients[clientName]
+        client = m.clients[event.client]
         if client <> invalid then client.errors++
     end if
     m.top.lastEvent = event
@@ -1118,7 +1155,7 @@ end sub
 function errorDetails(definition as object, error as dynamic) as object
     code = 0
     if type(error) = "roAssociativeArray" and error.code <> invalid then code = error.code
-    return { code: code, auth: definition.auth <> false }
+    return { code: code, auth: definition.auth <> false, client: definition.client }
 end function
 
 sub _destroy()

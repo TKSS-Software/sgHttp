@@ -7,6 +7,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 - Setup: [`initialize`](#initialize), [`define`](#define), [`getStore`](#getstore), [`destroy`](#destroy)
 - Reading: [`fetch`](#fetch), [`peek`](#peek)
 - Writing: [`mutate`](#mutate)
+- Plain HTTP: [`request`](#request)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -86,6 +87,14 @@ sgquery.mutate(name as string, args = {} as object) as object
 ```
 
 Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `invalidates`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
+
+## request
+
+```brightscript
+sgquery.request(spec as object, args = {} as object) as object
+```
+
+Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error, with `{ message, code: 0 }` when the spec has no url, and without sending anything when the client doesn't exist. See [Plain requests](../guides/requests.md).
 
 ## expire
 

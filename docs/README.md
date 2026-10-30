@@ -11,6 +11,7 @@
 - [Queries and keys](guides/queries.md): defining queries, filling urls from args, and how cache keys are made
 - [Caching and freshness](guides/caching.md): what happens on each fetch, `ttl`, stale-while-revalidate and eviction
 - [Mutations, expiry and invalidation](guides/mutations.md): writing data and telling the cache what it changed
+- [Plain requests](guides/requests.md): one-off requests with no definition and no cache, sgQuery as an HTTP client
 - [Keeping data fresh](guides/keeping-data-fresh.md): background refreshes, unchanged-payload detection and watchers
 - [Scopes and time buckets](guides/scopes-and-buckets.md): per-profile data and data that rolls over with the clock
 - [Persistence](guides/persistence.md): serving the last response from `cachefs:/` on a cold start
@@ -23,7 +24,7 @@
 
 ## API reference
 
-- [Functions](reference/api.md): `initialize`, `define`, `fetch`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
+- [Functions](reference/api.md): `initialize`, `define`, `fetch`, `mutate`, `request`, `peek`, `expire`, `invalidate`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
 - [Events, stats and errors](reference/events-and-stats.md): the shapes sgQuery reports
 

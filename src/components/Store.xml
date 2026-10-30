@@ -10,6 +10,7 @@
         <function name="_initialize" />
         <function name="_define" />
         <function name="_fetch" />
+        <function name="_request" />
         <function name="_peek" />
         <function name="_invalidate" />
         <function name="_invalidateScope" />

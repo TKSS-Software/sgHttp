@@ -598,5 +598,91 @@ namespace tests
                 return invalid
             end function)
         end function
+
+        @describe("request")
+
+        @async
+        @it("sends an ad-hoc request, filled from args, and resolves with the whole response")
+        function _()
+            m.makeStore()
+            waiting = m.store.callFunc("_request", { url: "/ping/{id}", method: "POST", body: { echo: "{id}" }, headers: { "X-Trace": "{id}" } }, { id: "7" })
+            m.assertEqual(m.fake.requestCount, 1)
+            spec = m.fake.callFunc("requestAt", 0)
+            m.assertEqual(spec.url, "/ping/7")
+            m.assertEqual(spec.method, "POST")
+            m.assertEqual(spec.body.echo, "7")
+            m.assertEqual(spec.headers["X-Trace"], "7")
+            m.fake.callFunc("answer", 0, "pong")
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.assertEqual(response.body, "pong")
+                suite.assertEqual(type(response.headers), "roAssociativeArray")
+                suite.assertEqual(suite.store.lastEvent.type, "resolve")
+                suite.assertEqual(suite.store.lastEvent.name, "request")
+                ' Nothing was cached: a query of the same url still asks the server
+                suite.assertEqual(suite.store.callFunc("_getStats").entries, 0)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("rejects with the status when the server fails it")
+        function _()
+            m.makeStore()
+            waiting = m.store.callFunc("_request", { url: "/missing", name: "probe" }, {})
+            m.fake.callFunc("fail", 0, 404)
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a 404")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 404)
+                suite.assertEqual(suite.store.lastEvent.type, "error")
+                suite.assertEqual(suite.store.lastEvent.name, "probe")
+                suite.assertEqual(suite.store.lastEvent.code, 404)
+                suite.assertEqual(suite.store.callFunc("_getStats").errors, 1)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("goes through the named client and reports it in events and stats")
+        function _()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.partner = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false, clients: { partner: { transport: m.partner } } })
+            waiting = m.store.callFunc("_request", { url: "/status", client: "partner" }, {})
+            m.assertEqual(m.partner.requestCount, 1)
+            m.assertEqual(m.fake.requestCount, 0)
+            m.partner.callFunc("fail", 0, 500)
+            promises.chain(waiting, m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a 500")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.store.lastEvent.client, "partner")
+                stats = suite.store.callFunc("_getStats")
+                suite.assertEqual(stats.clients.partner.requests, 1)
+                suite.assertEqual(stats.clients.partner.errors, 1)
+                suite.assertEqual(stats.clients.default.errors, 0)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @it("refuses a spec without a url, without sending anything")
+        function _()
+            m.makeStore()
+            rejected = m.store.callFunc("_request", { method: "POST" }, {})
+            m.assertEqual(m.fake.requestCount, 0)
+            m.assertEqual(rejected.promiseState, "rejected")
+        end function
     end class
 end namespace

@@ -24,7 +24,7 @@ end function).catch(function(error as object, m as object) as dynamic
 end function)
 ```
 
-`mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call site that reads as a write can't quietly cache. `fetch` also runs `cache: false` queries; use it for per-call resources that aren't writes, such as a stream url.
+`mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call site that reads as a write can't quietly cache. `fetch` also runs `cache: false` queries; use it for per-call resources that aren't writes, such as a stream url. For a one-off call that isn't worth a definition, or where you need the status and headers, see [Plain requests](requests.md).
 
 When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists. Nothing is applied when it fails.
 

@@ -52,7 +52,7 @@ Returned by [`getStats`](api.md#getstats). Counters run from `initialize`.
 
 ## Errors
 
-A rejected `fetch` or `mutate` promise carries one of these:
+A rejected `fetch`, `mutate` or `request` promise carries one of these:
 
 **An HTTP failure** (a status outside `successCodes`), straight from the transport:
 

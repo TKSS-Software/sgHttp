@@ -12,6 +12,7 @@ Server-state management for Roku SceneGraph apps: fetching, caching, de-duplicat
 - Persistence to `cachefs:/`, so a cold start shows data before the network answers
 - Background refreshes that skip parsing and redraws when the server's data hasn't changed
 - Mutations that expire or invalidate the queries they affect
+- Plain `request` calls when you only want the HTTP client: no definition, no cache, the whole response back
 - Scopes (per-profile data), time buckets (now-and-next schedules) and more than one API server
 - Change watchers, cache events and stats for redraws, auth handling and debugging
 - No framework needed: works with any SceneGraph navigation, and plays nicely with [sgRouter](https://github.com/rokucommunity/sgRouter)
