@@ -98,4 +98,4 @@ end function)
 
 ## Next
 
-[Scopes and time buckets](scopes-and-buckets.md)
+[Pages](pagination.md)

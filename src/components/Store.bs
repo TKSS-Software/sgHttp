@@ -196,10 +196,23 @@ function normalize(name as string, definition as object) as object
         conditional: definition.conditional = true
         compare: definition.compare = "parsed" ? "parsed" : "body"
         client: clientName
+        pages: normalizePages(definition.pages)
     }
     ' ttl: invalid -> store default; negative -> fresh until invalidated
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
     return normalized
+end function
+
+' pages: { next: path in a page's value to the next page's cursor (empty or missing on the last
+' page), arg: the arg the cursor is passed as (default "next"), request: the request for pages
+' after the first (default: the definition's) }, or invalid for a query without pages
+function normalizePages(pages as dynamic) as dynamic
+    if type(pages) <> "roAssociativeArray" or not isNonEmptyString(pages.next) then return invalid
+    return {
+        next: pages.next
+        arg: isNonEmptyString(pages.arg) ? pages.arg : "next"
+        request: type(pages.request) = "roAssociativeArray" ? pages.request : invalid
+    }
 end function
 
 ' One request with no definition and no cache: sgquery as a plain HTTP client. The spec is a
@@ -303,6 +316,26 @@ function _query(name as string, args = {} as object, options = {} as object) as 
     ' Mutations and per-call resources: straight through the transport, never stored
     if not definition.cache then return runUncached(definition, args)
 
+    raw = runQuery(definition, args, options)
+    if definition.pages = invalid then return raw
+    ' A query with pages resolves with every page loaded for these args, not the one page
+    context = { definition: definition, key: buildKey(name, definition, args, m.scopes, nowSeconds()), pending: promises.create() }
+    promises.chain(raw, context).then(function(value as dynamic, context as object) as dynamic
+        pages = assemblePages(context.definition, context.key)
+        ' The entry went while the request ran: its callers still get the page they asked for
+        if pages.pages.count() = 0 then pages = { pages: [value], hasNext: cursorOf(context.definition, value) <> invalid }
+        promises.resolve(pages, context.pending)
+        return invalid
+    end function).catch(function(error as dynamic, context as object) as dynamic
+        promises.reject(error, context.pending)
+        return invalid
+    end function).toPromise()
+    return context.pending
+end function
+
+' The cached path of _query: the promise resolves with the one entry's value
+function runQuery(definition as object, args as object, options as object) as object
+    name = definition.name
     now = nowSeconds()
     dropOldBuckets(definition, now)
     key = buildKey(name, definition, args, m.scopes, now)
@@ -357,9 +390,180 @@ end function
 function _peek(name as string, args = {} as object) as dynamic
     definition = m.definitions[name]
     if definition = invalid then return invalid
-    entry = m.cache[buildKey(name, definition, args, m.scopes, nowSeconds())]
-    if entry <> invalid and entry.hasValue then return entry.value
-    return invalid
+    key = buildKey(name, definition, args, m.scopes, nowSeconds())
+    entry = m.cache[key]
+    if entry = invalid or not entry.hasValue then return invalid
+    if definition.pages <> invalid then return assemblePages(definition, key)
+    return entry.value
+end function
+
+'#endregion
+
+'*************************************************************************
+'#region Pages
+'*************************************************************************
+' A query with pages keeps each page as an ordinary entry, keyed by its own args (the first
+' page's args plus the cursor), so a page is deduplicated, kept fresh, persisted and compared
+' like any value. The first page's entry (the head) lists the keys of the pages loaded after
+' it, in order (chain); each of those names the head. query and nextPage resolve with every
+' page in the chain: { pages, hasNext }.
+
+' Loads the page after the last one loaded for these args and resolves with all of them.
+' Nothing loaded yet: the first page. No next page: the pages as they are, without a request.
+' A load already running for these args is shared.
+function _nextPage(name as string, args = {} as object) as object
+    definition = m.definitions[name]
+    if definition = invalid then return promises.reject({ message: `sgquery: no query named "${name}"` })
+    if definition.pages = invalid then return promises.reject({ message: `sgquery: "${name}" has no pages: define it with pages: { next, arg }` })
+    if type(args) <> "roAssociativeArray" then args = {}
+    now = nowSeconds()
+    headKey = buildKey(name, definition, args, m.scopes, now)
+    head = m.cache[headKey]
+    if head = invalid or not head.hasValue then return _query(name, args)
+    if head.nextPending <> invalid then return head.nextPending
+    cursor = nextCursor(definition, lastPage(head))
+    if cursor = invalid then return promises.resolve(assemblePages(definition, headKey))
+
+    nextArgs = {}
+    nextArgs.append(args)
+    nextArgs[definition.pages.arg] = cursor
+    pending = promises.create()
+    head.nextPending = pending
+    context = { definition: definition, headKey: headKey, headId: head.id, nextKey: buildKey(name, definition, nextArgs, m.scopes, now), pending: pending }
+    promises.chain(runQuery(definition, nextArgs, {}), context).then(function(value as dynamic, context as object) as dynamic
+        head = m.cache[context.headKey]
+        if head <> invalid and head.id = context.headId then
+            head.nextPending = invalid
+            linkPage(context.headKey, context.nextKey)
+            promises.resolve(assemblePages(context.definition, context.headKey), context.pending)
+        else
+            ' The first page went (dropped, or replaced by a different one) while this loaded:
+            ' the page stays cached on its own, and its callers get it
+            promises.resolve({ pages: [value], hasNext: cursorOf(context.definition, value) <> invalid }, context.pending)
+        end if
+        return invalid
+    end function).catch(function(error as dynamic, context as object) as dynamic
+        head = m.cache[context.headKey]
+        if head <> invalid and head.id = context.headId then head.nextPending = invalid
+        promises.reject(error, context.pending)
+        return invalid
+    end function).toPromise()
+    return pending
+end function
+
+' Every page loaded for a head, in order, and whether the last one points to another
+function assemblePages(definition as object, headKey as string) as object
+    head = m.cache[headKey]
+    if head = invalid or not head.hasValue then return { pages: [], hasNext: false }
+    pages = [head.value]
+    for each key in head.chain
+        pages.push(m.cache[key].value)
+    end for
+    return { pages: pages, hasNext: nextCursor(definition, lastPage(head)) <> invalid }
+end function
+
+' The last page in a head's chain, after dropping the chain from the first page that is no
+' longer in memory (evicted): the pages after it would not follow from what is left
+function lastPage(head as object) as object
+    for i = 0 to head.chain.count() - 1
+        entry = m.cache[head.chain[i]]
+        if entry = invalid or not entry.hasValue then
+            cutChain(head, i)
+            exit for
+        end if
+    end for
+    if head.chain.count() = 0 then return head
+    return m.cache[head.chain.peek()]
+end function
+
+' Drops the members of a head's chain from index on
+sub cutChain(head as object, index as integer)
+    while head.chain.count() > index
+        member = m.cache[head.chain.pop()]
+        if member <> invalid then member.head = ""
+    end while
+end sub
+
+sub linkPage(headKey as string, nextKey as string)
+    head = m.cache[headKey]
+    member = m.cache[nextKey]
+    if head = invalid or member = invalid or headKey = nextKey then return
+    for each key in head.chain
+        if key = nextKey then return
+    end for
+    head.chain.push(nextKey)
+    member.head = headKey
+end sub
+
+' A page that changed re-cuts the ones after it, which came from the old listing: the chain
+' ends at this page (a changed first page keeps none)
+sub resetPagesAfter(key as string, entry as object)
+    if isNonEmptyString(entry.head) then
+        head = m.cache[entry.head]
+        if head = invalid then return
+        for i = 0 to head.chain.count() - 1
+            if head.chain[i] = key then
+                cutChain(head, i + 1)
+                return
+            end if
+        end for
+    else
+        cutChain(entry, 0)
+    end if
+end sub
+
+' Takes an entry out of its chain, whichever end it is at
+sub unlinkPage(key as string, entry as object)
+    if isNonEmptyString(entry.head) then
+        head = m.cache[entry.head]
+        if head <> invalid then
+            for i = 0 to head.chain.count() - 1
+                if head.chain[i] = key then
+                    cutChain(head, i)
+                    exit for
+                end if
+            end for
+        end if
+        entry.head = ""
+    end if
+    cutChain(entry, 0)
+end sub
+
+' The keys of the pages after a head's, in order
+function chainOf(key as string) as object
+    entry = m.cache[key]
+    if entry = invalid then return []
+    keys = []
+    keys.append(entry.chain)
+    return keys
+end function
+
+' The cursor a page's value holds for the page after it, or invalid on the last page
+function nextCursor(definition as object, entry as dynamic) as dynamic
+    if entry = invalid or not entry.hasValue then return invalid
+    return cursorOf(definition, entry.value)
+end function
+
+function cursorOf(definition as object, value as dynamic) as dynamic
+    if definition.pages = invalid then return invalid
+    cursor = valueAtPath(value, definition.pages.next)
+    if cursor = invalid then return invalid
+    if (type(cursor) = "roString" or type(cursor) = "String") and cursor = "" then return invalid
+    if (type(cursor) = "roBoolean" or type(cursor) = "Boolean") and not cursor then return invalid
+    return cursor
+end function
+
+' Follows a dotted path through associative arrays and node fields
+function valueAtPath(value as dynamic, path as string) as dynamic
+    current = value
+    for each part in path.split(".")
+        if type(current) = "roAssociativeArray" or type(current) = "roSGNode" then
+            current = current[part]
+        else
+            return invalid
+        end if
+    end for
+    return current
 end function
 
 ' Starts (or restarts) a fetch for a key. Returns the pending promise.
@@ -372,7 +576,7 @@ function startFetch(definition as object, key as string, args as object, now as 
 
     if entry = invalid then
         m.nextEntryId++
-        entry = { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0 }
+        entry = { id: m.nextEntryId, name: definition.name, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid }
         insertEntry(key, entry)
     end if
 
@@ -591,6 +795,8 @@ sub settleValue(context as object, value as dynamic)
     ' Replacing a value with different content is a change; a first value is not
     ' (whoever fetched it receives it through the promise)
     replaced = entry.hasValue and (entry.hash = "" or asString(context.hash) = "" or entry.hash <> context.hash)
+    ' A page whose cursor to the next page is the same still heads the same listing
+    recut = replaced and definition.pages <> invalid and asString(nextCursor(definition, entry)) <> asString(cursorOf(definition, value))
     entry.value = value
     entry.hasValue = true
     entry.expired = false
@@ -607,7 +813,16 @@ sub settleValue(context as object, value as dynamic)
     entry.freshUntil = (ttl < 0) ? 2147483647 : entry.storedAt + ttl
     emit("resolve", definition.name, key, context.source, context.startedAt.totalMilliseconds())
     promises.resolve(value, context.pending)
-    if replaced then notifyChange(definition.name, key, context.source, value)
+    if replaced then
+        if definition.pages <> invalid then
+            ' Watchers of a query with pages hear about its first page's key, with every page
+            if recut then resetPagesAfter(key, entry)
+            headKey = isNonEmptyString(entry.head) ? entry.head : key
+            notifyChange(definition.name, headKey, context.source, assemblePages(definition, headKey))
+        else
+            notifyChange(definition.name, key, context.source, value)
+        end if
+    end if
 
     ' A stale disk value is served now and refreshed in the background
     if context.source = "disk" and now >= entry.freshUntil and definition.staleWhileRevalidate then
@@ -684,6 +899,8 @@ end function
 ' Resolves the request template against args/scopes for the transport.
 function buildRequestSpec(definition as object, args as object) as object
     request = definition.request
+    ' A page after the first (its args carry the cursor) may have a request of its own
+    if definition.pages <> invalid and definition.pages.request <> invalid and args[definition.pages.arg] <> invalid then request = definition.pages.request
     if type(request) <> "roAssociativeArray" then request = {}
     spec = {
         url: fillTemplate(isNonEmptyString(request.url) ? request.url : "", args, m.scopes)
@@ -791,7 +1008,12 @@ sub _invalidate(name = invalid as dynamic, args = invalid as dynamic)
 
     definition = m.definitions[name]
     if definition <> invalid then
-        removeEntry(buildKey(name, definition, args, m.scopes, nowSeconds()))
+        key = buildKey(name, definition, args, m.scopes, nowSeconds())
+        ' The pages loaded after this one go with it
+        for each memberKey in chainOf(key)
+            removeEntry(memberKey)
+        end for
+        removeEntry(key)
     end if
 end sub
 
@@ -831,6 +1053,11 @@ sub _expire(name as string, args = invalid as dynamic)
     ' Only a disk copy can outlive the entry; without one there is nothing to guard
     if definition.persist then m.expiries[key] = now
     expireEntry(key)
+    ' The pages loaded after this one are as old as it
+    for each memberKey in chainOf(key)
+        if definition.persist then m.expiries[memberKey] = now
+        expireEntry(memberKey)
+    end for
 end sub
 
 sub expireEntry(key as string)
@@ -996,6 +1223,7 @@ sub removeEntry(key as string)
     m.expiries.delete(key)
     entry = m.cache[key]
     if entry = invalid then return
+    unlinkPage(key, entry)
     m.cache.delete(key)
     for i = 0 to m.order.count() - 1
         if m.order[i] = key then

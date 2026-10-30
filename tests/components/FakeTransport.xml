@@ -9,6 +9,7 @@
         <field id="headers" type="assocarray" />
         <function name="makeRequest" />
         <function name="answer" />
+        <function name="answerBody" />
         <function name="answerNext" />
         <function name="fail" />
         <function name="requestAt" />

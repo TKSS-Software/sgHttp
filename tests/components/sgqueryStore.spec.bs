@@ -756,5 +756,181 @@ namespace tests
                 return invalid
             end function)
         end function
+        @describe("pages")
+
+        ' "list" pages by a cursor the body carries in next; later pages have their own request
+        function makePagedStore()
+            m.makeStore()
+            m.store.callFunc("_define", "list", { request: { url: "/list" }, ttl: 300, pages: { next: "next", arg: "cursor", request: { url: "/list?after={cursor}" } } })
+        end function
+
+        @async
+        @it("loads a page at a time and resolves with every page so far")
+        function _()
+            m.makePagedStore()
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.assertEqual(m.fake.callFunc("requestAt", 0).url, "/list")
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 1)
+                suite.assertEqual(result.pages[0].items[0], "a")
+                suite.assertTrue(result.hasNext)
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).url, "/list?after=c2")
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(result.pages[1].items[0], "b")
+                suite.assertFalse(result.hasNext)
+                ' On the last page nothing is loaded and nothing is sent
+                return suite.store.callFunc("_nextPage", "list", {})
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertEqual(result.pages.count(), 2)
+                ' peek and query answer with the pages too, from memory
+                suite.assertEqual(suite.store.callFunc("_peek", "list", {}).pages.count(), 2)
+                return suite.store.callFunc("_query", "list", {}, {})
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("loads the first page when nothing is loaded, and shares a next page already loading")
+        function _()
+            m.makePagedStore()
+            first = m.store.callFunc("_nextPage", "list", {})
+            m.assertEqual(m.fake.callFunc("requestAt", 0).url, "/list")
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 1)
+                one = suite.store.callFunc("_nextPage", "list", {})
+                two = suite.store.callFunc("_nextPage", "list", {})
+                suite.assertTrue(one.isSameNode(two))
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return one
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("starts the pages over when a refresh finds a different first page, and tells the watcher")
+        function _()
+            m.makePagedStore()
+            m.watchedOne = createObject("roSGNode", "Node")
+            m.watchedOne.addField("changed", "assocarray", true)
+            m.store.callFunc("_watch", "list", {}, m.watchedOne)
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertTrue(suite.heardNothing(suite.watchedOne))
+                ' A revalidation finds the listing re-cut: the kept pages answer now, the check runs behind
+                suite.store.callFunc("_query", "list", {}, { revalidate: true })
+                inFlight = suite.store.callFunc("_query", "list", {}, {})
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.fake.callFunc("answerBody", 2, { items: ["z"], next: "c9" })
+                return inFlight
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 1)
+                suite.assertEqual(result.pages[0].items[0], "z")
+                changed = suite.watchedOne.changed
+                suite.assertEqual(changed.value.pages.count(), 1)
+                suite.assertTrue(changed.value.hasNext)
+                ' The next page follows the new listing
+                suite.store.callFunc("_nextPage", "list", {})
+                suite.assertEqual(suite.fake.callFunc("requestAt", 3).url, "/list?after=c9")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("drops and expires the later pages with the first")
+        function _()
+            m.makePagedStore()
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(suite.store.callFunc("_getStats").entries, 2)
+                ' Expired by args: a plain query of the first page waits for the server again
+                suite.store.callFunc("_expire", "list", {})
+                waiting = suite.store.callFunc("_query", "list", {}, {})
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.fake.callFunc("answerBody", 2, { items: ["a"], next: "c2" })
+                return waiting
+            end function).then(function(result as object, suite as object) as dynamic
+                ' Unchanged first page: the pages after it are kept
+                suite.assertEqual(result.pages.count(), 2)
+                suite.store.callFunc("_invalidate", "list", {})
+                suite.assertEqual(suite.store.callFunc("_getStats").entries, 0)
+                suite.assertInvalid(suite.store.callFunc("_peek", "list", {}))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+        @async
+        @it("keeps the later pages when a changed first page still points to the same next page")
+        function _()
+            m.makePagedStore()
+            m.watchedOne = createObject("roSGNode", "Node")
+            m.watchedOne.addField("changed", "assocarray", true)
+            m.store.callFunc("_watch", "list", {}, m.watchedOne)
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.store.callFunc("_query", "list", {}, { revalidate: true })
+                inFlight = suite.store.callFunc("_query", "list", {}, {})
+                suite.fake.callFunc("answerBody", 2, { items: ["a2"], next: "c2" })
+                return inFlight
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(result.pages[0].items[0], "a2")
+                suite.assertEqual(result.pages[1].items[0], "b")
+                suite.assertEqual(suite.watchedOne.changed.value.pages.count(), 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
     end class
 end namespace

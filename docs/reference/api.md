@@ -8,7 +8,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch)
-- Queries: [`define`](#define), [`query`](#query), [`peek`](#peek), [`mutate`](#mutate)
+- Queries: [`define`](#define), [`query`](#query), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -72,7 +72,7 @@ sgquery.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser", 
 sgquery.query(name as string, args = {} as object, options = {} as object) as object
 ```
 
-Returns a promise that resolves with the query's value (the parser's result, or the decoded body). See [Caching and freshness](../guides/caching.md#what-a-query-does) for how it decides between memory, disk and network.
+Returns a promise that resolves with the query's value (the parser's result, or the decoded body), or with `{ pages, hasNext }` for a query defined with `pages` (see [`nextPage`](#nextpage)). See [Caching and freshness](../guides/caching.md#what-a-query-does) for how it decides between memory, disk and network.
 
 | Option | Meaning |
 |---|---|
@@ -80,6 +80,14 @@ Returns a promise that resolves with the query's value (the parser's result, or 
 | `force: true` | Skip the memory and disk copies and wait for a request. Shares a request already in flight. |
 
 Rejects with an [error](events-and-stats.md#errors) when the request or parse fails, or with `{ message }` when no query has that name. For a `cache: false` query, runs it like [`mutate`](#mutate), without the cached-query check.
+
+## nextPage
+
+```brightscript
+sgquery.nextPage(name as string, args = {} as object) as object
+```
+
+For a query defined with `pages`: loads the page after the last one loaded for these args and returns a promise for every page so far, `{ pages, hasNext }`, the shape `query` resolves with for such a query. With nothing loaded it loads the first page. On the last page (`hasNext` false) it resolves at once without a request. A load already running for these args is shared. Rejects for a query without `pages`. See [Pages](../guides/pagination.md).
 
 ## peek
 

@@ -84,6 +84,10 @@ end function
 '              parser task) when the body differs: the same parsed value renews the entry
 '              without a change notification. For responses with volatile fields the parser
 '              drops. Default "body".
+'   pages    - { next, arg, request } makes this a query with pages: next is the path in a page's value
+'              to the cursor of the page after it (empty or missing on the last page), arg the arg
+'              that cursor is passed as (default "next"), request the request for pages after the
+'              first (default: request). query and nextPage then resolve with { pages, hasNext }.
 ' Every cached query compares the response body's hash with the cached one: an unchanged
 ' payload renews the entry without parsing and without a change notification.
 sub define(name as string, definition as object)
@@ -117,6 +121,14 @@ function query(name as string, args = {} as object, options = {} as object) as o
     return getStore().callFunc("_query", name, args, options)
 end function
 
+' Loads the next page of a query defined with pages and resolves with every page loaded so far
+' for these args, { pages, hasNext }: the shape query resolves with for such a query. Nothing
+' loaded yet: loads the first page. On the last page (hasNext false): resolves without a
+' request. A load already running for these args is shared.
+function nextPage(name as string, args = {} as object) as object
+    return getStore().callFunc("_nextPage", name, args)
+end function
+
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
 ' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.
@@ -125,6 +137,7 @@ function mutate(name as string, args = {} as object) as object
 end function
 
 ' Returns the value cached in memory (fresh, stale or expired) synchronously, else invalid.
+' For a query with pages: { pages, hasNext }, every page loaded for these args.
 ' Never makes a request or reads the disk.
 function peek(name as string, args = {} as object) as dynamic
     return getStore().callFunc("_peek", name, args)
