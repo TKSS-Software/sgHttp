@@ -1,6 +1,6 @@
-# Plain requests
+# Requests
 
-Not every request is a query. A one-off call to an endpoint, a probe of the server, a request whose shape is only known at runtime: none of those need a definition, a cache key or a freshness policy. For those, `request` sends one request through a client and gives you the whole response. It's the same HTTP layer that queries use, with nothing stored.
+Everything sgQuery does starts as a request: a url, a method, maybe headers and a body, sent from a task thread and answered with a promise. `request` sends one on its own, with no definition, no cache key and no freshness policy. It's the layer every query is built on, and for a one-off call to an endpoint, a probe of the server, or a request whose shape is only known at runtime, it's all you need.
 
 ```brightscript
 promises.chain(sgquery.request({ url: "/heartbeat", method: "POST", body: { position: "{position}" } }, { position: 1230 }), m)
@@ -47,8 +47,8 @@ On a status outside `successCodes` or a network failure, the promise rejects wit
 
 A plain request is never cached, never de-duplicated, never persisted, and applies no `expires` or `invalidates`. Two identical calls send two requests. If something on the server changed as a result, say so yourself: `sgquery.expire("favorites")`.
 
-If you find yourself calling `request` with the same spec from several places, that's a query: `define` it and `fetch` it, or make it a [mutation](mutations.md) if it writes.
+If you find yourself calling `request` with the same spec from several places, that's a query: `define` it and `fetch` it, or make it a [mutation](mutations.md) if it writes. The next guide starts there.
 
 ## Next
 
-[Scopes and time buckets](scopes-and-buckets.md)
+[Queries and keys](queries.md)

@@ -4,14 +4,16 @@
 
 - [Overview](overview.md): what sgQuery is, the problem it solves, and a first look at the code
 - [Installation](installation.md): requirements, installing with ropm, and calling `initialize`
-- [Quick start](quick-start.md): a query, a parser and a screen that uses them, end to end
+- [Quick start](quick-start.md): from one request to a cached, parsed, persisted screen, one step at a time
 
 ## Guides and concepts
 
-- [Queries and keys](guides/queries.md): defining queries, filling urls from args, and how cache keys are made
+In order, each builds on the one before:
+
+- [Requests](guides/requests.md): the HTTP client at the base of sgQuery, with no definition and no cache
+- [Queries and keys](guides/queries.md): giving a request a name, filling urls from args, and how cache keys are made
 - [Caching and freshness](guides/caching.md): what happens on each fetch, `ttl`, stale-while-revalidate and eviction
 - [Mutations, expiry and invalidation](guides/mutations.md): writing data and telling the cache what it changed
-- [Plain requests](guides/requests.md): one-off requests with no definition and no cache, sgQuery as an HTTP client
 - [Keeping data fresh](guides/keeping-data-fresh.md): background refreshes, unchanged-payload detection and watchers
 - [Scopes and time buckets](guides/scopes-and-buckets.md): per-profile data and data that rolls over with the clock
 - [Persistence](guides/persistence.md): serving the last response from `cachefs:/` on a cold start

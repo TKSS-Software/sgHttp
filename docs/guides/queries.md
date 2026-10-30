@@ -1,6 +1,6 @@
 # Queries and keys
 
-A **query** is a named description of a request: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then fetch it by name with args.
+A **query** is a [request](requests.md) with a name: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then fetch it by name with args. Where `request` gives you the whole response and forgets it, `fetch` gives you the value and keeps it.
 
 ```brightscript
 sgquery.define("episodes", {

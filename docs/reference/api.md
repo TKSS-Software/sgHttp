@@ -4,10 +4,9 @@ Every function is in the `sgquery` namespace. Call them from render-thread compo
 
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
-- Setup: [`initialize`](#initialize), [`define`](#define), [`getStore`](#getstore), [`destroy`](#destroy)
-- Reading: [`fetch`](#fetch), [`peek`](#peek)
-- Writing: [`mutate`](#mutate)
-- Plain HTTP: [`request`](#request)
+- Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
+- Requests: [`request`](#request)
+- Queries: [`define`](#define), [`fetch`](#fetch), [`peek`](#peek), [`mutate`](#mutate)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -94,7 +93,7 @@ Runs a `cache: false` query and returns a promise for its parsed response. On su
 sgquery.request(spec as object, args = {} as object) as object
 ```
 
-Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error, with `{ message, code: 0 }` when the spec has no url, and without sending anything when the client doesn't exist. See [Plain requests](../guides/requests.md).
+Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error, with `{ message, code: 0 }` when the spec has no url, and without sending anything when the client doesn't exist. See [Requests](../guides/requests.md).
 
 ## expire
 

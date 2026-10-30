@@ -1,6 +1,6 @@
 # Overview
 
-sgQuery manages **server state** in Roku SceneGraph apps: the data your channel fetches from its APIs. You describe each endpoint once, then ask for it by name. sgQuery makes the request on a task thread, parses the response off the render thread, caches the result for every component to share, saves it to disk for the next launch, and refreshes it in the background when it goes out of date.
+sgQuery is an HTTP client for Roku SceneGraph apps with a query cache on top. At its base, it sends a request from a task thread and hands you the response as a promise. Give a request a name and it becomes a **query**: sgQuery caches the result for every component to share, parses it off the render thread, saves it to disk for the next launch, and refreshes it in the background when it goes out of date. Each of those is one more key on the definition, added when you need it.
 
 ## Motivation
 
@@ -23,9 +23,7 @@ Handling that well means solving the same set of problems in every channel:
 - **Per-user data.** Switching profile must never show the previous profile's data.
 - **Memory.** A Roku has little of it, so the cache needs a bound.
 
-sgQuery handles these for you. A typical screen asks for its data and draws it; the cache, threads, disk and refresh policy are configured once, when the query is defined.
-
-Underneath the cache is an ordinary HTTP client: a pooled `roUrlTransfer` task with retries, timeouts, shared headers and JSON decoding. It's there on its own too, as [`request`](guides/requests.md), for the calls that don't need a cache.
+sgQuery handles these for you, but only as far as you ask. A one-off call stays a plain request. A screen's data becomes a query, and the cache, threads, disk and refresh policy for it are configured once, when it's defined.
 
 ## Enough talk, show me some code
 
@@ -35,46 +33,49 @@ Set the library up once, in the main scene:
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 
 sub init()
-    sgquery.initialize({
-        baseUrl: "https://api.example.com"
-        parserTask: "AppParserTask"
-    })
-
-    sgquery.define("homePage", {
-        request: { url: "/home/{slug}" }
-        parser: "HomePageParser"
-        ttl: 300
-        persist: true
-    })
+    sgquery.initialize({ baseUrl: "https://api.example.com" })
 end sub
 ```
 
-Then fetch from any component that imports `sgquery.brs`:
+That's an HTTP client. From any component that imports `sgquery.brs`:
 
 ```brightscript
-sub showHome()
-    promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
-        m.rowList.content = page
-        return invalid
-    end function).catch(function(error as object, m as object) as dynamic
-        m.errorLabel.text = "Couldn't load the home page"
-        return invalid
-    end function)
-end sub
+promises.chain(sgquery.request({ url: "/home/main" }), m).then(function(response as object, m as object) as dynamic
+    m.titleLabel.text = response.body.rows[0].title
+    return invalid
+end function)
+```
+
+The request is sent from a pooled task thread, with retries and a timeout, and the JSON is decoded there. The promise resolves on the render thread with the whole response. Nothing is remembered.
+
+Now give the request a name:
+
+```brightscript
+sgquery.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
+```
+
+and fetch it instead:
+
+```brightscript
+promises.chain(sgquery.fetch("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
+    m.titleLabel.text = page.rows[0].title
+    return invalid
+end function)
 ```
 
 What happens on the first call:
 
 1. sgQuery builds the url `https://api.example.com/home/main` and checks the cache. It is empty.
-2. Since `persist` is on, it checks `cachefs:/` for a body saved by an earlier launch. On a first install there isn't one.
-3. The request goes out on the transport task. The JSON is decoded there, and the `HomePageParser` builds a ContentNode tree on the parser task.
-4. The tree is cached, the raw body is written to disk, and the promise resolves.
+2. The request goes out on the transport task, where the JSON is decoded.
+3. The body is cached under the query's name and args, and the promise resolves with it.
 
-Within the next five minutes, a fetch with the same args from any component resolves at once from memory. After that, it still resolves at once with the cached tree, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, the refresh doesn't parse anything and no watcher is notified.
+Within the next five minutes, a fetch with the same args from any component resolves at once from memory, and two components fetching at the same moment share one request. After five minutes, a fetch still resolves at once with the cached value, and sgQuery refreshes it in the background. If the server's answer is byte-for-byte the same, nothing changes and no one is told.
+
+From here, each need is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so the next launch draws the screen before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds them in that order.
 
 ## What next
 
 - Install it: [Installation](installation.md)
-- Build a screen with it: [Quick start](quick-start.md)
+- Build a screen with it, one step at a time: [Quick start](quick-start.md)
 - Learn how a fetch decides what to do: [Caching and freshness](guides/caching.md)
 - Look something up: [API reference](reference/api.md)
