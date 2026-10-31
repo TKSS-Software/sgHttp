@@ -1262,5 +1262,89 @@ namespace tests
                 return invalid
             end function)
         end function
+
+        @async
+        @it("loads the next page again after a load that failed")
+        function _()
+            m.makePagedStore()
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.fake.callFunc("fail", 1, 500)
+                return more
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 500)
+                ' Not stuck on the failed load: a new request goes out
+                again = suite.store.callFunc("_nextPage", "list", {})
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 2).url, "/list?after=c2")
+                suite.fake.callFunc("answerBody", 2, { items: ["b"], next: "" })
+                return again
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(result.pages[1].items[0], "b")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("prefetch")
+
+        @async
+        @it("starts a query that a later query joins, and does nothing while one is in flight or fresh")
+        function _()
+            m.makeStore()
+            m.assertTrue(m.store.callFunc("_prefetch", "items", { id: "1" }))
+            m.assertFalse(m.store.callFunc("_prefetch", "items", { id: "1" }))
+            m.assertFalse(m.store.callFunc("_prefetch", "nothing", {}))
+            m.assertFalse(m.store.callFunc("_prefetch", "items.save", { id: "1" }))
+            waiting = m.query("1")
+            m.assertEqual(m.fake.requestCount, 1)
+            m.fake.callFunc("answerBody", 0, { name: "one" })
+            promises.chain(waiting, m).then(function(value as object, suite as object) as dynamic
+                suite.assertEqual(value.name, "one")
+                suite.assertFalse(suite.store.callFunc("_prefetch", "items", { id: "1" }))
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("loads the first page of a query with pages, which a later query answers with")
+        function _()
+            m.makePagedStore()
+            m.assertTrue(m.store.callFunc("_prefetch", "list", {}))
+            m.assertEqual(m.fake.callFunc("requestAt", 0).url, "/list")
+            ' The query joins the prefetch's request, and answers with the pages
+            waiting = m.store.callFunc("_query", "list", {}, {})
+            m.assertEqual(m.fake.requestCount, 1)
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(waiting, m).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 1)
+                suite.assertEqual(result.pages[0].items[0], "a")
+                suite.assertTrue(result.hasNext)
+                return suite.store.callFunc("_query", "list", {}, {})
+            end function).then(function(result as object, suite as object) as dynamic
+                ' From memory, in the same shape
+                suite.assertEqual(result.pages.count(), 1)
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
     end class
 end namespace

@@ -346,24 +346,39 @@ function _query(name as string, args = {} as object, options = {} as object) as 
         return runUncached(definition, args)
     end if
 
-    raw = runQuery(definition, args, options)
-    if definition.pages = invalid then return raw
-    ' A query with pages resolves with every page loaded for these args, not the one page
-    context = { definition: definition, key: buildKey(name, definition, args, m.scopes, nowSeconds()), pending: promises.create() }
-    promises.chain(raw, context).then(function(value as dynamic, context as object) as dynamic
-        pages = assemblePages(context.definition, context.key)
-        ' The entry went while the request ran: its callers still get the page they asked for
-        if pages.pages.count() = 0 then pages = { pages: [value], hasNext: cursorOf(context.definition, value) <> invalid }
-        promises.resolve(pages, context.pending)
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        promises.reject(error, context.pending)
-        return invalid
-    end function).toPromise()
-    return context.pending
+    lookup = runQuery(definition, args, options)
+    if lookup.promise <> invalid then return lookup.promise
+    return promises.resolve(answerFor(definition, lookup.key, m.cache[lookup.key].value))
 end function
 
-' The cached path of _query: the promise resolves with the one entry's value
+' Starts a query without waiting for it, so a later query finds it in flight or in memory:
+' for data a screen will want, asked for before the screen opens. Nothing happens when
+' memory holds a fresh value or a request is already in flight. Returns whether a disk
+' read or a request started.
+function _prefetch(name as string, args = {} as object) as boolean
+    definition = m.definitions[name]
+    if definition = invalid then
+        print `[sgquery] prefetch: no query named "${name}"`
+        return false
+    end if
+    if not definition.cache then
+        print `[sgquery] prefetch: "${name}" is cache: false, nothing to keep`
+        return false
+    end if
+    if type(args) <> "roAssociativeArray" then args = {}
+    now = nowSeconds()
+    entry = m.cache[buildKey(name, definition, args, m.scopes, now)]
+    if entry <> invalid then
+        if entry.promise <> invalid then return false
+        if entry.hasValue and not entry.expired and now < entry.freshUntil then return false
+    end if
+    runQuery(definition, args, {})
+    return true
+end function
+
+' The cached path of _query: { key, promise }, where promise is the request that will answer
+' (in flight, or started now), or invalid when memory answers with the entry's value. A
+' memory answer makes no promise here, so a caller that shapes the value (pages) resolves once.
 function runQuery(definition as object, args as object, options as object) as object
     name = definition.name
     now = nowSeconds()
@@ -377,7 +392,7 @@ function runQuery(definition as object, args as object, options as object) as ob
         ' In flight: share the pending promise
         if entry.promise <> invalid then
             emit("dedupe", name, key, "memory", 0)
-            return entry.promise
+            return { key: key, promise: entry.promise }
         end if
 
         if entry.hasValue then
@@ -389,32 +404,32 @@ function runQuery(definition as object, args as object, options as object) as ob
                 m.stats.staleHits++
                 emit("stale", name, key, "memory", 0)
                 startFetch(definition, key, args, now, true)
-                return promises.resolve(entry.value)
+                return { key: key, promise: invalid }
             end if
             ' Known to be out of date (expire): wait for the server; the kept value answers if
             ' the request fails
             if entry.expired then
                 m.stats.misses++
-                return startFetch(definition, key, args, now, false, true)
+                return { key: key, promise: startFetch(definition, key, args, now, false, true) }
             end if
             if now < entry.freshUntil then
                 m.stats.hits++
                 emit("hit", name, key, "memory", 0)
-                return promises.resolve(entry.value)
+                return { key: key, promise: invalid }
             end if
 
             if definition.staleWhileRevalidate then
                 m.stats.staleHits++
                 emit("stale", name, key, "memory", 0)
                 startFetch(definition, key, args, now, true)
-                return promises.resolve(entry.value)
+                return { key: key, promise: invalid }
             end if
         end if
     end if
 
     m.stats.misses++
     ' force asks the server: a disk copy is not an answer to it
-    return startFetch(definition, key, args, now, false, false, force)
+    return { key: key, promise: startFetch(definition, key, args, now, false, false, force) }
 end function
 
 function _peek(name as string, args = {} as object) as dynamic
@@ -470,6 +485,7 @@ function _set(name as string, args = {} as object, value = invalid as dynamic) a
     m.sequence++
     entry.expiredSequence = m.sequence
     entry.promise = invalid
+    entry.fetch = invalid
     recut = definition.pages <> invalid and entry.hasValue and asString(nextCursor(definition, entry)) <> asString(cursorOf(definition, value))
     entry.value = value
     entry.hasValue = true
@@ -560,28 +576,43 @@ function _nextPage(name as string, args = {} as object) as object
     nextArgs = {}
     nextArgs.append(args)
     nextArgs[definition.pages.arg] = cursor
-    pending = promises.create()
-    head.nextPending = pending
-    context = { definition: definition, headKey: headKey, headId: head.id, nextKey: buildKey(name, definition, nextArgs, m.scopes, now), pending: pending }
-    promises.chain(runQuery(definition, nextArgs, {}), context).then(function(value as dynamic, context as object) as dynamic
-        head = m.cache[context.headKey]
-        if head <> invalid and head.id = context.headId then
-            head.nextPending = invalid
-            linkPage(context.headKey, context.nextKey)
-            promises.resolve(assemblePages(context.definition, context.headKey), context.pending)
-        else
-            ' The first page went (dropped, or replaced by a different one) while this loaded:
-            ' the page stays cached on its own, and its callers get it
-            promises.resolve({ pages: [value], hasNext: cursorOf(context.definition, value) <> invalid }, context.pending)
-        end if
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        head = m.cache[context.headKey]
-        if head <> invalid and head.id = context.headId then head.nextPending = invalid
-        promises.reject(error, context.pending)
-        return invalid
-    end function).toPromise()
-    return pending
+    lookup = runQuery(definition, nextArgs, {})
+    if lookup.promise = invalid then
+        linkPage(headKey, lookup.key)
+        return promises.resolve(assemblePages(definition, headKey))
+    end if
+    ' The fetch links the page to this head as it settles (see finishLink), and resolves with
+    ' every page (see answerFor). A fetch already in flight for the page takes the link too.
+    fetch = m.cache[lookup.key].fetch
+    if fetch <> invalid then fetch.link = { headKey: headKey, headId: head.id }
+    head.nextPending = lookup.promise
+    return lookup.promise
+end function
+
+' A nextPage fetch has settled: its head stops waiting, and on success the page joins the
+' head's chain, if the head is still the one it was loaded for. A head dropped or replaced
+' meanwhile leaves the page cached on its own, and its callers get it alone.
+sub finishLink(context as object, settled as boolean)
+    link = context.link
+    if link = invalid then return
+    context.link = invalid
+    head = m.cache[link.headKey]
+    if head = invalid or head.id <> link.headId then return
+    head.nextPending = invalid
+    if settled then linkPage(link.headKey, context.key)
+end sub
+
+' What a query answers with: the value, or for a query with pages every page loaded with the
+' first page this key belongs to (the key itself, or the head it is linked to). An entry that
+' went while its request ran still answers with the page it was asked for.
+function answerFor(definition as object, key as string, value as dynamic) as dynamic
+    if definition.pages = invalid then return value
+    headKey = key
+    entry = m.cache[key]
+    if entry <> invalid and isNonEmptyString(entry.head) then headKey = entry.head
+    pages = assemblePages(definition, headKey)
+    if pages.pages.count() = 0 then return { pages: [value], hasNext: cursorOf(definition, value) <> invalid }
+    return pages
 end function
 
 ' Every page loaded for a head, in order, and whether the last one points to another
@@ -709,7 +740,7 @@ end function
 ' setId: which local write (set) put the value there, 0 for none
 function newEntry(definition as object, now as integer, args as object) as object
     m.nextEntryId++
-    return { id: m.nextEntryId, name: definition.name, args: args, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid, setId: 0 }
+    return { id: m.nextEntryId, name: definition.name, args: args, scopes: definition.scopes, bucket: bucketOf(definition, now), hasValue: false, value: invalid, storedAt: 0, freshUntil: 0, hash: "", parsedHash: "", etag: "", lastModified: "", expired: false, expiredSequence: 0, chain: [], head: "", nextPending: invalid, fetch: invalid, setId: 0 }
 end function
 
 ' Starts (or restarts) a fetch for a key. Returns the pending promise.
@@ -731,7 +762,9 @@ function startFetch(definition as object, key as string, args as object, now as 
 
     ' pending travels with the request: the entry may be dropped or expired before it answers,
     ' and its callers are owed an answer either way
-    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan") }
+    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan"), link: invalid }
+    ' nextPage finds the fetch it joins through the entry, to hand it the head to link to
+    entry.fetch = context
 
     ' Disk first, when allowed and nothing is in memory yet. The read is asynchronous
     ' (task thread); a miss or a failure falls through to the network.
@@ -908,7 +941,10 @@ end function
 ' The request is answered: the entry stops sharing its promise (if it still does)
 sub releaseRequest(context as object)
     entry = m.cache[context.key]
-    if entry <> invalid and isNode(entry.promise) and entry.promise.isSameNode(context.pending) then entry.promise = invalid
+    if entry <> invalid and isNode(entry.promise) and entry.promise.isSameNode(context.pending) then
+        entry.promise = invalid
+        entry.fetch = invalid
+    end if
 end sub
 
 ' Runs the optional parser, then stores and resolves.
@@ -970,7 +1006,8 @@ sub settleValue(context as object, value as dynamic)
         ' Dropped or expired while in flight: the callers that asked get this answer, the
         ' cache keeps what it has
         emit("resolve", definition.name, key, context.source, context.startedAt.totalMilliseconds())
-        promises.resolve(value, context.pending)
+        finishLink(context, true)
+        promises.resolve(answerFor(definition, key, value), context.pending)
         return
     end if
 
@@ -1001,11 +1038,13 @@ sub settleValue(context as object, value as dynamic)
     end if
     entry.freshUntil = (ttl < 0) ? 2147483647 : entry.storedAt + ttl
     emit("resolve", definition.name, key, context.source, context.startedAt.totalMilliseconds())
-    promises.resolve(value, context.pending)
+    ' The listing is re-cut before anyone is answered with it
+    if recut then resetPagesAfter(key, entry)
+    finishLink(context, true)
+    promises.resolve(answerFor(definition, key, value), context.pending)
     if replaced then
         if definition.pages <> invalid then
             ' Watchers of a query with pages hear about its first page's key, with every page
-            if recut then resetPagesAfter(key, entry)
             headKey = isNonEmptyString(entry.head) ? entry.head : key
             notifyChange(definition.name, headKey, context.source, assemblePages(definition, headKey))
         else
@@ -1030,7 +1069,8 @@ sub settleUnchanged(context as object)
         ' From before a drop or expire: its callers get the value it matched, nothing is renewed
         keptValue = invalid
         if kept <> invalid then keptValue = kept.value
-        promises.resolve(keptValue, context.pending)
+        finishLink(context, true)
+        promises.resolve(answerFor(context.definition, key, keptValue), context.pending)
         return
     end if
     definition = context.definition
@@ -1044,7 +1084,8 @@ sub settleUnchanged(context as object)
     entry.freshUntil = (definition.ttl < 0) ? 2147483647 : entry.storedAt + definition.ttl
     m.stats.unchanged++
     emit("unchanged", definition.name, key, context.source, context.startedAt.totalMilliseconds())
-    promises.resolve(entry.value, context.pending)
+    finishLink(context, true)
+    promises.resolve(answerFor(definition, key, entry.value), context.pending)
 end sub
 
 sub settleError(context as object, error as dynamic)
@@ -1058,8 +1099,10 @@ sub settleError(context as object, error as dynamic)
     ' An expired value is still the best answer when the server cannot give a newer one
     kept = m.cache[key]
     if context.fallback = true and kept <> invalid and kept.hasValue then
-        promises.resolve(kept.value, context.pending)
+        finishLink(context, true)
+        promises.resolve(answerFor(context.definition, key, kept.value), context.pending)
     else
+        finishLink(context, false)
         promises.reject(error, context.pending)
     end if
 end sub
@@ -1257,6 +1300,7 @@ sub expireEntry(key as string)
     entry.freshUntil = 0
     entry.expiredSequence = m.sequence
     entry.promise = invalid
+    entry.fetch = invalid
 end sub
 
 ' Whether a disk copy stored at storedAt predates an expire() of its key, its query or a

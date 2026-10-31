@@ -39,6 +39,21 @@ sgquery.query("homePage", args, { force: true })
 - **`revalidate: true`** resolves with the cached value at once, fresh, stale or expired, and checks the server in the background. A different answer reaches [watchers](keeping-data-fresh.md#watching-a-query). Use it when a screen opens and you want its data now, plus a check. With nothing cached, it behaves like a normal fetch.
 - **`force: true`** skips the memory and disk copies and waits for a request. If the server's answer is unchanged, it resolves with the cached value. A request already in flight for the key is shared rather than duplicated.
 
+## Asking ahead
+
+`sgquery.prefetch(name, args)` starts a query without waiting for it, so the screen that wants the data later finds it in flight or already in memory:
+
+```brightscript
+sub init()
+    sgquery.initialize({ baseUrl: "https://api.example.com", parserTask: "AppParserTask" })
+    registerQueries()
+    sgquery.prefetch("menu")                         ' wanted by the first screen, after sign-in checks
+    sgquery.prefetch("homePage", { slug: "main" })
+end sub
+```
+
+It does nothing when memory holds a fresh value or a request is already in flight, and otherwise takes the steps above, disk first. It returns whether it started anything. Use it for data a screen is about to need: at launch, or when an item gets focus, before it is selected.
+
 ## Failures
 
 - When the request for an entry with no value fails, the entry is dropped and the promise rejects, so the next query tries again.

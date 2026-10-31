@@ -20,7 +20,7 @@ This is sgQuery. Everything here works with nothing defined.
 Naming a request makes it a query, and these guides apply. In order, each builds on the one before.
 
 - [Queries and keys](guides/queries.md): giving a request a name, filling urls from args, and how cache keys are made
-- [Caching and freshness](guides/caching.md): what happens on each query, `ttl`, stale-while-revalidate and eviction
+- [Caching and freshness](guides/caching.md): what happens on each query, `ttl`, stale-while-revalidate, prefetching and eviction
 - [Mutations, expiry and invalidation](guides/mutations.md): writing data, showing the change at once, and telling the cache what it changed
 - [Keeping data fresh](guides/keeping-data-fresh.md): background refreshes, unchanged-payload detection and watchers
 - [Pages](guides/pagination.md): loading a listing a page at a time, and keeping, expiring and watching it as one
@@ -35,7 +35,7 @@ Naming a request makes it a query, and these guides apply. In order, each builds
 
 ## API reference
 
-- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
+- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `prefetch`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
 - [Events, stats and errors](reference/events-and-stats.md): the shapes sgQuery reports
 

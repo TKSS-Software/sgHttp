@@ -315,6 +315,15 @@ function nextPage(name as string, args = {} as object) as object
     return getStore().callFunc("_nextPage", name, args)
 end function
 
+' Starts a query without waiting for its answer, so the query a screen makes later finds it in
+' flight or in memory: for data wanted soon, asked for before the screen that shows it opens
+' (at launch, or on focus before a select). Does nothing when memory holds a fresh value or a
+' request is already in flight; reads the disk first for a persist query, as query does. For
+' a query with pages, loads the first page. Returns whether a disk read or request started.
+function prefetch(name as string, args = {} as object) as boolean
+    return getStore().callFunc("_prefetch", name, args)
+end function
+
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
 ' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.
