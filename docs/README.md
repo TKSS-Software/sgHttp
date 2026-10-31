@@ -28,8 +28,9 @@ A **query** is a request defined with `define` and called with `query`, so that 
 - [Scopes and time buckets](guides/scopes-and-buckets.md): per-profile data and data that rolls over with the clock
 - [Persistence](guides/persistence.md): serving the last response from `cachefs:/` on a cold start
 - [Parsers](guides/parsers.md): turning responses into ContentNode trees on a task thread
+- [From an OpenAPI spec](guides/openapi.md): writing definitions from the operations in a spec
 
-## Either way
+## For fetch and queries alike
 
 - [Testing your app](guides/testing.md): driving sgHttp from specs with a fake transport
 - [Threads and memory](guides/threads-and-memory.md): what runs where, what is shared, and what the cache holds on to

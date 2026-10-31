@@ -87,7 +87,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 - Scopes for per-profile data, time buckets for schedules
 - Change watchers and stats
 
-**Either way**
+**For fetch and queries alike**
 
 - No framework needed: it works with any SceneGraph navigation, including [sgRouter](https://github.com/rokucommunity/sgRouter)
 - Written in [BrighterScript](https://github.com/rokucommunity/brighterscript), installed with [ropm](https://github.com/rokucommunity/ropm), built on [promises](https://github.com/rokucommunity/promises), its only dependency
