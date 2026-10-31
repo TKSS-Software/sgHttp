@@ -19,13 +19,13 @@ A value loaded from disk counts as fetched when it was first saved, not when it 
 
 `sgquery.query(name, args)` works out the key (see [Cache keys](queries.md#cache-keys)), then takes the first step that applies:
 
-1. **In flight.** A request for this key is already running. The query returns the same promise, so every caller shares one request.
-2. **Fresh in memory.** It resolves immediately with the cached value. No request.
-3. **Stale in memory.** With `staleWhileRevalidate` (the default), it resolves immediately with the cached value and starts a background refresh. Without it, the query waits for the server.
+1. **Fresh in memory.** It resolves immediately with the cached value. No request.
+2. **Stale in memory.** With `staleWhileRevalidate` (the default), it resolves immediately with the cached value and starts a background refresh, unless one is already running. Without it, the query waits for the server.
+3. **In flight.** A request for this key is already running and memory has nothing to answer with now. The query returns the same promise, so every caller shares one request.
 4. **On disk.** For a `persist: true` query with nothing in memory, the body saved on `cachefs:/` is read and parsed on task threads, then served. If it's stale, a background refresh starts. See [Persistence](persistence.md).
 5. **Otherwise.** The request goes out. The response is parsed, saved to disk if `persist` is set, cached, and the promise resolves.
 
-An [expired](mutations.md#expire) value skips step 2: a plain query waits for the server, and falls back to the kept value if that request fails.
+An [expired](mutations.md#expire) value skips steps 1 and 2: a plain query waits for the server, and falls back to the kept value if that request fails.
 
 ## Query options
 

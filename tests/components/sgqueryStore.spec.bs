@@ -115,9 +115,8 @@ namespace tests
             first = m.query("1")
             m.fake.callFunc("answer", 0, "a")
             promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
-                ' A background check starts (request 1), then the data changes
-                suite.query("1", { revalidate: true })
-                suite.oldCheck = suite.query("1")
+                ' A check of the server starts (request 1), then the data changes
+                suite.oldCheck = suite.query("1", { force: true })
                 suite.store.callFunc("_expire", "items", invalid)
                 fresh = suite.query("1")
                 suite.assertEqual(suite.fake.requestCount, 3)
@@ -215,6 +214,30 @@ namespace tests
             promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "a")
                 suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("answers a stale value from memory while its background refresh runs")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_expireAll")
+                ' The first query starts the refresh; the second does not wait for it
+                suite.query("1")
+                suite.assertEqual(suite.fake.requestCount, 2)
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.fake.requestCount, 2)
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
@@ -1135,7 +1158,8 @@ namespace tests
                 suite.assertTrue(suite.heardNothing(suite.watchedOne))
                 ' A revalidation finds the listing re-cut: the kept pages answer now, the check runs behind
                 suite.store.callFunc("_query", "list", {}, { revalidate: true })
-                inFlight = suite.store.callFunc("_query", "list", {}, {})
+                ' A plain query answers from memory while the check runs; force joins the check
+                inFlight = suite.store.callFunc("_query", "list", {}, { force: true })
                 suite.assertEqual(suite.fake.requestCount, 3)
                 suite.fake.callFunc("answerBody", 2, { items: ["z"], next: "c9" })
                 return inFlight
@@ -1246,7 +1270,8 @@ namespace tests
                 return more
             end function).then(function(result as object, suite as object) as dynamic
                 suite.store.callFunc("_query", "list", {}, { revalidate: true })
-                inFlight = suite.store.callFunc("_query", "list", {}, {})
+                ' A plain query answers from memory while the check runs; force joins the check
+                inFlight = suite.store.callFunc("_query", "list", {}, { force: true })
                 suite.fake.callFunc("answerBody", 2, { items: ["a2"], next: "c2" })
                 return inFlight
             end function).then(function(result as object, suite as object) as dynamic

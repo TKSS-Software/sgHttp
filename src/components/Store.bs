@@ -389,8 +389,10 @@ function runQuery(definition as object, args as object, options as object) as ob
     revalidate = options.revalidate = true
 
     if entry <> invalid and not force then
-        ' In flight: share the pending promise
-        if entry.promise <> invalid then
+        ' In flight: share the pending promise, unless memory can answer now: a value that is
+        ' fresh, or stale and served while it is checked, is not held behind its own refresh
+        servable = entry.hasValue and not entry.expired and (revalidate or now < entry.freshUntil or definition.staleWhileRevalidate)
+        if entry.promise <> invalid and not servable then
             emit("dedupe", name, key, "memory", 0)
             return { key: key, promise: entry.promise }
         end if
@@ -583,8 +585,8 @@ function _nextPage(name as string, args = {} as object) as object
     end if
     ' The fetch links the page to this head as it settles (see finishLink), and resolves with
     ' every page (see answerFor). A fetch already in flight for the page takes the link too.
-    fetch = m.cache[lookup.key].fetch
-    if fetch <> invalid then fetch.link = { headKey: headKey, headId: head.id }
+    running = m.cache[lookup.key].fetch
+    if running <> invalid then running.link = { headKey: headKey, headId: head.id }
     head.nextPending = lookup.promise
     return lookup.promise
 end function
