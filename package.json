@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "HTTP client for Roku SceneGraph apps, with an optional query cache: de-duplication, parsing, persistence and background refresh",
   "private": true,
+  "license": "MIT",
   "keywords": [
     "ropm",
     "roku",

@@ -87,3 +87,7 @@ sgQuery is a namespace of stateless functions plus one node, attached to the sce
 
 - Build the package and run its specs on a Roku: [Contributing](docs/contributing.md)
 - Report a bug or ask for a feature in the [issue tracker](https://github.com/TKSS-Software/sgQuery/issues)
+
+## License
+
+[MIT](LICENSE)
