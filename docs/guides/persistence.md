@@ -22,10 +22,10 @@ Writing and reading a file costs the render thread only that first line. A body 
 Files live at:
 
 ```
-cachefs:/sgquery/<namespace>/<query name>/<digest>.json
+cachefs:/sgquery/<namespace>/<query name>/<prefix>-<digest>.json
 ```
 
-The digest covers the cache `version`, the definition's request and parser, and the cache key. The namespace is described below.
+The prefix covers the cache `version` and the definition's request, parser and server; the digest covers the cache key. The namespace is described below.
 
 ## One folder per app
 
@@ -56,7 +56,7 @@ A body on disk is never served when:
 - it was stored under a different `request` or `parser` in the definition. Changing a query's url, query string, method, body or parser retires its old bodies automatically, so a body can't be parsed by a parser written for another shape;
 - it was fetched from a different server: another client, or another `baseUrl` (for relative urls; an absolute `request.url` ignores `baseUrl`, so its bodies are kept). A build pointed at QA never reads bodies stored against production, and the other way round.
 
-The version, request, parser and server are part of the file's digest, so a body stored under different ones is simply never looked up again. Those files stay on disk until `invalidate()` clears the cache or the OS reclaims the space.
+The version, request, parser and server are part of the file's name, so a body stored under different ones is never looked up again, and the [start-up sweep](#the-start-up-sweep) deletes it. Switching a build between QA and production therefore downloads each server's data again.
 
 With the app version in the [folder name](#one-folder-per-app) and the server in the digest, you rarely need `version`. It is there to drop every stored body at once without changing anything else, for example while developing a parser against a response whose shape changed:
 
@@ -71,6 +71,12 @@ sgquery.initialize({ version: "2" })
 - `invalidate()` deletes everything in this app's folder. Other apps' folders are never touched.
 - Changing a [scope](scopes-and-buckets.md#changing-a-scope) deletes the files of every query that lists it.
 
+### The start-up sweep
+
+Once the first disk read has answered, the store sweeps this app's folder. In the folder of each query defined by then, it deletes every file the query can't read now: stored under another cache `version`, request, parser or server, or for a query that no longer has `persist: true`. It goes by file name and opens no file.
+
+The folders of queries not defined by then are left alone, so a query defined later, by a screen, keeps its bodies. Define every persisted query before the first query, as `registerQueries()` does in the examples, and the sweep covers them all.
+
 ## Turning it off
 
 `initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`.
@@ -78,8 +84,9 @@ sgquery.initialize({ version: "2" })
 ## Things to know
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
-- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are deleted at start-up, once the first disk read has answered, as are the same app's other version folders. Clean-up never delays a cold start.
+- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are deleted at start-up, once the first disk read has answered, as are the same app's other version folders, before the [sweep](#the-start-up-sweep). Clean-up never delays a cold start.
 - `persist` has no effect on `cache: false` queries.
+- Files named before the prefix was added are swept like any other file the store can't read, so the first start with this version of sgQuery downloads everything once.
 
 ## Next
 

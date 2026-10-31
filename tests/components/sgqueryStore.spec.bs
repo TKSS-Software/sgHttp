@@ -258,13 +258,13 @@ namespace tests
         end function
 
         ' A persisting store as the app with this title and version would make it (its disk folder
-        ' is named by them), talking to baseUrl
-        function makeAppStore(title as string, version as string, baseUrl = "" as string)
+        ' is named by them), talking to baseUrl, with "items" read from url
+        function makeAppStore(title as string, version as string, baseUrl = "" as string, url = "/items/{id}" as string)
             m.dropStore()
             m.fake = createObject("roSGNode", "FakeTransport")
             m.store = createObject("roSGNode", "Store")
             m.store.callFunc("_initialize", { transport: m.fake, persistence: m.disk(), baseUrl: baseUrl, persist: true, maxEntries: 1, version: "spec", appInfo: { id: "dev", title: title, version: version } })
-            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300, persist: true })
+            m.store.callFunc("_define", "items", { request: { url: url }, ttl: 300, persist: true })
         end function
 
         ' Stores "a" for item 1 on disk, then "b" for item 2, which evicts item 1 from memory
@@ -385,7 +385,7 @@ namespace tests
         end function
 
         @async
-        @it("keeps bodies from another server apart (QA and production)")
+        @it("does not read bodies from another server (QA and production), and sweeps them out")
         function _()
             m.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
             m.store.callFunc("_invalidate", invalid, invalid)
@@ -397,12 +397,68 @@ namespace tests
             end function).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "production")
                 suite.assertEqual(suite.fake.requestCount, 1)
-                ' Pointed at QA again, its copy is still there
+                ' Pointed at QA again, its copy is gone: the sweep that followed production's
+                ' first read deleted it
                 suite.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
+                suite.fake.callFunc("answerNext", "qa")
                 return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
-                suite.assertEqual(value, "a")
-                suite.assertEqual(suite.fake.requestCount, 0)
+                suite.assertEqual(value, "qa")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("sweeps out bodies stored under a definition's earlier url")
+        function _()
+            m.makePersistingStore()
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                ' A build whose "items" has another url: its first read misses, then the sweep runs
+                suite.makeAppStore("spec app", "1.0.0", "", "/v2/items/{id}")
+                suite.fake.callFunc("answerNext", "v2")
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "v2")
+                ' Back on the first url, its bodies are gone
+                suite.makeAppStore("spec app", "1.0.0")
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("leaves the bodies of queries it does not know yet")
+        function _()
+            m.makePersistingStore()
+            m.store.callFunc("_define", "other", { request: { url: "/other/{id}" }, ttl: 300, persist: true })
+            m.fake.callFunc("answerNext", "kept")
+            promises.chain(m.store.callFunc("_query", "other", { id: "1" }), m).then(function(value as dynamic, suite as object) as dynamic
+                ' A store that has not defined "other" when its sweep runs
+                suite.makeAppStore("spec app", "1.0.0")
+                suite.fake.callFunc("answerNext", "a")
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' Once it defines "other", the body is read from disk
+                suite.store.callFunc("_define", "other", { request: { url: "/other/{id}" }, ttl: 300, persist: true })
+                return suite.store.callFunc("_query", "other", { id: "1" })
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "kept")
+                suite.assertEqual(suite.fake.requestCount, 1)
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

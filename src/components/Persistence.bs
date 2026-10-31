@@ -13,6 +13,8 @@ import "pkg:/source/keys.bs"
 '      { type: "clearQuery", dir, name, descendants }  dir/name, and dir/name.* when descendants
 '      { type: "clearSiblings", dir, prefix, keep }    every dir/<prefix>* folder except dir/keep
 '      { type: "clearLegacy", dir }                     files directly under dir, and folders holding files directly
+'      { type: "sweep", dir, keep }                      in each folder dir/<name> that keep lists, every entry whose
+'                                                        name starts with none of keep[name]'s prefixes
 
 sub init()
     m.port = createObject("roMessagePort")
@@ -85,8 +87,37 @@ sub runOp(op as object)
                 end if
             end for
         end if
+    else if opType = "sweep" then
+        ' Bodies the store can no longer read: stored under another cache version, request,
+        ' parser or server, or for a query that is no longer persisted. A folder keep does not
+        ' list belongs to a query the store has not defined (yet), and is left alone.
+        if isNonEmptyString(op.dir) and m.fileSystem.exists(op.dir) and type(op.keep) = "roAssociativeArray" then
+            for each folderName in m.fileSystem.getDirectoryListing(op.dir)
+                prefixes = op.keep[folderName]
+                folder = op.dir + "/" + folderName
+                if type(prefixes) = "roArray" and isDirectory(folder) then
+                    for each entryName in m.fileSystem.getDirectoryListing(folder)
+                        if not startsWithAny(entryName, prefixes) then
+                            path = folder + "/" + entryName
+                            if isDirectory(path) then
+                                removeDirectory(path)
+                            else
+                                deleteFile(path)
+                            end if
+                        end if
+                    end for
+                end if
+            end for
+        end if
     end if
 end sub
+
+function startsWithAny(text as string, prefixes as object) as boolean
+    for each prefix in prefixes
+        if text.left(prefix.len()) = prefix then return true
+    end for
+    return false
+end function
 
 ' Deletes the folders directly under dir whose name is match.exact or starts with match.prefix
 ' (when not empty), except match.exclude

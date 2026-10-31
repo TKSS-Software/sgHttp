@@ -1526,10 +1526,34 @@ end sub
 '*************************************************************************
 
 ' The file for a key: in its query's directory (so invalidate can find bodies that are not in
-' memory), named by the cache version, the query's request digest (a changed url or parser
-' retires the old bodies on its own) and the key
+' memory), named <prefix>-<digest of the key>.json. The prefix stands for the cache version and
+' the query's request digest, so a changed url or parser retires the old bodies on its own, and
+' the sweep can tell them by name.
 function persistPath(key as string) as string
-    return m.persistDir + "/" + persistDirName(key.split("|")[0]) + "/" + hashString(m.version + "|" + requestHashOf(key) + "|" + key) + ".json"
+    name = key.split("|")[0]
+    return m.persistDir + "/" + persistDirName(name) + "/" + filePrefix(name) + "-" + hashString(key) + ".json"
+end function
+
+' The start of the name of every file a query's bodies are stored in now
+function filePrefix(name as string) as string
+    definition = m.definitions[name]
+    requestHash = ""
+    if definition <> invalid then requestHash = asString(definition.requestHash)
+    return hashString(m.version + "|" + requestHash).left(8)
+end function
+
+' For the sweep: each defined query's directory, with the file name prefixes stored there now
+' (none for a query that is not persisted). Directories of queries not defined yet are not
+' listed, so the sweep leaves them alone.
+function sweepPlan() as object
+    keep = {}
+    for each name in m.definitions
+        definition = m.definitions[name]
+        dirName = persistDirName(name)
+        if keep[dirName] = invalid then keep[dirName] = []
+        if definition.persist then keep[dirName].push(filePrefix(name) + "-")
+    end for
+    return keep
 end function
 
 ' The folder name for this app's bodies: params.namespace when given, else the channel id,
@@ -1577,9 +1601,11 @@ function safeName(text as string, allowUnderscore as boolean) as string
 end function
 
 ' The start-up clean-ups, once the first disk read has answered: the OS may be slow to delete
-' many files, and a cold start should not wait on it
+' many files, and a cold start should not wait on it. The last one sweeps out the bodies no
+' definition defined by then can read.
 sub runCleanups()
     if type(m.cleanups) <> "roArray" or not isNode(m.persistence) then return
+    m.cleanups.push({ type: "sweep", dir: m.persistDir, keep: sweepPlan() })
     for each op in m.cleanups
         m.persistence.callFunc("execute", op)
     end for
