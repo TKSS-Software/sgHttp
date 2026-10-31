@@ -60,17 +60,15 @@ Each feature is one more key on the definition. Requests can be converted from `
 
 ## With sgRouter
 
-sgHttp can integrate well into projects using [sgRouter](https://github.com/rokucommunity/sgRouter). A screen on a `keepAlive` route is suspended rather than destroyed when the user leaves it, so it can keep a watcher open. The screen opens at once and fills in its list when the favourites arrive. When the user comes back, a `revalidate` query shows the cached favourites at once and checks the server in the background. If the server has something new, the watcher hands the screen the new value:
+sgHttp can integrate well into projects using [sgRouter](https://github.com/rokucommunity/sgRouter). A screen on a `keepAlive` route is suspended rather than destroyed when the user leaves it, so it can keep a watcher open. sgRouter waits for the promise `beforeViewOpen` returns, so the previous screen stays up until the favourites arrive, and when they're already cached the screen opens at once. When the user comes back, a `revalidate` query shows the cached favourites at once and checks the server in the background. If the server has something new, the watcher hands the screen the new value:
 
 ```brightscript
-function onViewOpen(params as object) as dynamic
+function beforeViewOpen(params as object) as dynamic
     m.watcher = sghttp.watch("favorites", "onFavoritesChanged")
-    m.pending = sghttp.query("favorites")   ' keep the query's own promise, for cancel
-    promises.chain(m.pending, m).then(function(favorites as object, m as object) as dynamic
+    return promises.chain(sghttp.query("favorites"), m).then(function(favorites as object, m as object) as dynamic
         m.rowList.content = favorites
-        return invalid
-    end function)
-    return promises.resolve(invalid)        ' open now; the list fills in when the data arrives
+        return invalid   ' not the data: sgRouter reads this value for outgoingRouteConfigOverrides
+    end function).toPromise()
 end function
 
 function onViewResume(params as object) as dynamic
@@ -83,13 +81,12 @@ sub onFavoritesChanged(event as object)
 end sub
 
 function beforeViewClose(params as object) as dynamic
-    sghttp.cancel(m.pending)
     sghttp.unwatch(m.watcher)
     return promises.resolve(invalid)
 end function
 ```
 
-`cancel` takes the promise `query` returned, not the chained one. For a query, it doesn't stop the request: the cache still keeps the answer, and another screen may be waiting for it. If nothing else is waiting, the request moves to low priority, so the requests the next screen needs go first. Once the favourites have loaded, `cancel` does nothing.
+If the request fails, the navigation fails; add a `.catch` to open the screen with an error state instead.
 
 If a detail screen adds a favourite with a mutation that lists `expires: ["favorites"]`, the catalog shows it when the user goes back. The detail screen doesn't need to tell the catalog anything.
 
