@@ -18,7 +18,9 @@ import "pkg:/source/keys.bs"
 '              answers its own callers but never writes to the entry
 '   bucket   - the time bucket the key was made in (bucket definitions), -1 otherwise
 
-const PERSIST_DIR = "cachefs:/sgquery"
+const PERSIST_DIR = "cachefs:/sghttp"
+' Where bodies were stored when the library was called sgQuery
+const OLD_PERSIST_DIR = "cachefs:/sgquery"
 ' A file is one line of JSON describing the body (its format, the cache version, request and
 ' key it belongs to, when it was stored, its hash and validators, and whether it is decoded as
 ' JSON), then the body's text exactly as the server sent it. Only the first line is decoded on
@@ -27,8 +29,8 @@ const ENVELOPE_FORMAT = 2
 
 ' The client made from initialize's top-level settings, used by definitions without a client
 const DEFAULT_CLIENT = "default"
-' Which build of sgquery this is: scripts/build.js writes the commit and build time over this
-' in dist, so the device log shows whether a sideload carries the latest sgquery
+' Which build of sghttp this is: scripts/build.js writes the commit and build time over this
+' in dist, so the device log shows whether a sideload carries the latest sghttp
 const BUILD_STAMP = "unstamped (compiled from source)"
 
 sub init()
@@ -58,7 +60,7 @@ sub init()
 end sub
 
 function _initialize(params = {} as object) as object
-    print `[sgquery] build ${BUILD_STAMP}`
+    print `[sghttp] build ${BUILD_STAMP}`
     ' The top-level settings are the default client, as an app with one server has always
     ' passed them; params.clients adds a client per other server
     m.clients = {}
@@ -67,7 +69,7 @@ function _initialize(params = {} as object) as object
         for each clientName in params.clients
             settings = params.clients[clientName]
             if clientName = DEFAULT_CLIENT then
-                print `[sgquery] a client cannot be named "${DEFAULT_CLIENT}"; the top-level settings are that client`
+                print `[sghttp] a client cannot be named "${DEFAULT_CLIENT}"; the top-level settings are that client`
             else if type(settings) = "roAssociativeArray" then
                 addClient(clientName, settings)
             end if
@@ -109,13 +111,18 @@ function _initialize(params = {} as object) as object
         m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
         m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
         ' Clean-ups wait until the first disk read has answered (see runCleanups), so a cold
-        ' start never queues behind them. Bodies from before the per-app folders sat directly
-        ' under PERSIST_DIR and are never read again; and a new version of the app starts with
-        ' an empty disk cache, so its earlier versions' folders go (only for the derived
-        ' namespace; a chosen one is left to the app).
-        m.cleanups = [{ type: "clearLegacy", dir: PERSIST_DIR }]
-        if not isNonEmptyString(params.namespace) then
-            m.cleanups.push({ type: "clearSiblings", dir: PERSIST_DIR, prefix: m.appPrefix, keep: m.persistDir.mid(PERSIST_DIR.len() + 1) })
+        ' start never queues behind them. Bodies stored while the library was called sgQuery are
+        ' never read again: this app's folders under OLD_PERSIST_DIR go, and the files of the
+        ' layout before the per-app folders, which sat directly under it. A new version of the
+        ' app starts with an empty disk cache, so its earlier versions' folders go too (only for
+        ' the derived namespace; a chosen one is left to the app).
+        namespace = m.persistDir.mid(PERSIST_DIR.len() + 1)
+        m.cleanups = [{ type: "clearLegacy", dir: OLD_PERSIST_DIR }]
+        if isNonEmptyString(params.namespace) then
+            m.cleanups.push({ type: "clearQuery", dir: OLD_PERSIST_DIR, name: namespace, descendants: false })
+        else
+            m.cleanups.push({ type: "clearSiblings", dir: OLD_PERSIST_DIR, prefix: m.appPrefix, keep: "" })
+            m.cleanups.push({ type: "clearSiblings", dir: PERSIST_DIR, prefix: m.appPrefix, keep: namespace })
         end if
     end if
 
@@ -166,7 +173,7 @@ function clientOf(definition as object) as dynamic
 end function
 
 function noClientError(definition as object) as object
-    return { message: `sgquery: query "${definition.name}" names client "${definition.client}", which initialize did not set up`, code: 0 }
+    return { message: `sghttp: query "${definition.name}" names client "${definition.client}", which initialize did not set up`, code: 0 }
 end function
 
 '#endregion
@@ -177,7 +184,7 @@ end function
 
 sub _define(name as string, definition as object)
     if m.definitions[name] <> invalid then
-        print `[sgquery] "${name}" is defined again: the new definition replaces the first`
+        print `[sghttp] "${name}" is defined again: the new definition replaces the first`
     end if
     normalized = normalize(name, definition)
     clientName = normalized.client
@@ -199,7 +206,7 @@ end sub
 function normalize(name as string, definition as object) as object
     clientName = isNonEmptyString(definition.client) ? definition.client : DEFAULT_CLIENT
     if m.clients[clientName] = invalid then
-        print `[sgquery] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
+        print `[sghttp] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
     end if
     normalized = {
         name: name
@@ -242,7 +249,7 @@ function normalizePages(pages as dynamic) as dynamic
     }
 end function
 
-' One request with no definition and no cache: sgquery as a plain HTTP client. The spec is a
+' One request with no definition and no cache: sghttp as a plain HTTP client. The spec is a
 ' url, or a define request (url, method, headers, body, query, parseJson, retries) plus the
 ' definition keys a request can use (client, auth, proxy, timeout, successCodes, parser) and a
 ' name for events. Resolves with the whole response, since a caller here wants the status and
@@ -251,12 +258,12 @@ function _fetch(spec as dynamic, args = {} as object) as object
     if type(spec) = "roString" or type(spec) = "String" then
         ' A query name passed here by mistake would quietly become a request to baseUrl/<name>
         if spec.left(1) <> "/" and lcase(spec.left(4)) <> "http" then
-            return promises.reject({ message: `sgquery: fetch takes a url; to run the query "${spec}", call query()`, code: 0 })
+            return promises.reject({ message: `sghttp: fetch takes a url; to run the query "${spec}", call query()`, code: 0 })
         end if
         spec = { url: spec }
     end if
     if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
-        return promises.reject({ message: "sgquery: fetch needs a url", code: 0 })
+        return promises.reject({ message: "sghttp: fetch needs a url", code: 0 })
     end if
     if type(args) <> "roAssociativeArray" then args = {}
     name = isNonEmptyString(spec.name) ? spec.name : "fetch"
@@ -287,7 +294,7 @@ sub _setHeaders(headers as object, clientName = "" as string)
     if clientName = "" then clientName = DEFAULT_CLIENT
     client = m.clients[clientName]
     if client = invalid then
-        print `[sgquery] setHeaders: no client "${clientName}"`
+        print `[sghttp] setHeaders: no client "${clientName}"`
         return
     end if
     if type(headers) = "roAssociativeArray" then
@@ -332,13 +339,13 @@ end function
 function _query(name as string, args = {} as object, options = {} as object) as object
     definition = m.definitions[name]
     if definition = invalid then
-        return promises.reject({ message: `sgquery: no query named "${name}"` })
+        return promises.reject({ message: `sghttp: no query named "${name}"` })
     end if
     if type(args) <> "roAssociativeArray" then args = {}
     if type(options) <> "roAssociativeArray" then options = {}
 
     if options.mutation = true and definition.cache then
-        return promises.reject({ message: `sgquery: "${name}" is a cached query; mutate() runs cache: false definitions` })
+        return promises.reject({ message: `sghttp: "${name}" is a cached query; mutate() runs cache: false definitions` })
     end if
     ' Mutations and per-call resources: straight through the transport, never stored
     if not definition.cache then
@@ -358,11 +365,11 @@ end function
 function _precache(name as string, args = {} as object) as boolean
     definition = m.definitions[name]
     if definition = invalid then
-        print `[sgquery] precache: no query named "${name}"`
+        print `[sghttp] precache: no query named "${name}"`
         return false
     end if
     if not definition.cache then
-        print `[sgquery] precache: "${name}" is cache: false, nothing to keep`
+        print `[sghttp] precache: "${name}" is cache: false, nothing to keep`
         return false
     end if
     if type(args) <> "roAssociativeArray" then args = {}
@@ -458,11 +465,11 @@ end function
 function _set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
     definition = m.definitions[name]
     if definition = invalid then
-        print `[sgquery] set: no query named "${name}"`
+        print `[sghttp] set: no query named "${name}"`
         return invalid
     end if
     if not definition.cache then
-        print `[sgquery] set: "${name}" is cache: false, nothing to set`
+        print `[sghttp] set: "${name}" is cache: false, nothing to set`
         return invalid
     end if
     if type(args) <> "roAssociativeArray" then args = {}
@@ -564,8 +571,8 @@ end sub
 ' A load already running for these args is shared.
 function _nextPage(name as string, args = {} as object) as object
     definition = m.definitions[name]
-    if definition = invalid then return promises.reject({ message: `sgquery: no query named "${name}"` })
-    if definition.pages = invalid then return promises.reject({ message: `sgquery: "${name}" has no pages: define it with pages: { next, arg }` })
+    if definition = invalid then return promises.reject({ message: `sghttp: no query named "${name}"` })
+    if definition.pages = invalid then return promises.reject({ message: `sghttp: "${name}" has no pages: define it with pages: { next, arg }` })
     if type(args) <> "roAssociativeArray" then args = {}
     now = nowSeconds()
     headKey = buildKey(name, definition, args, m.scopes, now)
@@ -848,7 +855,7 @@ sub startNetwork(context as object)
             if hasValue then
                 settleUnchanged(context)
             else
-                settleError(context, { message: `sgquery: "${context.definition.name}" got 304 with nothing cached`, code: 304 })
+                settleError(context, { message: `sghttp: "${context.definition.name}" got 304 with nothing cached`, code: 304 })
             end if
             return invalid
         end if
@@ -894,7 +901,7 @@ function runUncached(definition as object, args as object, raw = false as boolea
         context.response = response
         if isNonEmptyString(definition.parser) then
             if m.parsers.count() = 0 then
-                return promises.reject({ message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
+                return promises.reject({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             end if
             return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode })
         end if
@@ -954,7 +961,7 @@ sub runParseStage(context as object)
     definition = context.definition
     if isNonEmptyString(definition.parser) then
         if m.parsers.count() = 0 then
-            settleError(context, { message: `sgquery: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
+            settleError(context, { message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             return
         end if
         hashResult = definition.compare = "parsed"
@@ -1113,7 +1120,7 @@ end sub
 ' watcher of this query whose args key to it now (or that watches every entry)
 sub notifyChange(name as string, key as string, source as string, value as dynamic)
     m.stats.changes++
-    if m.debug then print `[sgquery] change ${name} via ${source} ${key}`
+    if m.debug then print `[sghttp] change ${name} via ${source} ${key}`
     m.top.changed = { name: name, key: key, source: source }
     watchers = m.watchers[name]
     if watchers = invalid then return
@@ -1154,7 +1161,7 @@ function buildRequestSpec(definition as object, args as object) as object
     ' An unfilled path placeholder still reaches some other route on the server, with a
     ' body that parses as nothing; say so instead of failing quietly.
     if createObject("roRegex", "\{[A-Za-z0-9_]+\}", "").isMatch(spec.url) then
-        print `[sgquery] "${definition.name}" url has an unfilled placeholder: ${spec.url}`
+        print `[sghttp] "${definition.name}" url has an unfilled placeholder: ${spec.url}`
     end if
     if type(request.headers) = "roAssociativeArray" then
         for each headerName in request.headers
@@ -1719,7 +1726,7 @@ sub emit(eventType as string, name as string, key as string, source as string, m
         if client <> invalid then client.errors++
     end if
     m.top.lastEvent = event
-    if m.debug then print `[sgquery] ${eventType} ${name} via ${source} (${ms}ms)${eventType = "error" ? " code " + asString(event.code) : ""} ${key}`
+    if m.debug then print `[sghttp] ${eventType} ${name} via ${source} (${ms}ms)${eventType = "error" ? " code " + asString(event.code) : ""} ${key}`
 end sub
 
 ' Error events carry the HTTP status (0 for network or parse failures) and whether the

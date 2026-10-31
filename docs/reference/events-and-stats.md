@@ -66,7 +66,7 @@ A rejected `fetch`, `query` or `mutate` promise carries one of these:
 **A parse failure:**
 
 ```brightscript
-{ message: "sgquery parser \"ShowParser\" threw: ...", error: <the exception> }
+{ message: "sghttp parser \"ShowParser\" threw: ...", error: <the exception> }
 ```
 
 **A setup problem**: an unknown parser, a parser with no `parserTask`, a client that doesn't exist, an undefined query, or `mutate` on a cached query. These carry a `message`, and `code: 0` where a code applies.

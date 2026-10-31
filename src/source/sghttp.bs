@@ -2,10 +2,10 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "keys.bs"
 
 '************************
-'*** sgquery public API: an HTTP client (initialize, fetch, setHeaders) and, only if the app
+'*** sghttp public API: an HTTP client (initialize, fetch, setHeaders) and, only if the app
 '*** defines queries, a cache on top of it (define, query, mutate and the rest).
 '*** Import this file in any component (not main.brs). After ropm install the
-'*** functions are available as sgquery.initialize(), sgquery.fetch(), etc.
+'*** functions are available as sghttp.initialize(), sghttp.fetch(), etc.
 '*** All state lives in a single Store node attached to the scene, so every
 '*** component shares one cache (the same shape as sgRouter's router node,
 '*** though sgRouter is not required).
@@ -208,7 +208,7 @@ end interface
 '   version     - cache version string; bump to stop every body on disk from being read. Rarely needed:
 '                 the app version (namespace), the server (baseUrl) and the definition already keep
 '                 bodies apart. Default "1".
-'   namespace   - this app's folder under cachefs:/sgquery/. Default: <channel id>_<title>-<hash>_<app version>
+'   namespace   - this app's folder under cachefs:/sghttp/. Default: <channel id>_<title>-<hash>_<app version>
 '                 from roAppInfo, so sideloaded apps (all "dev") never share bodies, and each release
 '                 starts empty (the same app's other versions' folders are deleted). Optional.
 '   maxEntries  - in-memory entry cap, least recently used evicted first (the disk copy stays). Default 100.
@@ -219,23 +219,23 @@ end interface
 '                 shared headers, inheriting nothing from the default client. A definition picks
 '                 one with client: "<name>". Optional.
 '   debug       - true prints every event and change to the console with its cache key, as
-'                 "[sgquery] <type> <name> via <source> (<ms>ms) <key>". Default false.
+'                 "[sghttp] <type> <name> via <source> (<ms>ms) <key>". Default false.
 '   store       - an existing Store node (tests). Optional.
 '   persistence - an existing Persistence node to run file operations on (tests). Optional.
 function initialize(params = {} as InitializeParams) as object
     scene = m.top.getScene()
-    existing = scene.__sgquery
+    existing = scene.__sghttp
     if isNode(existing) then return existing
     store = params.store
     if not isNode(store) then store = createObject("roSGNode", "Store")
-    scene.addFields({ __sgquery: store })
+    scene.addFields({ __sghttp: store })
     store.callFunc("_initialize", params)
     return store
 end function
 
 ' Returns the Store node, or invalid if initialize() has not run.
 function getStore() as object
-    return m.top.getScene().__sgquery
+    return m.top.getScene().__sghttp
 end function
 
 ' Registers a query definition.
@@ -280,7 +280,7 @@ sub define(name as string, definition as Definition)
     getStore().callFunc("_define", name, definition)
 end sub
 
-' Sends one request with no definition and never caches it: sgquery as a plain HTTP client.
+' Sends one request with no definition and never caches it: sghttp as a plain HTTP client.
 ' The request goes through a client (the default one, or spec.client), so it gets the baseUrl,
 ' shared headers, proxy, retries and timeout set up by initialize. Resolves with the whole
 ' response { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when
@@ -467,6 +467,6 @@ sub destroy()
     store = getStore()
     if isNode(store) then
         store.callFunc("_destroy")
-        m.top.getScene().removeField("__sgquery")
+        m.top.getScene().removeField("__sghttp")
     end if
 end sub

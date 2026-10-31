@@ -1,14 +1,14 @@
-# sgQuery documentation
+# sgHttp documentation
 
 ## Getting started
 
-- [Overview](overview.md): what sgQuery does, and what it does only if you ask
+- [Overview](overview.md): what sgHttp does, and what it does only if you ask
 - [Installation](installation.md): requirements, installing with ropm, and calling `initialize`
 - [Quick start](quick-start.md): the HTTP client in five minutes, then the cache if you want it
 
 ## The HTTP client
 
-This is sgQuery. Everything here works with nothing defined.
+This is sgHttp. Everything here works with nothing defined.
 
 - [Requests](guides/requests.md): urls, methods, bodies, headers, auth, failures and the response
 - [More than one server](guides/multiple-servers.md): clients, their headers and their transports
@@ -30,14 +30,14 @@ Naming a request makes it a query, and these guides apply. In order, each builds
 
 ## Either way
 
-- [Testing your app](guides/testing.md): driving sgQuery from specs with a fake transport
+- [Testing your app](guides/testing.md): driving sgHttp from specs with a fake transport
 - [Threads and memory](guides/threads-and-memory.md): what runs where, what is shared, and what the cache holds on to
 
 ## API reference
 
 - [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
-- [Events, stats and errors](reference/events-and-stats.md): the shapes sgQuery reports
+- [Events, stats and errors](reference/events-and-stats.md): the shapes sgHttp reports
 
 ## Project
 

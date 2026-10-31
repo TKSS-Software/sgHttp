@@ -9,7 +9,7 @@ The top-level settings of `initialize` (the [transport settings](transport.md#se
 ## Adding clients
 
 ```brightscript
-sgquery.initialize({
+sghttp.initialize({
     baseUrl: "https://api.example.com"            ' the default client
     headers: { "X-Platform": "roku" }
     clients: {
@@ -30,19 +30,19 @@ A client can't be named `"default"`; the top-level settings are that client.
 ## Pointing queries at a client
 
 ```brightscript
-sgquery.define("homePage", { request: { url: "/home/{slug}" } })                                  ' default client
-sgquery.define("partner.homePage", { client: "partner", request: { url: "/home/{slug}" } })
+sghttp.define("homePage", { request: { url: "/home/{slug}" } })                                  ' default client
+sghttp.define("partner.homePage", { client: "partner", request: { url: "/home/{slug}" } })
 ```
 
 Query names are shared by every client, so prefix another server's queries with its name. Each call then says which server it reaches, and `invalidate("partner")` or `expire("partner")` covers that whole server.
 
-Defining a query that names a client `initialize` didn't set up prints a warning. Its queries reject with `sgquery: query "..." names client "...", which initialize did not set up`, without sending anything.
+Defining a query that names a client `initialize` didn't set up prints a warning. Its queries reject with `sghttp: query "..." names client "...", which initialize did not set up`, without sending anything.
 
 ## Headers per client
 
 ```brightscript
-sgquery.setHeaders({ Authorization: "Bearer " + token })                  ' the default client
-sgquery.setHeaders({ Authorization: "Bearer " + partnerToken }, "partner")
+sghttp.setHeaders({ Authorization: "Bearer " + token })                  ' the default client
+sghttp.setHeaders({ Authorization: "Bearer " + partnerToken }, "partner")
 ```
 
 Shared headers, `auth: false` and `baseHeaders` work per client as described in [Auth](requests.md#auth-headers-on-every-request).

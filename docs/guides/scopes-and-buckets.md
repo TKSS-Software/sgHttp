@@ -5,13 +5,13 @@
 A **scope** is a named value that some queries depend on but that callers shouldn't have to pass every time: the active profile, the signed-in account, a region. Set it once; every query that lists it gets a separate cache entry per value, and can use it in its request.
 
 ```brightscript
-sgquery.define("continueWatching", {
+sghttp.define("continueWatching", {
     request: { url: "/continue-watching", query: { profile_id: "{profile}" } }
     scopes: ["profile"]
 })
 
-sgquery.setScope("profile", "p-123")
-sgquery.query("continueWatching")   ' GET /continue-watching?profile_id=p-123
+sghttp.setScope("profile", "p-123")
+sghttp.query("continueWatching")   ' GET /continue-watching?profile_id=p-123
 ```
 
 ### Changing a scope
@@ -20,7 +20,7 @@ When a scope changes from one value to another, every entry of every query that 
 
 ```brightscript
 sub onProfileSelected(profileId as string)
-    sgquery.setScope("profile", profileId)
+    sghttp.setScope("profile", profileId)
 end sub
 ```
 
@@ -28,7 +28,7 @@ end sub
 - Setting it to the value it already has drops nothing.
 - `setScope(name, value, { keep: true })` changes the value without dropping anything. Entries for the old value stay cached and are used again if you switch back.
 - Setting a scope to `invalid` clears it. A query parameter filled only by that scope is then dropped from the url, which suits values that only some users send.
-- `sgquery.invalidateScope(name)` drops a scope's entries without changing its value.
+- `sghttp.invalidateScope(name)` drops a scope's entries without changing its value.
 
 Use strings for scope values. The comparison between the old and new value expects the same type.
 
@@ -39,8 +39,8 @@ Placeholders are filled from args first, then scopes, so any `{name}` in the url
 Scopes can also hold app-wide constants that requests need, such as a brand or platform:
 
 ```brightscript
-sgquery.setScope("platform", "roku")
-sgquery.define("homePage", { request: { url: "/home/{slug}", query: { platform: "{platform}" } } })
+sghttp.setScope("platform", "roku")
+sghttp.define("homePage", { request: { url: "/home/{slug}", query: { platform: "{platform}" } } })
 ```
 
 ## Time buckets
@@ -48,7 +48,7 @@ sgquery.define("homePage", { request: { url: "/home/{slug}", query: { platform: 
 Some data is only valid for a window of time: "on now" in a guide, a schedule for the current hour. Setting `bucket` (seconds) adds `floor(now / bucket)` to the cache key, so the key changes when the window rolls over:
 
 ```brightscript
-sgquery.define("guide.onNow", {
+sghttp.define("guide.onNow", {
     request: { url: "/guide/on-now" }
     ttl: 60
     bucket: 1800   ' a new key every 30 minutes

@@ -36,8 +36,8 @@ Per query, `timeout` and `request.retries` override the client's values, and `su
 Any node can be the transport if it has a `makeRequest` function on its interface that takes a request spec and returns a [promise](https://github.com/rokucommunity/promises) node:
 
 ```brightscript
-sgquery.initialize({ transport: myTransport })                      ' the default client
-sgquery.initialize({ clients: { partner: { transport: partnerTransport } } })
+sghttp.initialize({ transport: myTransport })                      ' the default client
+sghttp.initialize({ clients: { partner: { transport: partnerTransport } } })
 ```
 
 The store calls `makeRequest(spec)` on the render thread. The spec is:

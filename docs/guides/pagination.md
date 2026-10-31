@@ -1,9 +1,9 @@
 # Pages
 
-Rails, search results and "view more" grids come from the server a page at a time. A query defined with `pages` loads them one by one, keeps every page it has loaded, and hands you all of them together, so a screen can append the new page and sgQuery can treat the whole listing as one thing to cache, expire and watch.
+Rails, search results and "view more" grids come from the server a page at a time. A query defined with `pages` loads them one by one, keeps every page it has loaded, and hands you all of them together, so a screen can append the new page and sgHttp can treat the whole listing as one thing to cache, expire and watch.
 
 ```brightscript
-sgquery.define("titles", {
+sghttp.define("titles", {
     request: { url: "/titles", query: { genre: "{genre}" } }
     parser: "TitlesParser"
     pages: { next: "nextUrl", arg: "url", request: { url: "{url}" } }
@@ -14,7 +14,7 @@ With a parser that returns `{ items: [...], nextUrl: "..." }` for each page:
 
 ```brightscript
 ' Opening the screen: every page loaded so far (just the first, the first time)
-promises.chain(sgquery.query("titles", { genre: "drama" }), m).then(function(result as object, m as object) as dynamic
+promises.chain(sghttp.query("titles", { genre: "drama" }), m).then(function(result as object, m as object) as dynamic
     m.items = []
     for each page in result.pages
         m.items.append(page.items)
@@ -25,7 +25,7 @@ promises.chain(sgquery.query("titles", { genre: "drama" }), m).then(function(res
 end function)
 
 ' Near the end of the grid: one more page
-promises.chain(sgquery.nextPage("titles", { genre: "drama" }), m).then(function(result as object, m as object) as dynamic
+promises.chain(sghttp.nextPage("titles", { genre: "drama" }), m).then(function(result as object, m as object) as dynamic
     m.items.append(result.pages.peek().items)
     m.hasMore = result.hasNext
     showItems()

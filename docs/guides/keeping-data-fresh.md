@@ -1,6 +1,6 @@
 # Keeping data fresh
 
-Data changes behind the app's back, on another device or on the server, while the screen shows a cached copy. sgQuery keeps checking cheap: a refresh that finds nothing new costs a request and nothing more, and a refresh that finds something new can redraw the screen without it asking.
+Data changes behind the app's back, on another device or on the server, while the screen shows a cached copy. sgHttp keeps checking cheap: a refresh that finds nothing new costs a request and nothing more, and a refresh that finds something new can redraw the screen without it asking.
 
 ## Unchanged payloads cost a request, not a parse
 
@@ -17,7 +17,7 @@ That makes short `ttl`s on volatile queries affordable: a check every 30 seconds
 Some APIs put a value in every response that changes every time (a request id, a server timestamp), so the bytes never match even when the data does. If your parser drops that field, set `compare: "parsed"`:
 
 ```brightscript
-sgquery.define("guide.now", {
+sghttp.define("guide.now", {
     request: { url: "/guide/now" }
     parser: "NowParser"
     ttl: 60
@@ -34,18 +34,18 @@ It costs one `formatJson` per differing response. A parsed value that can't be t
 If the server sends `ETag` or `Last-Modified` headers, `conditional: true` sends them back as `If-None-Match` and `If-Modified-Since`. A `304 Not Modified` renews the entry just as an unchanged body would, without the server sending the body at all.
 
 ```brightscript
-sgquery.define("catalog", { request: { url: "/catalog" }, ttl: 120, conditional: true, persist: true })
+sghttp.define("catalog", { request: { url: "/catalog" }, ttl: 120, conditional: true, persist: true })
 ```
 
 The validators are saved with persisted bodies, so a cold start can send them too. It only helps where the server sends validators. Without them it does nothing.
 
 ## Watching a query
 
-When a refresh replaces a cached value with **different** content, sgQuery notifies that query's watchers with the new value:
+When a refresh replaces a cached value with **different** content, sgHttp notifies that query's watchers with the new value:
 
 ```brightscript
 sub init()
-    m.recordingsWatcher = sgquery.watch("recordings", "onRecordingsChanged", { packageSlug: "value" })
+    m.recordingsWatcher = sghttp.watch("recordings", "onRecordingsChanged", { packageSlug: "value" })
 end sub
 
 sub onRecordingsChanged(event as object)
@@ -54,7 +54,7 @@ sub onRecordingsChanged(event as object)
 end sub
 
 sub onClose()
-    sgquery.unwatch(m.recordingsWatcher)
+    sghttp.unwatch(m.recordingsWatcher)
 end sub
 ```
 
@@ -68,22 +68,22 @@ end sub
 `observeChanges` reports every change in the store, without the value. Pair it with `isChange` to filter:
 
 ```brightscript
-sgquery.observeChanges("onCacheChanged")
+sghttp.observeChanges("onCacheChanged")
 
 sub onCacheChanged(event as object)
     change = event.getData()   ' { name, key, source }
-    if sgquery.isChange(change, "favorites") then refreshFavoriteBadges()
+    if sghttp.isChange(change, "favorites") then refreshFavoriteBadges()
 end sub
 ```
 
-Stop with `sgquery.unobserveChanges()`.
+Stop with `sghttp.unobserveChanges()`.
 
 ## Checking when a screen opens
 
 To show cached data immediately and still pick up anything new, query with `revalidate`:
 
 ```brightscript
-promises.chain(sgquery.query("recordings", args, { revalidate: true }), m).then(function(value as dynamic, m as object) as dynamic
+promises.chain(sghttp.query("recordings", args, { revalidate: true }), m).then(function(value as dynamic, m as object) as dynamic
     drawRows(value)   ' the cached value, right away
     return invalid
 end function)
@@ -97,9 +97,9 @@ end function)
 Expiry is lazy: nothing is sent until someone asks, so a screen that's already open and watching a query would keep showing the old value until it was reopened. `refresh` closes that gap:
 
 ```brightscript
-sgquery.refresh("favorites")            ' every watched entry of favorites and favorites.*
-sgquery.refresh("favorites", { model })  ' that one, if watched
-sgquery.refresh()                        ' everything watched, e.g. on resume
+sghttp.refresh("favorites")            ' every watched entry of favorites and favorites.*
+sghttp.refresh("favorites", { model })  ' that one, if watched
+sghttp.refresh()                        ' everything watched, e.g. on resume
 ```
 
 It sends the request again, now, for every matching entry that has a watcher. Each keeps serving its value meanwhile, and a different answer reaches the watchers. Entries nobody watches are left alone, since nobody would see the result; a `revalidate` query is the way to check one of those. It returns a promise that resolves, with the number of refreshes started, once they've all settled.

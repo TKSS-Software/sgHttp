@@ -1,9 +1,9 @@
 # Requests
 
-`fetch` sends one request and gives you the response. It's the primary thing sgQuery does, and on its own it's a complete HTTP client: nothing has to be defined, cached or configured beyond a `baseUrl`. This guide covers everything a request can be.
+`fetch` sends one request and gives you the response. It's the primary thing sgHttp does, and on its own it's a complete HTTP client: nothing has to be defined, cached or configured beyond a `baseUrl`. This guide covers everything a request can be.
 
 ```brightscript
-promises.chain(sgquery.fetch("/shows/abc"), m).then(function(response as object, m as object) as dynamic
+promises.chain(sghttp.fetch("/shows/abc"), m).then(function(response as object, m as object) as dynamic
     print response.code, response.body.title
     return invalid
 end function).catch(function(error as object, m as object) as dynamic
@@ -19,8 +19,8 @@ end function)
 A string is a `GET`. A relative url is joined to the client's `baseUrl`; one starting with `http` is sent as is.
 
 ```brightscript
-sgquery.fetch("/shows/abc")
-sgquery.fetch("https://images.example.com/manifest.json")
+sghttp.fetch("/shows/abc")
+sghttp.fetch("https://images.example.com/manifest.json")
 ```
 
 The string has to look like a url, starting with `/` or `http`. A query name passed by mistake, `fetch("homePage")`, rejects at once with a message pointing at `query`, instead of quietly asking the server for `/homePage`.
@@ -30,7 +30,7 @@ The string has to look like a url, starting with `/` or `http`. A query name pas
 For anything else, pass an associative array:
 
 ```brightscript
-sgquery.fetch({
+sghttp.fetch({
     url: "/shows/{id}/favorite"
     method: "POST"
     headers: { "X-Source": "details" }
@@ -51,7 +51,7 @@ A spec takes the same keys as a definition's `request` (`url`, `method`, `header
 request: { url: "/shows/{showId}" }
 ```
 
-If a placeholder in the url is left unfilled, sgQuery still sends the request (it usually reaches some other route) and prints a warning: `[sgquery] "show" url has an unfilled placeholder: /shows/{showId}`.
+If a placeholder in the url is left unfilled, sgHttp still sends the request (it usually reaches some other route) and prints a warning: `[sghttp] "show" url has an unfilled placeholder: /shows/{showId}`.
 
 ### Query string
 
@@ -103,14 +103,14 @@ Successful responses are JSON-decoded on the transport task. A body that isn't J
 Headers every request needs, like the auth token, are set once on the client:
 
 ```brightscript
-sgquery.setHeaders({ Authorization: "Bearer " + token })   ' after sign-in
-sgquery.setHeaders({ Authorization: invalid })              ' after sign-out: removes it
+sghttp.setHeaders({ Authorization: "Bearer " + token })   ' after sign-in
+sghttp.setHeaders({ Authorization: invalid })              ' after sign-out: removes it
 ```
 
 `setHeaders` merges, so other shared headers stay. `initialize({ headers })` sets the first ones. A request that must *not* carry them (a public endpoint, a token refresh) passes `auth: false`:
 
 ```brightscript
-sgquery.fetch({ url: "/auth/refresh", method: "POST", body: { refreshToken: "{token}" }, auth: false }, { token: refresh })
+sghttp.fetch({ url: "/auth/refresh", method: "POST", body: { refreshToken: "{token}" }, auth: false }, { token: refresh })
 ```
 
 `initialize({ baseHeaders })` are sent with every request without exception, even where `auth` is false: device ids, platform tags.
@@ -130,7 +130,7 @@ The promise resolves with the transport's whole response:
 Whatever you do with `response.body` in `then` runs on the render thread. For a small body that's fine. For a large one that becomes a ContentNode tree, name a **parser** in the spec, and the body is turned into the value on a task thread before the promise resolves:
 
 ```brightscript
-promises.chain(sgquery.fetch({ url: "/home/main", parser: "HomePageParser" }), m).then(function(response as object, m as object) as dynamic
+promises.chain(sghttp.fetch({ url: "/home/main", parser: "HomePageParser" }), m).then(function(response as object, m as object) as dynamic
     m.rowList.content = response.body   ' the parser's ContentNode tree, not the JSON
     return invalid
 end function)
@@ -149,7 +149,7 @@ Before a promise rejects, the transport has already retried network failures, `4
 Every request emits an event, so one observer in the main scene can send the app to sign-in when a token expires, whichever screen made the request:
 
 ```brightscript
-sgquery.observeEvents("onRequestEvent")
+sghttp.observeEvents("onRequestEvent")
 
 sub onRequestEvent(event as object)
     e = event.getData()
@@ -164,7 +164,7 @@ end sub
 Each server is a **client** with its own base url, shared headers and transport pool. `initialize` sets up the default one from its top-level settings and any others under `clients`; a spec picks one by name:
 
 ```brightscript
-sgquery.fetch({ url: "/entitlements", client: "billing" })
+sghttp.fetch({ url: "/entitlements", client: "billing" })
 ```
 
 See [More than one server](multiple-servers.md).
@@ -184,7 +184,7 @@ See [More than one server](multiple-servers.md).
 
 ## What fetch doesn't do
 
-A request is never cached, never de-duplicated, never persisted. Two identical calls send two requests, and the second knows nothing about the first. That's the right behaviour for most calls, and for the rest, the ones made from several places or shown on several screens, there's the [query cache](queries.md). If the app uses it, a `fetch` that changes data on the server should say so: `sgquery.expire("favorites")`.
+A request is never cached, never de-duplicated, never persisted. Two identical calls send two requests, and the second knows nothing about the first. That's the right behaviour for most calls, and for the rest, the ones made from several places or shown on several screens, there's the [query cache](queries.md). If the app uses it, a `fetch` that changes data on the server should say so: `sghttp.expire("favorites")`.
 
 ## Next
 

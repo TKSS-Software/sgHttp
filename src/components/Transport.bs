@@ -33,7 +33,7 @@ end sub
 function makeRequest(spec as object) as object
     promise = promises.create()
     if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
-        promises.reject({ message: "sgquery transport: request needs a url" }, promise)
+        promises.reject({ message: "sghttp transport: request needs a url" }, promise)
         return promise
     end if
     m.top.activeRequests = m.top.activeRequests + 1
@@ -105,7 +105,7 @@ end function
 sub enqueue(request as object)
     if type(request) <> "roAssociativeArray" or not isNode(request.promise) then return
     ' See ParserTask.runJob: a request delivered twice means another was lost
-    if request.promise.id = m.lastRequestId then print `[sgquery] transport: request ${request.promise.id} delivered twice (field events coalesced)`
+    if request.promise.id = m.lastRequestId then print `[sghttp] transport: request ${request.promise.id} delivered twice (field events coalesced)`
     m.lastRequestId = request.promise.id
     job = {
         promise: request.promise
@@ -336,16 +336,16 @@ function proxyAddress() as string
     if proxy.right(1) = "/" then proxy = proxy.left(proxy.len() - 1)
     parts = proxy.tokenize(":")
     if parts.count() <> 2 or val(parts[1]) <= 0 then
-        if m.proxyWarned <> true then print `[sgquery] proxy "${m.top.proxy}" is not host:port, ignoring it`
+        if m.proxyWarned <> true then print `[sghttp] proxy "${m.top.proxy}" is not host:port, ignoring it`
         m.proxyWarned = true
         return ""
     end if
     return proxy
 end function
 
-' params, not query: ropm prefixes any name matching a function in source/sgquery.bs
-' (query(), fetch(), ...) when it copies sgquery into an app, so a local named query
-' became sgquery_query (the function) there and every query string was dropped
+' params, not query: ropm prefixes any name matching a function in source/sghttp.bs
+' (query(), fetch(), ...) when it copies sghttp into an app, so a local named query
+' became sghttp_query (the function) there and every query string was dropped
 function appendQuery(url as string, params as dynamic) as string
     if type(params) <> "roAssociativeArray" or params.count() = 0 then return url
     transfer = createObject("roUrlTransfer")

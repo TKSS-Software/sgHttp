@@ -1,6 +1,6 @@
 # Testing your app
 
-Code that asks sgQuery for data can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
+Code that asks sgHttp for data can be tested without a network. Give the store a fake transport, and the spec decides what each request returns and when.
 
 ## A fake transport
 
@@ -58,7 +58,7 @@ function requestAt(index as integer) as dynamic
 end function
 ```
 
-sgQuery's own specs use the same approach; see [`tests/components/FakeTransport.bs`](../../tests/components/FakeTransport.bs).
+sgHttp's own specs use the same approach; see [`tests/components/FakeTransport.bs`](../../tests/components/FakeTransport.bs).
 
 ## Setting up a spec
 
@@ -68,13 +68,13 @@ Initialize with the fake, persistence off, and the same definitions the app uses
 @beforeEach
 function setUp()
     m.fake = createObject("roSGNode", "FakeTransport")
-    sgquery.initialize({ transport: m.fake, persist: false })
+    sghttp.initialize({ transport: m.fake, persist: false })
     registerQueries()   ' the app's own define calls
 end function
 
 @afterEach
 function tearDown()
-    sgquery.destroy()
+    sghttp.destroy()
 end function
 ```
 
@@ -84,7 +84,7 @@ Then query, answer, and check the result:
 @async
 @it("loads the home rows")
 function _()
-    promises.chain(sgquery.query("homePage", { slug: "main" }), m).then(function(page as dynamic, suite as object) as dynamic
+    promises.chain(sghttp.query("homePage", { slug: "main" }), m).then(function(page as dynamic, suite as object) as dynamic
         ' No parserTask in this setup, so the value is the decoded JSON
         suite.assertEqual(page.rows.count(), 2)
         suite.done()

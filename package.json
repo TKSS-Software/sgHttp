@@ -1,5 +1,5 @@
 {
-  "name": "sgquery",
+  "name": "sghttp",
   "version": "0.1.0",
   "description": "HTTP client for Roku SceneGraph apps, with an optional query cache: de-duplication, parsing, persistence and background refresh",
   "private": true,
@@ -11,7 +11,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TKSS-Software/sgQuery.git"
+    "url": "git+https://github.com/TKSS-Software/sgHttp.git"
   },
   "files": [
     "dist",

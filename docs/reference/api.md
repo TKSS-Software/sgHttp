@@ -1,10 +1,10 @@
 # API reference
 
-Every function is in the `sgquery` namespace. Call them from render-thread components that import `pkg:/source/roku_modules/sgquery/sgquery.brs`.
+Every function is in the `sghttp` namespace. Call them from render-thread components that import `pkg:/source/roku_modules/sghttp/sghttp.brs`.
 
 `initialize`, `fetch` and `setHeaders` are the HTTP client, and are all an app has to use. Everything under Queries, Cache control and Changes applies only to queries the app defines.
 
-The shapes the functions take and return (`sgquery.Definition`, `sgquery.FetchSpec`, `sgquery.Response`, `sgquery.PagedValue`, and so on) are declared as interfaces in the package's typedef, for completion and hover; see [Editor support](../installation.md#editor-support).
+The shapes the functions take and return (`sghttp.Definition`, `sghttp.FetchSpec`, `sghttp.Response`, `sghttp.PagedValue`, and so on) are declared as interfaces in the package's typedef, for completion and hover; see [Editor support](../installation.md#editor-support).
 
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
@@ -20,7 +20,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 ## initialize
 
 ```brightscript
-sgquery.initialize(params = {} as object) as object
+sghttp.initialize(params = {} as object) as object
 ```
 
 Creates the store, attaches it to the scene and returns it. If a store already exists, returns that store and ignores `params`.
@@ -41,10 +41,10 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `parserThreads` | 2 | How many of `parserTask` to run. Each parse goes to the one with the fewest parses waiting. See [Parsers](../guides/parsers.md#parser-threads). |
 | `persist` | `true` | `false` turns persistence off for every query |
 | `version` | `"1"` | Cache version; change it to stop every body on disk from being read. Rarely needed: app releases, servers and definition changes already keep bodies apart. |
-| `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sgquery/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
+| `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sghttp/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
 | `maxEntries` | 100 | In-memory entry cap |
 | `defaultTtl` | 300 | Seconds, for definitions without a `ttl` |
-| `debug` | `false` | Print every event and change to the console with its cache key, as `[sgquery] <type> <name> via <source> (<ms>ms) <key>`. See [Debugging](../guides/debugging.md#printing-every-event). |
+| `debug` | `false` | Print every event and change to the console with its cache key, as `[sghttp] <type> <name> via <source> (<ms>ms) <key>`. See [Debugging](../guides/debugging.md#printing-every-event). |
 | `store` | none | An existing `Store` node to attach instead of creating one (tests) |
 | `persistence` | none | An existing `Persistence` node to run file operations on, left running by `destroy` (tests; see [Testing](../guides/testing.md#things-to-know)) |
 | `appInfo` | `roAppInfo` | `{ id, title, version }` to name the namespace with instead of `roAppInfo` (tests) |
@@ -54,7 +54,7 @@ Returns the store node.
 ## fetch
 
 ```brightscript
-sgquery.fetch(spec as dynamic, args = {} as object) as object
+sghttp.fetch(spec as dynamic, args = {} as object) as object
 ```
 
 Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a url, or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`) with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }` without sending anything when the spec has no url, when the client doesn't exist, or when the string isn't a url (doesn't start with `/` or `http`), which is what a query name passed here by mistake looks like: the message says to call [`query`](#query). See [Requests](../guides/requests.md).
@@ -62,19 +62,19 @@ Sends one request with no definition and returns a promise for the whole respons
 ## define
 
 ```brightscript
-sgquery.define(name as string, definition as object)
+sghttp.define(name as string, definition as object)
 ```
 
 Registers a query. Defining a name again replaces the definition, with a console warning. See [Query definitions](definition.md) for every key.
 
 ```brightscript
-sgquery.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser", ttl: 600, persist: true })
+sghttp.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser", ttl: 600, persist: true })
 ```
 
 ## query
 
 ```brightscript
-sgquery.query(name as string, args = {} as object, options = {} as object) as object
+sghttp.query(name as string, args = {} as object, options = {} as object) as object
 ```
 
 Returns a promise that resolves with the query's value (the parser's result, or the decoded body), or with `{ pages, hasNext }` for a query defined with `pages` (see [`nextPage`](#nextpage)). See [Caching and freshness](../guides/caching.md#what-a-query-does) for how it decides between memory, disk and network.
@@ -89,7 +89,7 @@ Rejects with an [error](events-and-stats.md#errors) when the request or parse fa
 ## precache
 
 ```brightscript
-sgquery.precache(name as string, args = {} as object) as boolean
+sghttp.precache(name as string, args = {} as object) as boolean
 ```
 
 Starts the query without waiting for its answer, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight; otherwise does what a plain `query` would, disk first for a `persist` query. For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
@@ -97,7 +97,7 @@ Starts the query without waiting for its answer, so a later `query` with the sam
 ## nextPage
 
 ```brightscript
-sgquery.nextPage(name as string, args = {} as object) as object
+sghttp.nextPage(name as string, args = {} as object) as object
 ```
 
 For a query defined with `pages`: loads the page after the last one loaded for these args and returns a promise for every page so far, `{ pages, hasNext }`, the shape `query` resolves with for such a query. With nothing loaded it loads the first page. On the last page (`hasNext` false) it resolves at once without a request. A load already running for these args is shared. Rejects for a query without `pages`. See [Pages](../guides/pagination.md).
@@ -105,7 +105,7 @@ For a query defined with `pages`: loads the page after the last one loaded for t
 ## peek
 
 ```brightscript
-sgquery.peek(name as string, args = {} as object) as dynamic
+sghttp.peek(name as string, args = {} as object) as dynamic
 ```
 
 Returns the value cached in memory for those args (fresh, stale or expired), or `invalid`. Synchronous. Never makes a request or reads the disk.
@@ -113,7 +113,7 @@ Returns the value cached in memory for those args (fresh, stale or expired), or 
 ## mutate
 
 ```brightscript
-sgquery.mutate(name as string, args = {} as object, options = {} as object) as object
+sghttp.mutate(name as string, args = {} as object, options = {} as object) as object
 ```
 
 Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `invalidates`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
@@ -125,7 +125,7 @@ Runs a `cache: false` query and returns a promise for its parsed response. On su
 ## set
 
 ```brightscript
-sgquery.set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
+sghttp.set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
 ```
 
 Puts `value` in the cache for a query and args as if the server had just answered with it: fresh for the definition's `ttl`, delivered to watchers with `source: "local"`, with a `set` event. A response to a request that started before the call doesn't replace it (its callers still get it). The disk copy is deleted. `invalid` removes the entry. Returns the previous value, or `invalid`. For a query with pages, sets the first page. Prints a warning and returns `invalid` for an unknown or `cache: false` query.
@@ -133,7 +133,7 @@ Puts `value` in the cache for a query and args as if the server had just answere
 ## expire
 
 ```brightscript
-sgquery.expire(name as string, args = invalid as dynamic)
+sghttp.expire(name as string, args = invalid as dynamic)
 ```
 
 Marks values out of date without dropping them. `peek` and `revalidate` queries still get them. A plain query waits for the server and falls back to the kept value on failure. Disk copies saved before now aren't served.
@@ -146,12 +146,12 @@ Doesn't notify watchers.
 ## invalidate
 
 ```brightscript
-sgquery.invalidate(name = invalid as dynamic, args = invalid as dynamic)
+sghttp.invalidate(name = invalid as dynamic, args = invalid as dynamic)
 ```
 
 Drops values from memory and disk.
 
-- No arguments: everything, including every file in this app's folder under `cachefs:/sgquery/`.
+- No arguments: everything, including every file in this app's folder under `cachefs:/sghttp/`.
 - Name only: every entry of the query and its dotted descendants, and their files.
 - Name and args: the one entry those args key to now, and its file.
 
@@ -160,7 +160,7 @@ A request in flight for a dropped entry still answers its callers, but isn't sto
 ## expireAll
 
 ```brightscript
-sgquery.expireAll()
+sghttp.expireAll()
 ```
 
 Marks every cached value stale. Each is served from the cache on its next query and refreshed in the background. For coming back from the background; follow it with [`refresh`](#refresh) to update the open screens too.
@@ -168,7 +168,7 @@ Marks every cached value stale. Each is served from the cache on its next query 
 ## refresh
 
 ```brightscript
-sgquery.refresh(name = invalid as dynamic, args = invalid as dynamic) as object
+sghttp.refresh(name = invalid as dynamic, args = invalid as dynamic) as object
 ```
 
 Sends the request again, now, for every entry of the query and its dotted descendants that has a [watcher](#watch); with `args`, that one entry when watched; with no name, every watched entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), as are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/keeping-data-fresh.md#refreshing-whats-on-screen).
@@ -176,7 +176,7 @@ Sends the request again, now, for every entry of the query and its dotted descen
 ## setScope
 
 ```brightscript
-sgquery.setScope(scopeName as string, value as dynamic, options = {} as object)
+sghttp.setScope(scopeName as string, value as dynamic, options = {} as object)
 ```
 
 Sets a scope value. When it changes from one value to another, every entry of every query listing the scope is dropped, from memory and disk, unless `options.keep` is `true`. `invalid` clears the scope. See [Scopes](../guides/scopes-and-buckets.md#scopes).
@@ -184,7 +184,7 @@ Sets a scope value. When it changes from one value to another, every entry of ev
 ## invalidateScope
 
 ```brightscript
-sgquery.invalidateScope(scopeName as string)
+sghttp.invalidateScope(scopeName as string)
 ```
 
 Drops every entry, and every stored body, of every query that lists the scope. The scope's value is unchanged.
@@ -192,20 +192,20 @@ Drops every entry, and every stored body, of every query that lists the scope. T
 ## setHeaders
 
 ```brightscript
-sgquery.setHeaders(headers as object, client = "" as string)
+sghttp.setHeaders(headers as object, client = "" as string)
 ```
 
 Merges headers into a client's shared headers: the default client's when `client` is omitted. A header set to `invalid` is removed. Takes effect for requests sent from then on. Prints a warning for an unknown client.
 
 ```brightscript
-sgquery.setHeaders({ Authorization: "Bearer " + token })   ' sign in
-sgquery.setHeaders({ Authorization: invalid })              ' sign out
+sghttp.setHeaders({ Authorization: "Bearer " + token })   ' sign in
+sghttp.setHeaders({ Authorization: invalid })              ' sign out
 ```
 
 ## watch
 
 ```brightscript
-sgquery.watch(name as string, functionName as string, args = invalid as dynamic) as object
+sghttp.watch(name as string, functionName as string, args = invalid as dynamic) as object
 ```
 
 Calls `functionName(event)` in the calling component when a value of the query is replaced by different content. `event.getData()` is `{ name, key, source, value }`.
@@ -218,7 +218,7 @@ Not called for a first value, an unchanged refresh, an expiry or an invalidation
 ## unwatch
 
 ```brightscript
-sgquery.unwatch(watcher as dynamic)
+sghttp.unwatch(watcher as dynamic)
 ```
 
 Stops a watch. Ignores anything that isn't a watcher node.
@@ -226,7 +226,7 @@ Stops a watch. Ignores anything that isn't a watcher node.
 ## observeChanges
 
 ```brightscript
-sgquery.observeChanges(functionName as string)
+sghttp.observeChanges(functionName as string)
 ```
 
 Calls `functionName(event)` in the calling component whenever any cached value is replaced by different content. `event.getData()` is `{ name, key, source }`, without the value. Filter with [`isChange`](#ischange).
@@ -234,7 +234,7 @@ Calls `functionName(event)` in the calling component whenever any cached value i
 ## unobserveChanges
 
 ```brightscript
-sgquery.unobserveChanges()
+sghttp.unobserveChanges()
 ```
 
 Removes the calling component's `observeChanges` observer.
@@ -242,7 +242,7 @@ Removes the calling component's `observeChanges` observer.
 ## isChange
 
 ```brightscript
-sgquery.isChange(change as dynamic, name as string, args = invalid as dynamic) as boolean
+sghttp.isChange(change as dynamic, name as string, args = invalid as dynamic) as boolean
 ```
 
 Whether a change event's data is for this query, and for these args when given (using the current scopes and time bucket).
@@ -250,7 +250,7 @@ Whether a change event's data is for this query, and for these args when given (
 ## observeEvents
 
 ```brightscript
-sgquery.observeEvents(functionName as string)
+sghttp.observeEvents(functionName as string)
 ```
 
 Calls `functionName(event)` in the calling component for every event: each request, cache hit, miss and error. `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#events).
@@ -258,7 +258,7 @@ Calls `functionName(event)` in the calling component for every event: each reque
 ## unobserveEvents
 
 ```brightscript
-sgquery.unobserveEvents()
+sghttp.unobserveEvents()
 ```
 
 Removes the calling component's `observeEvents` observer.
@@ -266,7 +266,7 @@ Removes the calling component's `observeEvents` observer.
 ## getStats
 
 ```brightscript
-sgquery.getStats() as object
+sghttp.getStats() as object
 ```
 
 Returns counters and gauges. See [Stats](events-and-stats.md#stats).
@@ -274,7 +274,7 @@ Returns counters and gauges. See [Stats](events-and-stats.md#stats).
 ## getStore
 
 ```brightscript
-sgquery.getStore() as object
+sghttp.getStore() as object
 ```
 
 Returns the store node, or `invalid` before `initialize`.
@@ -282,7 +282,7 @@ Returns the store node, or `invalid` before `initialize`.
 ## destroy
 
 ```brightscript
-sgquery.destroy()
+sghttp.destroy()
 ```
 
 Clears the in-memory cache, watchers and expiry records, stops the parser and persistence tasks and every transport (a replacement transport only if it has a `shutdown` field), and removes the store from the scene. Files on `cachefs:/` stay; call `invalidate()` first to remove them. A later `initialize` creates a fresh store.

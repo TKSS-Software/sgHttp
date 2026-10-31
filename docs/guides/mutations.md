@@ -5,7 +5,7 @@
 A **mutation** is a query with `cache: false`: a request that changes something on the server, or returns something that must not be reused, like a signed stream url. It runs through the same transport and parser as any other query, but its result is never stored, and two identical mutations are never merged into one request.
 
 ```brightscript
-sgquery.define("favorites.add", {
+sghttp.define("favorites.add", {
     request: { url: "/favorites", method: "POST", body: { slug: "{slug}" } }
     cache: false
     expires: ["favorites"]
@@ -15,7 +15,7 @@ sgquery.define("favorites.add", {
 Run it with `mutate`:
 
 ```brightscript
-promises.chain(sgquery.mutate("favorites.add", { slug: "abc" }), m).then(function(body as dynamic, m as object) as dynamic
+promises.chain(sghttp.mutate("favorites.add", { slug: "abc" }), m).then(function(body as dynamic, m as object) as dynamic
     m.favoriteButton.text = "Remove from favorites"
     return invalid
 end function).catch(function(error as object, m as object) as dynamic
@@ -26,7 +26,7 @@ end function)
 
 `mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call site that reads as a write can't quietly cache. `query` also runs `cache: false` queries; use it for per-call resources that aren't writes, such as a stream url. For a one-off call that isn't worth a definition, or where you need the status and headers, see [Requests](requests.md).
 
-When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
+When a mutation succeeds, sgHttp applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
 
 ## Showing the change at once
 
@@ -35,13 +35,13 @@ A mutation takes a round trip, and the queries it expires are only refetched aft
 **`set`** writes a value into the cache as if the server had just answered with it: fresh for the definition's `ttl`, delivered to every watcher of that query with `source: "local"`, and safe from any request that was already in flight (its callers still get their answer, but it doesn't overwrite the write). The disk copy is deleted, since it predates the change. `set` returns the previous value, and `set(name, args, invalid)` removes the entry.
 
 ```brightscript
-sgquery.set("favorites.check", { model: "show", slug: "abc" }, { favorite: true })
+sghttp.set("favorites.check", { model: "show", slug: "abc" }, { favorite: true })
 ```
 
 **`optimistic` on `mutate`** does the writes for you, before the request, and undoes them if it fails:
 
 ```brightscript
-promises.chain(sgquery.mutate("favorites.add", { slug: "abc" }, {
+promises.chain(sghttp.mutate("favorites.add", { slug: "abc" }, {
     optimistic: [{ name: "favorites.check", args: { model: "show", slug: "abc" }, value: { favorite: true } }]
 }), m).catch(function(error as object, m as object) as dynamic
     m.toast.text = "Couldn't add the favorite"   ' the cache already shows it un-favorited again
@@ -55,11 +55,11 @@ For a query with pages, `set` replaces the first page; the pages after it are ke
 
 ## Telling the cache what changed
 
-After a write, some cached data is out of date. sgQuery has two ways to handle that.
+After a write, some cached data is out of date. sgHttp has two ways to handle that.
 
 ### Expire
 
-`sgquery.expire(name, args)` keeps the value but marks it out of date:
+`sghttp.expire(name, args)` keeps the value but marks it out of date:
 
 - `peek` and `{ revalidate: true }` queries still get the kept value at once.
 - A plain query **waits for the server**. If that request fails, it resolves with the kept value.
@@ -70,12 +70,12 @@ This is what a mutation's `expires` list does, and it's usually the right choice
 
 ### Invalidate
 
-`sgquery.invalidate(name, args)` drops the value from memory **and** disk. Use it when the old value must never be shown again, for example data that belonged to another account.
+`sghttp.invalidate(name, args)` drops the value from memory **and** disk. Use it when the old value must never be shown again, for example data that belonged to another account.
 
 ```brightscript
-sgquery.invalidate("homePage", { slug: "main" })   ' one entry
-sgquery.invalidate("homePage")                     ' every homePage entry, and homePage.* queries
-sgquery.invalidate()                               ' everything, memory and disk
+sghttp.invalidate("homePage", { slug: "main" })   ' one entry
+sghttp.invalidate("homePage")                     ' every homePage entry, and homePage.* queries
+sghttp.invalidate()                               ' everything, memory and disk
 ```
 
 ### Matching
@@ -90,7 +90,7 @@ Both match by name the same way:
 A mutation's lists take names only, so they cover whole queries and their descendants:
 
 ```brightscript
-sgquery.define("profile.update", {
+sghttp.define("profile.update", {
     request: { url: "/profile", method: "PATCH", body: "{changes}" }
     cache: false
     expires: ["profile", "homePage"]   ' refetch these when next asked

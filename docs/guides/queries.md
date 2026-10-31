@@ -3,7 +3,7 @@
 A **query** is a [request](requests.md) with a name: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then query it by name with args. Where `fetch` gives you the whole response and forgets it, `query` gives you the value and keeps it.
 
 ```brightscript
-sgquery.define("episodes", {
+sghttp.define("episodes", {
     request: {
         url: "/shows/{showId}/seasons/{season}/episodes"
         query: { page: "{page}", limit: "50" }
@@ -12,7 +12,7 @@ sgquery.define("episodes", {
     ttl: 600
 })
 
-sgquery.query("episodes", { showId: "abc", season: 2, page: 1 })
+sghttp.query("episodes", { showId: "abc", season: 2, page: 1 })
 ' GET https://api.example.com/shows/abc/seasons/2/episodes?page=1&limit=50
 ```
 
@@ -23,11 +23,11 @@ Query names are plain strings, and dots in them mean something. Every function t
 Use that to group related queries:
 
 ```brightscript
-sgquery.define("favorites", { request: { url: "/favorites" } })
-sgquery.define("favorites.check", { request: { url: "/favorites/{slug}" } })
-sgquery.define("favorites.add", { request: { url: "/favorites", method: "POST", body: { slug: "{slug}" } }, cache: false, expires: ["favorites"] })
+sghttp.define("favorites", { request: { url: "/favorites" } })
+sghttp.define("favorites.check", { request: { url: "/favorites/{slug}" } })
+sghttp.define("favorites.add", { request: { url: "/favorites", method: "POST", body: { slug: "{slug}" } }, cache: false, expires: ["favorites"] })
 
-sgquery.expire("favorites")   ' expires favorites and favorites.check entries
+sghttp.expire("favorites")   ' expires favorites and favorites.check entries
 ```
 
 Defining a name a second time replaces the first definition and prints a warning to the console.

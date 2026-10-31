@@ -4,37 +4,37 @@
 
 - A SceneGraph channel built with [BrighterScript](https://github.com/rokucommunity/brighterscript).
 - [ropm](https://github.com/rokucommunity/ropm) to install the package.
-- [promises](https://github.com/rokucommunity/promises), which ropm installs with sgQuery. Every `fetch` and `query` returns one of its promise nodes.
+- [promises](https://github.com/rokucommunity/promises), which ropm installs with sgHttp. Every `fetch` and `query` returns one of its promise nodes.
 
 ## Install with ropm
 
-sgQuery isn't published to npm. Build it from a checkout, then install it from the folder:
+sgHttp isn't published to npm. Build it from a checkout, then install it from the folder:
 
 ```sh
-git clone https://github.com/TKSS-Software/sgQuery.git
-cd sgQuery
+git clone https://github.com/TKSS-Software/sgHttp.git
+cd sgHttp
 npm run build          # installs its own tools on the first run, then compiles to dist/
 ```
 
 Then, in your channel:
 
 ```sh
-npx ropm install sgquery@file:../sgQuery
+npx ropm install sghttp@file:../sgHttp
 ```
 
-ropm copies the package into your channel's `roku_modules` folders and prefixes its names with `sgquery_`: the `Store` component becomes `sgquery_Store`, the `ParserTask` component becomes `sgquery_ParserTask`, and so on.
+ropm copies the package into your channel's `roku_modules` folders and prefixes its names with `sghttp_`: the `Store` component becomes `sghttp_Store`, the `ParserTask` component becomes `sghttp_ParserTask`, and so on.
 
-After changing sgQuery itself, rebuild it (`npm run build`), then run `npx ropm copy` in the channel to pick up the new build.
+After changing sgHttp itself, rebuild it (`npm run build`), then run `npx ropm copy` in the channel to pick up the new build.
 
 ## Initialize
 
 Call `initialize` once, early, from the main scene's `init()`, before any component sends a request. (If your app uses sgRouter, that means before the router starts.) It creates one node on the scene that owns the transport, the shared headers and, if you use them, the cache.
 
 ```brightscript
-import "pkg:/source/roku_modules/sgquery/sgquery.brs"
+import "pkg:/source/roku_modules/sghttp/sghttp.brs"
 
 sub init()
-    sgquery.initialize({ baseUrl: "https://api.example.com" })
+    sghttp.initialize({ baseUrl: "https://api.example.com" })
 end sub
 ```
 
@@ -47,17 +47,17 @@ That's enough to send requests. Every setting is optional, `baseUrl` included; t
 Import the same file into any component that sends requests:
 
 ```brightscript
-import "pkg:/source/roku_modules/sgquery/sgquery.brs"
+import "pkg:/source/roku_modules/sghttp/sghttp.brs"
 ```
 
 Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache.
 
 ## Editor support
 
-The package ships a typedef (`sgquery.d.bs`, which ropm installs beside `sgquery.brs`), so in an editor with the BrighterScript extension every `sgquery.*` function shows its documentation on hover and completion, and so do the shapes they take and return: `sgquery.Definition`, `sgquery.Request`, `sgquery.FetchSpec`, `sgquery.Response`, `sgquery.PagedValue`, `sgquery.InitializeParams`, `sgquery.QueryOptions`, `sgquery.MutateOptions`, `sgquery.Event` and `sgquery.Change`. They describe the keys; nothing is enforced, and any associative array with the right keys works. Annotate your own code with them when you want the same help there:
+The package ships a typedef (`sghttp.d.bs`, which ropm installs beside `sghttp.brs`), so in an editor with the BrighterScript extension every `sghttp.*` function shows its documentation on hover and completion, and so do the shapes they take and return: `sghttp.Definition`, `sghttp.Request`, `sghttp.FetchSpec`, `sghttp.Response`, `sghttp.PagedValue`, `sghttp.InitializeParams`, `sghttp.QueryOptions`, `sghttp.MutateOptions`, `sghttp.Event` and `sghttp.Change`. They describe the keys; nothing is enforced, and any associative array with the right keys works. Annotate your own code with them when you want the same help there:
 
 ```brightscript
-function homePageDefinition() as sgquery.Definition
+function homePageDefinition() as sghttp.Definition
     return { request: { url: "/home/{slug}" }, parser: "HomePageParser", ttl: 300 }
 end function
 ```

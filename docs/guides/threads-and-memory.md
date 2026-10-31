@@ -15,9 +15,9 @@ A decoded body that crosses from one thread to another is copied, field by field
 
 ## One store for the whole app
 
-`initialize` attaches the store to the scene as a field, `__sgquery`, and every sgQuery function finds it there, so every component that imports `sgquery.brs` uses the same store, cache and tasks, with nothing to pass between them.
+`initialize` attaches the store to the scene as a field, `__sghttp`, and every sgHttp function finds it there, so every component that imports `sghttp.brs` uses the same store, cache and tasks, with nothing to pass between them.
 
-Call sgQuery from components on the render thread. Task functions shouldn't call it.
+Call sgHttp from components on the render thread. Task functions shouldn't call it.
 
 ## Cached nodes are shared
 
@@ -49,12 +49,12 @@ Screens and managers that watch or observe should undo it when they go away:
 
 ```brightscript
 sub onClose()
-    sgquery.unwatch(m.recordingsWatcher)
-    sgquery.unobserveEvents()
+    sghttp.unwatch(m.recordingsWatcher)
+    sghttp.unobserveEvents()
 end sub
 ```
 
-`sgquery.destroy()` clears the cache, stops every task and removes the store from the scene, for example when signing out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `invalidate()` first to clear that too.
+`sghttp.destroy()` clears the cache, stops every task and removes the store from the scene, for example when signing out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `invalidate()` first to clear that too.
 
 ## Next
 

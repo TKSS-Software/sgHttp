@@ -3,7 +3,7 @@
 The object passed to `define`. Only `request` is required.
 
 ```brightscript
-sgquery.define("episodes", {
+sghttp.define("episodes", {
     request: {
         url: "/shows/{showId}/episodes"
         query: { season: "{season}", profile_id: "{profile}" }

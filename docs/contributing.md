@@ -4,7 +4,7 @@
 
 | Path | What |
 |---|---|
-| `src/source/sgquery.bs` | The public API: thin wrappers that `callFunc` into the store |
+| `src/source/sghttp.bs` | The public API: thin wrappers that `callFunc` into the store |
 | `src/source/keys.bs` | Cache keys, url templates and small helpers shared by the API and the store |
 | `src/components/Store.bs` | The cache: definitions, entries, freshness, expiry, scopes, watchers, events |
 | `src/components/Transport.bs` | The default HTTP task |
@@ -42,7 +42,7 @@ npm test
 
 This builds the package, compiles the test app (`bsconfig-test.json`), deploys it, and prints the Rooibos report. The deploy goes through `scripts/rooibos.js`, which runs the Rooibos CLI but replaces the dev channel instead of deleting it first. Deleting it would wipe the registry that every sideloaded app shares, signing you out of the app you sideload next. The specs' disk cache lives in the test app's own `cachefs:/` folder, so clearing it never touches another sideloaded app's cache. The device's debug console (port 8085) must be free. A VS Code debug session or BrightScript console attached to the device makes the run fail with `SocketConnectionInUseError`.
 
-The specs live in `tests/components/sgqueryStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. For requests that start later, after a disk read for a `persist: true` query, `answerNext(body)` queues an answer for the next request made.
+The specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. For requests that start later, after a disk read for a `persist: true` query, `answerNext(body)` queues an answer for the next request made.
 
 ## Documentation
 

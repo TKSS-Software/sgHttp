@@ -3,7 +3,7 @@
 With `persist: true`, a query's raw response body is written to `cachefs:/`. On the next launch, the first query reads it, parses it and serves it before the network answers, so the first screen can draw at once.
 
 ```brightscript
-sgquery.define("homePage", {
+sghttp.define("homePage", {
     request: { url: "/home/{slug}" }
     parser: "HomePageParser"
     ttl: 300
@@ -22,7 +22,7 @@ Writing and reading a file costs the render thread only that first line. A body 
 Files live at:
 
 ```
-cachefs:/sgquery/<namespace>/<query name>/<prefix>-<digest>.json
+cachefs:/sghttp/<namespace>/<query name>/<prefix>-<digest>.json
 ```
 
 The prefix covers the cache `version` and the definition's request, parser and server; the digest covers the cache key. The namespace is described below.
@@ -32,7 +32,7 @@ The prefix covers the cache `version` and the definition's request, parser and s
 On a developer device, every sideloaded app runs as the same "dev" channel, so they can share `cachefs:/`. Two apps that define the same queries could then read each other's stored bodies, including per-user data. To keep them apart, each app stores its bodies in its own folder, named by its channel id, title and version from `roAppInfo`:
 
 ```
-cachefs:/sgquery/dev_My-Channel-3f9a2c1e_1.4.2/homePage/...
+cachefs:/sghttp/dev_My-Channel-3f9a2c1e_1.4.2/homePage/...
 ```
 
 - Characters other than letters, digits, `.` and `-` become `-`. The short hash after the title is of the raw id and title, so two apps whose titles differ only in punctuation (`My App`, `My-App`) still get separate folders.
@@ -61,7 +61,7 @@ The version, request, parser and server are part of the file's name, so a body s
 With the app version in the [folder name](#one-folder-per-app) and the server in the digest, you rarely need `version`. It is there to drop every stored body at once without changing anything else, for example while developing a parser against a response whose shape changed:
 
 ```brightscript
-sgquery.initialize({ version: "2" })
+sghttp.initialize({ version: "2" })
 ```
 
 ## Deleting stored bodies
@@ -84,9 +84,9 @@ The folders of queries not defined by then are left alone, so a query defined la
 ## Things to know
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
-- Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are deleted at start-up, once the first disk read has answered, as are the same app's other version folders, before the [sweep](#the-start-up-sweep). Clean-up never delays a cold start.
+- Bodies stored while sgHttp was called sgQuery, under `cachefs:/sgquery/`, are never read again. At start-up, once the first disk read has answered, the store deletes this app's folders there, and the files of the layout before the per-app folders (`cachefs:/sgquery/<query name>/`). It also deletes the same app's other version folders, all before the [sweep](#the-start-up-sweep). Clean-up never delays a cold start.
 - `persist` has no effect on `cache: false` queries.
-- Files named before the prefix was added are swept like any other file the store can't read, so the first start with this version of sgQuery downloads everything once.
+- Files named before the prefix was added are swept like any other file the store can't read, so the first start with this version of sgHttp downloads everything once.
 
 ## Next
 

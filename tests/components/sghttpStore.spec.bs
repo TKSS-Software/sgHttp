@@ -5,8 +5,8 @@ import "pkg:/source/keys.bs"
 ' order) the server answers. Promise callbacks get the suite as their context.
 namespace tests
     @SGNode("Node")
-    @suite("sgquery cache")
-    class SgqueryStoreTests extends rooibos.BaseTestSuite
+    @suite("sghttp cache")
+    class SghttpStoreTests extends rooibos.BaseTestSuite
 
         public store = invalid
         public fake = invalid

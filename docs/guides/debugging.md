@@ -5,7 +5,7 @@
 Every request and cache decision is reported as an event. Observe them from any component:
 
 ```brightscript
-sgquery.observeEvents("onCacheEvent")
+sghttp.observeEvents("onCacheEvent")
 
 sub onCacheEvent(event as object)
     e = event.getData()
@@ -13,28 +13,28 @@ sub onCacheEvent(event as object)
 end sub
 ```
 
-The event types and their fields are in [Events](../reference/events-and-stats.md#events). Stop observing with `sgquery.unobserveEvents()`.
+The event types and their fields are in [Events](../reference/events-and-stats.md#events). Stop observing with `sghttp.unobserveEvents()`.
 
 ## Printing every event
 
 `initialize({ debug: true })` prints each event and each change as it happens, with the cache key, so a session's traffic reads straight off the console:
 
 ```
-[sgquery] miss homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
-[sgquery] resolve homePage via network (412ms) homePage|profile=|{"slug":"home-page"}
-[sgquery] hit homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
-[sgquery] error favorites.add via network (1203ms) code 401 
-[sgquery] change homePage via network homePage|profile=|{"slug":"home-page"}
+[sghttp] miss homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
+[sghttp] resolve homePage via network (412ms) homePage|profile=|{"slug":"home-page"}
+[sghttp] hit homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
+[sghttp] error favorites.add via network (1203ms) code 401 
+[sghttp] change homePage via network homePage|profile=|{"slug":"home-page"}
 ```
 
 The key shows the args (and, for a page after the first, the cursor), so it tells which page or which profile a line is about. It's the same information `observeEvents` delivers, printed; turn it on in development builds only.
 
 ## Stats
 
-`sgquery.getStats()` returns running counters since `initialize`:
+`sghttp.getStats()` returns running counters since `initialize`:
 
 ```brightscript
-stats = sgquery.getStats()
+stats = sghttp.getStats()
 print "hit rate: "; stats.hits; "/"; stats.hits + stats.staleHits + stats.misses
 print "entries: "; stats.entries; ", watchers: "; stats.watchers
 print "partner in flight: "; stats.clients.partner.active
@@ -49,7 +49,7 @@ Useful checks:
 
 ## Console warnings
 
-sgQuery prints to the BrightScript console (port 8085) when something is probably a mistake:
+sgHttp prints to the BrightScript console (port 8085) when something is probably a mistake:
 
 | Message | Meaning |
 |---|---|
@@ -66,7 +66,7 @@ sgQuery prints to the BrightScript console (port 8085) when something is probabl
 Roku apps can't set an HTTP proxy, but a proxy such as Charles can still see their traffic if each url is prefixed with the proxy's address. Pass `proxy` to `initialize` (or to a client):
 
 ```brightscript
-sgquery.initialize({
+sghttp.initialize({
     baseUrl: "https://api.example.com"
     proxy: "192.168.1.20:8888"
 })

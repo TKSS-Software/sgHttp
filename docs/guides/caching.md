@@ -1,6 +1,6 @@
 # Caching and freshness
 
-Each cached value is either **fresh** or **stale**. A fresh value is served from memory without a request. A stale value is still served, but sgQuery checks the server for a newer one.
+Each cached value is either **fresh** or **stale**. A fresh value is served from memory without a request. A stale value is still served, but sgHttp checks the server for a newer one.
 
 ## How long a value is fresh
 
@@ -17,7 +17,7 @@ A value loaded from disk counts as fetched when it was first saved, not when it 
 
 ## What a query does
 
-`sgquery.query(name, args)` works out the key (see [Cache keys](queries.md#cache-keys)), then takes the first step that applies:
+`sghttp.query(name, args)` works out the key (see [Cache keys](queries.md#cache-keys)), then takes the first step that applies:
 
 1. **Fresh in memory.** It resolves immediately with the cached value. No request.
 2. **Stale in memory.** With `staleWhileRevalidate` (the default), it resolves immediately with the cached value and starts a background refresh, unless one is already running. Without it, the query waits for the server.
@@ -32,8 +32,8 @@ An [expired](mutations.md#expire) value skips steps 1 and 2: a plain query waits
 The third argument to `query` changes the steps above:
 
 ```brightscript
-sgquery.query("homePage", args, { revalidate: true })
-sgquery.query("homePage", args, { force: true })
+sghttp.query("homePage", args, { revalidate: true })
+sghttp.query("homePage", args, { force: true })
 ```
 
 - **`revalidate: true`** resolves with the cached value at once, fresh, stale or expired, and checks the server in the background. A different answer reaches [watchers](keeping-data-fresh.md#watching-a-query). Use it when a screen opens and you want its data now, plus a check. With nothing cached, it behaves like a normal fetch.
@@ -41,14 +41,14 @@ sgquery.query("homePage", args, { force: true })
 
 ## Asking ahead
 
-`sgquery.precache(name, args)` starts a query without waiting for it, so the screen that wants the data later finds it in flight or already in memory:
+`sghttp.precache(name, args)` starts a query without waiting for it, so the screen that wants the data later finds it in flight or already in memory:
 
 ```brightscript
 sub init()
-    sgquery.initialize({ baseUrl: "https://api.example.com", parserTask: "AppParserTask" })
+    sghttp.initialize({ baseUrl: "https://api.example.com", parserTask: "AppParserTask" })
     registerQueries()
-    sgquery.precache("menu")                         ' wanted by the first screen, after sign-in checks
-    sgquery.precache("homePage", { slug: "main" })
+    sghttp.precache("menu")                         ' wanted by the first screen, after sign-in checks
+    sghttp.precache("homePage", { slug: "main" })
 end sub
 ```
 
@@ -62,21 +62,21 @@ It does nothing when memory holds a fresh value or a request is already in fligh
 
 ## Reading the cache directly
 
-`sgquery.peek(name, args)` returns the cached value synchronously, or `invalid` if there's nothing in memory. It returns stale and expired values too. It never makes a request, never reads the disk, and doesn't count as a use for eviction.
+`sghttp.peek(name, args)` returns the cached value synchronously, or `invalid` if there's nothing in memory. It returns stale and expired values too. It never makes a request, never reads the disk, and doesn't count as a use for eviction.
 
 ```brightscript
-cached = sgquery.peek("homePage", { slug: "main" })
+cached = sghttp.peek("homePage", { slug: "main" })
 if cached <> invalid then m.rowList.content = cached
 ```
 
 ## Marking everything stale
 
-`sgquery.expireAll()` marks every cached value stale without dropping any. The next query of each one is served from the cache and refreshed in the background. Call it when the app comes back after a long time in the background, and follow it with `refresh()` to update the screens that are open too (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)):
+`sghttp.expireAll()` marks every cached value stale without dropping any. The next query of each one is served from the cache and refreshed in the background. Call it when the app comes back after a long time in the background, and follow it with `refresh()` to update the screens that are open too (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)):
 
 ```brightscript
 sub onResume()
-    sgquery.expireAll()
-    sgquery.refresh()
+    sghttp.expireAll()
+    sghttp.refresh()
 end sub
 ```
 
