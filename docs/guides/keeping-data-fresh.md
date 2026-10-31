@@ -8,7 +8,7 @@ The transport hashes (MD5) the raw body of every cached query's response, on its
 
 - the entry is renewed, and its `ttl` starts again
 - nothing is parsed, nothing is written to disk, and no watcher is notified
-- the [event](debugging.md#events) is `unchanged`
+- the [event](../reference/events-and-stats.md#events) is `unchanged`
 
 That makes short `ttl`s on volatile queries affordable: a check every 30 seconds costs a request, not a parse and a redraw.
 
@@ -61,7 +61,7 @@ end sub
 - **With args**, a watcher hears only the entry those args key to at the moment of the change, using the current scopes and time bucket.
 - **Without args**, it hears every entry of the query.
 - A **first** value never notifies; the query that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
-- The callback runs in the component that called `watch`. Call `unwatch` when that component goes away, because the store holds on to every watcher until you do. `getStats().watchers` counts the live ones.
+- The callback runs in the component that called `watch`. Call `unwatch` when that component goes away, because the store holds on to every watcher until you do.
 
 ### Every change, from one place
 
@@ -92,13 +92,19 @@ end function)
 
 `revalidate` plus a watcher is the usual pair: the query draws the screen now, and the watcher redraws it if the check finds something.
 
-## Refreshing every screen at once
+## Refreshing what's on screen
 
-`sgquery.refresh(name)` sends the request again for every entry of the query that has a watcher, so the screens showing it pick up a change without being reopened; `sgquery.refresh()` does it for everything watched. A mutation's `expires` list calls it for the queries it expires. See [Refreshing what's on screen](mutations.md#refreshing-whats-on-screen).
+Expiry is lazy: nothing is sent until someone asks, so a screen that's already open and watching a query would keep showing the old value until it was reopened. `refresh` closes that gap:
 
-## Coming back from the background
+```brightscript
+sgquery.refresh("favorites")            ' every watched entry of favorites and favorites.*
+sgquery.refresh("favorites", { model })  ' that one, if watched
+sgquery.refresh()                        ' everything watched, e.g. on resume
+```
 
-`sgquery.expireAll()` marks every cached value stale. Each one is served from the cache on its next query and refreshed in the background. To also bring the screens that are open up to date, follow it with `sgquery.refresh()`. See [Caching and freshness](caching.md#marking-everything-stale).
+It sends the request again, now, for every matching entry that has a watcher. Each keeps serving its value meanwhile, and a different answer reaches the watchers. Entries nobody watches are left alone, since nobody would see the result; a `revalidate` query is the way to check one of those. It returns a promise that resolves, with the number of refreshes started, once they've all settled.
+
+A mutation's `expires` list calls it for the queries it expires, so the screens showing them update without asking.
 
 ## Next
 

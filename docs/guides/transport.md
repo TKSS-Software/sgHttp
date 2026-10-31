@@ -8,7 +8,7 @@ The default `Transport` is a Task with:
 
 - **A bounded pool** of `roUrlTransfer` objects (`maxConcurrent`, default 4). Requests beyond that wait in a first-in, first-out queue.
 - **gzip** and HTTPS using the Roku's certificate bundle.
-- **JSON decoding** of successful responses, on the task thread. A body bound for a [parser](parsers.md) is left as text and decoded on the parser task instead, so the decoded body never crosses the render thread.
+- **JSON decoding** of successful responses, on the task thread. A body bound for a [parser](parsers.md) is left as text for the parser task to decode.
 - **Body hashing** (MD5) of cached queries' responses, for [unchanged-payload detection](keeping-data-fresh.md).
 - **Retries** with exponential backoff (1 s, 2 s, 4 s, ...) on network failures and 5xx responses. A `POST` answered with `502` is never retried, because the gateway may have passed it on and repeating it could apply the change twice.
 - **A hard timeout** per request (`timeout`, default 30 seconds). A request with no complete answer in that time fails, and is retried if it has retries left.
@@ -30,10 +30,6 @@ Set these at the top level of `initialize` for the default client, or per client
 | `proxy` | `""` | A debugging proxy as `host:port`; see [Debugging](debugging.md#routing-traffic-through-a-proxy) |
 
 Per query, `timeout` and `request.retries` override the client's values, and `successCodes` changes which statuses count as success (by default 200 to 299).
-
-### What counts as a failure
-
-Any status outside the success codes is a failure: the promise rejects with the response, including its `code` and its `body` as raw text (failure bodies aren't JSON-decoded). For network failures (DNS, connection refused, timeout), `code` is the negative error code `roUrlTransfer` reports, such as `-28` for a timeout. See [Errors](../reference/events-and-stats.md#errors).
 
 ## Replacing the transport
 

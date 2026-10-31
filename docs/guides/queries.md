@@ -34,59 +34,7 @@ Defining a name a second time replaces the first definition and prints a warning
 
 ## Filling the request from args
 
-`{name}` placeholders anywhere in the request are filled from the query's args first, then from the current [scopes](scopes-and-buckets.md). Strings, numbers and booleans fill a placeholder. Arrays, associative arrays and nodes don't.
-
-### Url
-
-```brightscript
-request: { url: "/shows/{showId}" }
-```
-
-A relative url is prefixed with the client's `baseUrl`. A url starting with `http` is used as is. If a placeholder in the url is left unfilled, sgQuery still sends the request (it usually reaches some other route) and prints a warning: `[sgquery] "show" url has an unfilled placeholder: /shows/{showId}`.
-
-### Query string
-
-```brightscript
-request: {
-    url: "/search"
-    query: { q: "{term}", profile_id: "{profile}", sort: "relevance", genre: "{genres}" }
-}
-```
-
-- A parameter whose value is a `{placeholder}` is **dropped** when no arg or scope fills it, or when it fills to an empty string. This is how optional parameters work: `profile_id` above disappears when no profile scope is set.
-- Literal values in the definition (`sort: "relevance"`) are always sent.
-- An array value repeats the parameter: `?genre=drama&genre=comedy`. That happens either with an array literal in the definition, or with a value of exactly `"{name}"` whose arg is an array. An empty array drops the parameter.
-- Numbers and booleans, literal or from args, are sent as their text: `{ page: 2, hd: true }` becomes `?page=2&hd=true`.
-- Names and values are url-escaped by the transport.
-
-### Headers
-
-```brightscript
-request: { url: "/stream/{id}", headers: { "X-Device-Id": "{deviceId}" } }
-```
-
-Header values are filled the same way. Headers shared by every request (auth tokens) belong on the client instead; see [`setHeaders`](../reference/api.md#setheaders).
-
-### Body
-
-```brightscript
-' An associative array: its string values are filled, then it is sent as JSON
-request: { url: "/favorites", method: "POST", body: { slug: "{slug}", source: "home" } }
-
-' A string of exactly "{name}" passes that arg through untouched, objects and arrays included
-request: { url: "/progress", method: "PUT", body: "{progress}" }
-
-' Any other string is filled as text
-request: { url: "/search", method: "POST", body: "q={term}" }
-```
-
-An associative array or array body is sent as JSON, with `Content-Type: application/json` unless the request sets its own. Only the top-level string values of an associative array body are filled; nested objects are sent as they are.
-
-### Method and decoding
-
-`method` defaults to `GET`. `GET` and `HEAD` are sent as such. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or an empty body if there isn't one.
-
-Successful responses are JSON-decoded on the transport task. A body that isn't JSON stays a string. Set `parseJson: false` in the request to always get the raw text.
+`{name}` placeholders in the request are filled from the query's args, then from the current scopes, by the same rules as `fetch`: see [Filling the request](requests.md#filling-the-request). Every arg is also part of the cache key, below.
 
 ## Cache keys
 

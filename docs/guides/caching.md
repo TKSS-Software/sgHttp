@@ -42,7 +42,7 @@ sgquery.query("homePage", args, { force: true })
 ## Failures
 
 - When the request for an entry with no value fails, the entry is dropped and the promise rejects, so the next query tries again.
-- When a **background** refresh fails, the cached value stays and keeps being served. The failure is reported as an `error` [event](debugging.md#events).
+- When a **background** refresh fails, the cached value stays and keeps being served. The failure is reported as an `error` [event](../reference/events-and-stats.md#events).
 - A request still answers its callers when its entry is dropped or expired while it's in flight, but the cache doesn't store the answer. That way a response from before a change never replaces one from after it.
 
 ## Reading the cache directly
@@ -56,11 +56,12 @@ if cached <> invalid then m.rowList.content = cached
 
 ## Marking everything stale
 
-`sgquery.expireAll()` marks every cached value stale without dropping any. The next query of each one is served from the cache and refreshed in the background. Call it when the app comes back after a long time in the background:
+`sgquery.expireAll()` marks every cached value stale without dropping any. The next query of each one is served from the cache and refreshed in the background. Call it when the app comes back after a long time in the background, and follow it with `refresh()` to update the screens that are open too (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)):
 
 ```brightscript
 sub onResume()
     sgquery.expireAll()
+    sgquery.refresh()
 end sub
 ```
 
@@ -72,7 +73,7 @@ Memory is bounded by entry count: `initialize({ maxEntries })`, 100 by default. 
 
 - Entries with a request in flight are never evicted. The cache can briefly go over the cap while many requests run.
 - Eviction drops only the memory copy. A persisted body stays on `cachefs:/` and is served from there by the next query.
-- The cap counts entries, not bytes. An entry can be a small object or a tree of hundreds of nodes. See [Threads and memory](threads-and-memory.md).
+- The cap counts entries, not bytes; see [What the cache holds on to](threads-and-memory.md#what-the-cache-holds-on-to) for queries with large results.
 
 ## Next
 

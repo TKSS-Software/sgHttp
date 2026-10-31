@@ -27,7 +27,7 @@ end sub
 - Setting a scope for the first time drops nothing.
 - Setting it to the value it already has drops nothing.
 - `setScope(name, value, { keep: true })` changes the value without dropping anything. Entries for the old value stay cached and are used again if you switch back.
-- Setting a scope to `invalid` clears it. A query parameter filled only by that scope is then dropped from the url (see [Query string](queries.md#query-string)), which suits values that only some users send.
+- Setting a scope to `invalid` clears it. A query parameter filled only by that scope is then dropped from the url, which suits values that only some users send.
 - `sgquery.invalidateScope(name)` drops a scope's entries without changing its value.
 
 Use strings for scope values. The comparison between the old and new value expects the same type.

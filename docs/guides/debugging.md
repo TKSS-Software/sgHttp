@@ -2,7 +2,7 @@
 
 ## Events
 
-Every cache decision is reported as an event. Observe them from any component:
+Every request and cache decision is reported as an event. Observe them from any component:
 
 ```brightscript
 sgquery.observeEvents("onCacheEvent")
@@ -13,29 +13,7 @@ sub onCacheEvent(event as object)
 end sub
 ```
 
-| `type` | When |
-|---|---|
-| `hit` | A fresh value was served from memory |
-| `stale` | A cached value was served and a background refresh started (a stale value, or any value fetched with `revalidate`) |
-| `dedupe` | The query joined a request already in flight |
-| `resolve` | A value arrived from the network or disk and the query resolved |
-| `unchanged` | The server's answer matched the cached value; the entry was renewed |
-| `error` | A request or parse failed |
-
-Each event is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. The full shapes are in [Events, stats and errors](../reference/events-and-stats.md).
-
-### Sending the user to sign in on a 401
-
-Error events say whether the request carried the client's shared headers (`auth`), so an app can tell an expired token from a public endpoint's failure:
-
-```brightscript
-sub onCacheEvent(event as object)
-    e = event.getData()
-    if e.type = "error" and e.code = 401 and e.auth then m.top.signedOut = true
-end sub
-```
-
-Stop observing with `sgquery.unobserveEvents()`.
+The event types and their fields are in [Events](../reference/events-and-stats.md#events). Stop observing with `sgquery.unobserveEvents()`.
 
 ## Printing every event
 

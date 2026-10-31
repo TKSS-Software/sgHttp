@@ -26,7 +26,7 @@ end function)
 
 `mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call site that reads as a write can't quietly cache. `query` also runs `cache: false` queries; use it for per-call resources that aren't writes, such as a stream url. For a one-off call that isn't worth a definition, or where you need the status and headers, see [Requests](requests.md).
 
-When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](#refreshing-whats-on-screen)). Nothing is applied when it fails.
+When a mutation succeeds, sgQuery applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
 
 ## Showing the change at once
 
@@ -49,7 +49,7 @@ promises.chain(sgquery.mutate("favorites.add", { slug: "abc" }, {
 end function)
 ```
 
-Every screen watching `favorites.check` for that title flips at once; if the server says no, they flip back. A write is only undone if its value is still the one in the cache: a newer `set`, or a response that landed since, stays. On success the mutation's `expires` applies as usual, so the server confirms the value the next time it's queried.
+Every screen watching `favorites.check` for that title flips at once; if the server says no, they flip back. A write is only undone if its value is still the one in the cache: a newer `set`, or a response that landed since, stays. On success the mutation's `expires` applies as usual, and the refresh it starts brings the server's confirmation to every screen watching those queries.
 
 For a query with pages, `set` replaces the first page; the pages after it are kept when the first page's cursor is unchanged, as for a refresh (see [Pages](pagination.md)).
 
@@ -66,21 +66,7 @@ After a write, some cached data is out of date. sgQuery has two ways to handle t
 - A disk copy saved before the expiry is not served.
 - A request already in flight still answers its own callers, but its answer isn't stored and later queries don't join it.
 
-This is what a mutation's `expires` list does, and it's usually the right choice. The screen behind a dialog can keep showing its data while the next screen that asks gets fresh data. Expired entries that have a watcher are also refreshed right away; see below.
-
-### Refreshing what's on screen
-
-Expiry is lazy: nothing is sent until someone asks. A screen that's already open and watching a query would keep showing the old value until it was reopened. `refresh` closes that gap:
-
-```brightscript
-sgquery.refresh("favorites")            ' every watched entry of favorites and favorites.*
-sgquery.refresh("favorites", { model })  ' that one, if watched
-sgquery.refresh()                        ' everything watched, e.g. on resume
-```
-
-It sends the request again, now, for every matching entry that has a [watcher](keeping-data-fresh.md#watching-a-query). Each keeps serving its value meanwhile, and a different answer reaches the watchers. Entries nobody watches are left alone, since nobody would see the result; `query(name, args, { revalidate: true })` is the way to check one of those. It returns a promise that resolves, with the number of refreshes started, once they've all settled.
-
-A mutation's `expires` list does this for you: the queries it names are expired, and the ones on screen are refreshed. With an [optimistic write](#showing-the-change-at-once), that's the server's confirmation arriving on every screen that showed the change, without any screen asking.
+This is what a mutation's `expires` list does, and it's usually the right choice. The screen behind a dialog can keep showing its data while the next screen that asks gets fresh data.
 
 ### Invalidate
 

@@ -71,8 +71,6 @@ sgquery.initialize({ version: "2" })
 - `invalidate()` deletes everything in this app's folder. Other apps' folders are never touched.
 - Changing a [scope](scopes-and-buckets.md#changing-a-scope) deletes the files of every query that lists it.
 
-Eviction from memory doesn't delete files. The next query reads the file back.
-
 ## Turning it off
 
 `initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`.
@@ -81,7 +79,6 @@ Eviction from memory doesn't delete files. The next query reads the file back.
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
 - Before the per-app folders, bodies were stored directly under `cachefs:/sgquery/<query name>/`. Those folders are deleted at start-up, once the first disk read has answered, as are the same app's other version folders. Clean-up never delays a cold start.
-- All file access runs on the `Persistence` task. `roFileSystem` can't be created on the render thread.
 - `persist` has no effect on `cache: false` queries.
 
 ## Next

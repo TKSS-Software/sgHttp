@@ -2,7 +2,7 @@
 
 ## Events
 
-Delivered to [`observeEvents`](api.md#observeevents) callbacks as `event.getData()`. The store's `lastEvent` field holds the latest one.
+Delivered to `observeEvents` callbacks as `event.getData()`. The store's `lastEvent` field holds the latest one.
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -29,11 +29,11 @@ A query whose name was never defined rejects without an event.
 
 ## Change events
 
-Delivered to [`watch`](api.md#watch) callbacks as `{ name, key, source, value }` and to [`observeChanges`](api.md#observechanges) callbacks as `{ name, key, source }`. Sent when a cached value is replaced by different content. Never sent for a first value, an unchanged response, an expiry or an invalidation.
+Delivered to `watch` callbacks as `{ name, key, source, value }` and to `observeChanges` callbacks as `{ name, key, source }`, when a cached value is replaced by different content.
 
 ## Stats
 
-Returned by [`getStats`](api.md#getstats). Counters run from `initialize`.
+Returned by `getStats`. Counters run from `initialize`.
 
 | Field | Meaning |
 |---|---|

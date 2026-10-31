@@ -28,44 +28,9 @@ Some data is asked for by more than one screen, more than once. For that, sgQuer
 
 Each of these is opt-in, per definition. A request you never define is never cached, and `fetch` behaves the same whether or not the app uses queries anywhere else.
 
-## Enough talk, show me some code
-
-Set it up once, in the main scene:
-
-```brightscript
-import "pkg:/source/roku_modules/sgquery/sgquery.brs"
-
-sub init()
-    sgquery.initialize({ baseUrl: "https://api.example.com" })
-end sub
-```
-
-Then, from any component that imports `sgquery.brs`:
-
-```brightscript
-' GET
-promises.chain(sgquery.fetch("/home/main"), m).then(function(response as object, m as object) as dynamic
-    m.titleLabel.text = response.body.rows[0].title
-    return invalid
-end function).catch(function(error as object, m as object) as dynamic
-    print "home failed: "; error.code   ' the HTTP status, or negative for a network failure
-    return invalid
-end function)
-
-' POST, with a body sent as JSON
-sgquery.fetch({ url: "/favorites", method: "POST", body: { slug: "pilot" } })
-
-' After sign-in: a header on every request from now on
-sgquery.setHeaders({ Authorization: "Bearer " + token })
-```
-
-Each request is sent from a pooled task thread, with retries and a timeout, and its JSON is decoded there. The promise resolves on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. Nothing is remembered between calls.
-
-That is the HTTP client, and there is nothing more to set up.
-
 ## Optionally, name a request
 
-If the home page is wanted by several screens, define it:
+With `sgquery.initialize({ baseUrl })` in the main scene, `fetch` works from any component (the [quick start](quick-start.md) walks through it). If the home page is wanted by several screens, define it:
 
 ```brightscript
 sgquery.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })

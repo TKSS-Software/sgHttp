@@ -163,7 +163,7 @@ Marks every cached value stale. Each is served from the cache on its next query 
 sgquery.refresh(name = invalid as dynamic, args = invalid as dynamic) as object
 ```
 
-Sends the request again, now, for every entry of the query and its dotted descendants that has a [watcher](#watch); with `args`, that one entry when watched; with no name, every watched entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), as are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/mutations.md#refreshing-whats-on-screen).
+Sends the request again, now, for every entry of the query and its dotted descendants that has a [watcher](#watch); with `args`, that one entry when watched; with no name, every watched entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), as are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/keeping-data-fresh.md#refreshing-whats-on-screen).
 
 ## setScope
 

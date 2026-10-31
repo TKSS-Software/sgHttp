@@ -4,7 +4,7 @@ Most channels talk to one API, and need nothing from this page. When yours talks
 
 ## The default client
 
-The top-level settings of `initialize` (`baseUrl`, `headers`, `baseHeaders`, `proxy`, `maxConcurrent`, `timeout`, `retries`, `httpVersion`, `transport`) configure the **default client**, named `"default"`. Every definition that doesn't name a client uses it.
+The top-level settings of `initialize` (the [transport settings](transport.md#settings), plus `transport`) configure the **default client**, named `"default"`. Every definition that doesn't name a client uses it.
 
 ## Adding clients
 
@@ -19,7 +19,7 @@ sgquery.initialize({
 })
 ```
 
-A client takes the same settings as the default client: `baseUrl`, `headers`, `baseHeaders`, `proxy`, `maxConcurrent`, `timeout`, `retries`, `httpVersion` and `transport`. Each client:
+A client takes the same settings as the default client. Each client:
 
 - gets **its own transport** task, with its own connection pool and queue, so a slow server can't hold up another server's requests;
 - has **its own shared headers**, so each server's auth token stays with that server;
@@ -45,7 +45,7 @@ sgquery.setHeaders({ Authorization: "Bearer " + token })                  ' the 
 sgquery.setHeaders({ Authorization: "Bearer " + partnerToken }, "partner")
 ```
 
-`setHeaders` merges into the client's shared headers, and a header set to `invalid` is removed (`setHeaders({ Authorization: invalid })` on sign-out). A definition with `auth: false` leaves its client's shared headers out, for example a request to a third-party host that must not receive your token. `baseHeaders` are sent with every request of the client, even those with `auth: false`.
+Shared headers, `auth: false` and `baseHeaders` work per client as described in [Auth](requests.md#auth-headers-on-every-request).
 
 ## What stays shared
 
@@ -53,7 +53,7 @@ The cache, scopes, watchers, `expireAll` and `invalidate()` cover every client. 
 
 ## Telling clients apart
 
-- Every [event](debugging.md#events) carries `client`, so an app can react to one server's `401` without guessing from query names.
+- Every [event](../reference/events-and-stats.md#events) carries `client`, so an app can react to one server's `401` without guessing from query names.
 - `getStats().clients.<name>` counts each client's `requests`, `errors` and `active` (requests in flight).
 
 ```brightscript

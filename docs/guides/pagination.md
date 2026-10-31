@@ -37,13 +37,14 @@ end function)
 
 ## Defining the pages
 
-`pages` has three keys:
+`pages` has these keys:
 
 | Key | Meaning |
 |---|---|
 | `next` | The path in a page's **value** (the parser's result, or the decoded body) to the cursor of the page after it: a url, a page number, a token. Dotted for nested fields (`"paging.next"`). The last page leaves it missing, empty or `false`. |
 | `arg` | The arg the cursor is passed as when the next page is requested. Default `"next"`. |
 | `request` | The request for pages after the first, when it differs from the definition's. Default: the definition's `request`. |
+| `byPosition` | `true` for an API that cuts pages by position, so an expired later page is read again rather than kept. See below. Default `false`. |
 
 The next page's args are the first page's args plus `arg`, so a parser that needs the original args (the genre, the model) still gets them, and the request's other placeholders still fill.
 

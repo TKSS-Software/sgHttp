@@ -50,7 +50,7 @@ Import the same file into any component that sends requests:
 import "pkg:/source/roku_modules/sgquery/sgquery.brs"
 ```
 
-Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache. Call sgQuery from components on the render thread, not from inside Task functions.
+Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache.
 
 ## Editor support
 

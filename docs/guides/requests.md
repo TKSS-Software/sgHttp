@@ -39,15 +39,64 @@ sgquery.fetch({
 }, { id: "abc", profile: "p-1", note: "later" })
 ```
 
-- **`method`** defaults to `GET`. `GET` and `HEAD` are sent as such. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or an empty body if there isn't one.
-- **`body`**: an associative array or array is sent as JSON, with `Content-Type: application/json` unless the spec sets its own. A string is sent as text.
-- **`query`**: appended as a query string, url-escaped. Numbers and booleans become their text (`?page=2&hd=true`). An array value repeats the parameter (`?genre=drama&genre=comedy`).
-- **`headers`**: added to the client's shared headers for this request.
-- **`parseJson: false`** leaves the response body as text instead of decoding it.
+A spec takes the same keys as a definition's `request` (`url`, `method`, `headers`, `query`, `body`, `parseJson`), plus the [per-request settings](#per-request-settings) below.
 
-### Placeholders
+## Filling the request
 
-`{name}` anywhere in the url, query, headers or body is filled from the second argument, so one spec can serve many calls. A query-string parameter whose placeholder has nothing to fill it is dropped, which is how optional parameters work. A body of exactly `"{name}"` passes that arg through untouched, objects and arrays included. The full rules are in [Queries and keys](queries.md#filling-the-request-from-args); they're the same for `fetch` and for definitions.
+`{name}` placeholders anywhere in the url, query, headers or body are filled from the second argument, then from the current [scopes](scopes-and-buckets.md#scopes), so one spec can serve many calls. Strings, numbers and booleans fill a placeholder. Arrays, associative arrays and nodes don't. The rules are the same for `fetch` and for a definition's `request`, whose placeholders are filled from the query's args.
+
+### Url
+
+```brightscript
+request: { url: "/shows/{showId}" }
+```
+
+If a placeholder in the url is left unfilled, sgQuery still sends the request (it usually reaches some other route) and prints a warning: `[sgquery] "show" url has an unfilled placeholder: /shows/{showId}`.
+
+### Query string
+
+```brightscript
+request: {
+    url: "/search"
+    query: { q: "{term}", profile_id: "{profile}", sort: "relevance", genre: "{genres}" }
+}
+```
+
+- A parameter whose value is a `{placeholder}` is **dropped** when no arg or scope fills it, or when it fills to an empty string. This is how optional parameters work: `profile_id` above disappears when no profile scope is set.
+- Literal values (`sort: "relevance"`) are always sent.
+- An array value repeats the parameter: `?genre=drama&genre=comedy`. That happens either with an array literal in the definition, or with a value of exactly `"{name}"` whose arg is an array. An empty array drops the parameter.
+- Numbers and booleans, literal or from args, are sent as their text: `{ page: 2, hd: true }` becomes `?page=2&hd=true`.
+- Names and values are url-escaped by the transport.
+
+### Headers
+
+```brightscript
+request: { url: "/stream/{id}", headers: { "X-Device-Id": "{deviceId}" } }
+```
+
+Header values are filled the same way, and added to the client's shared headers for this request. Headers every request needs (auth tokens) belong on the client instead; see [Auth](#auth-headers-on-every-request).
+
+### Body
+
+```brightscript
+' An associative array: its string values are filled, then it is sent as JSON
+request: { url: "/favorites", method: "POST", body: { slug: "{slug}", source: "home" } }
+
+' A string of exactly "{name}" passes that arg through untouched, objects and arrays included
+request: { url: "/progress", method: "PUT", body: "{progress}" }
+
+' Any other string is filled as text
+request: { url: "/search", method: "POST", body: "q={term}" }
+```
+
+An associative array or array body is sent as JSON, with `Content-Type: application/json` unless the request sets its own. Only the top-level string values of an associative array body are filled; nested objects are sent as they are.
+
+### Method and decoding
+
+`method` defaults to `GET`. `GET` and `HEAD` are sent as such. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or an empty body if there isn't one.
+
+Successful responses are JSON-decoded on the transport task. A body that isn't JSON stays a string. `parseJson: false` always leaves the raw text.
+
 
 ## Auth: headers on every request
 
@@ -78,7 +127,7 @@ The promise resolves with the transport's whole response:
 
 ## Building the body off the render thread
 
-Decoding JSON happens on the transport task, but whatever you do with `response.body` in `then` runs on the render thread. For a small body that's fine. For a large one that becomes a ContentNode tree, name a **parser** in the spec, and the body is turned into the value on a task thread before the promise resolves:
+Whatever you do with `response.body` in `then` runs on the render thread. For a small body that's fine. For a large one that becomes a ContentNode tree, name a **parser** in the spec, and the body is turned into the value on a task thread before the promise resolves:
 
 ```brightscript
 promises.chain(sgquery.fetch({ url: "/home/main", parser: "HomePageParser" }), m).then(function(response as object, m as object) as dynamic
@@ -87,13 +136,13 @@ promises.chain(sgquery.fetch({ url: "/home/main", parser: "HomePageParser" }), m
 end function)
 ```
 
-A parser is any class with `parse(body, args)`; `args` are the second argument to `fetch`. Parsers live on a Task component of the app's, named once in `initialize({ parserTask: "AppParserTask" })`, whose `getParser(name)` maps names to instances. sgQuery runs two copies of it so one large body doesn't hold up the rest. A `fetch` picks a parser by name; it doesn't pick the task. The body reaches the parser task as text and is decoded there, so a large body is never copied through the render thread as a decoded tree. If no `parserTask` was configured, a spec that names a parser rejects with a message saying so. Writing the parser and the task is covered in [Parsers](parsers.md).
+Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 ## Failures
 
 The promise rejects with the same shape plus `message` when the status is outside `successCodes` (default 200–299) or the request couldn't complete. `code` is the HTTP status, or negative for a network failure: the error `roUrlTransfer` reports, such as `-28` for a timeout. Failure bodies are left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried with backoff (1 s, 2 s, 4 s) on network failures and `5xx` answers, within the per-request `timeout`. A `POST` answered with `502` is never retried, because the gateway may have passed it on. The defaults and how to change them are in [The transport](transport.md).
+Before a promise rejects, the transport has already retried network failures and `5xx` answers. When it retries, and how to change that, is in [The transport](transport.md).
 
 ### Reacting to a 401 everywhere
 
@@ -108,7 +157,7 @@ sub onRequestEvent(event as object)
 end sub
 ```
 
-`e.auth` says whether the request carried the shared headers, so a public endpoint's 401 isn't mistaken for an expired token. See [Debugging](debugging.md#events).
+`e.auth` says whether the request carried the shared headers, so a public endpoint's 401 isn't mistaken for an expired token. Every event field is in [Events](../reference/events-and-stats.md#events).
 
 ## More than one server
 

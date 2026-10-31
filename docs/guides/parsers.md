@@ -60,7 +60,6 @@ sgquery.fetch({ url: "/shows/{id}", parser: "ShowParser" }, { id: "abc" })
 - An unknown name (`getParser` returns `invalid`) rejects with `sgquery parser: unknown parser "..."`.
 - Naming a parser when no `parserTask` was configured rejects with a message saying so.
 - A request names a parser, not a task: any of the app's parser tasks can run it.
-- The parser gets the decoded body, as before. The text is decoded on the parser task, so a large body never passes through the render thread as a decoded tree.
 - Without a `parser`, a query resolves with the decoded body itself, and a `fetch`'s `response.body` is the decoded body.
 
 ## Nodes come back by reference
@@ -75,7 +74,7 @@ ContentNode trees built in the parser are handed to the render thread by referen
 sgquery.initialize({ parserTask: "AppParserTask", parserThreads: 3 })
 ```
 
-Each copy calls `getParser` for itself, so parsers must not share state through the task. Keep parsers to building the value; do any further work where the value is used.
+Keep parsers to building the value; do any further work where the value is used.
 
 ## Next
 

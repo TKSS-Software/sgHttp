@@ -23,7 +23,7 @@ npm run build
 
 On the first run this installs the package's own tools. It then copies the `promises` dependency into `src/` for compilation, compiles `src/` to `dist/` (`.brs` plus `.d.bs` type definitions), and strips the dependency copies and source maps from `dist/`. The consuming app's ropm install supplies those itself.
 
-ropm installs the package from `dist/`. After a change, build, then run `npx ropm copy` in the app to pick it up.
+ropm installs the package from `dist/`; [Installation](installation.md#install-with-ropm) covers picking up a new build in the app.
 
 ## Test
 

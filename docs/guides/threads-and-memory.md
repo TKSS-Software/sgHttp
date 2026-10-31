@@ -13,11 +13,9 @@ The store does only bookkeeping, so a query costs the render thread very little:
 
 A decoded body that crosses from one thread to another is copied, field by field, and the copy costs time on the render thread. A body that goes to a parser therefore travels as the text the server sent, which copies cheaply, and is decoded on the parser task. Only the parser's result reaches the render thread, and ContentNodes in it aren't copied.
 
-`roFileSystem` can't be created on the render thread. Never add file access to the store.
-
 ## One store for the whole app
 
-`initialize` attaches the store to the scene as a field, `__sgquery`, and every sgQuery function finds it there. Every component that imports `sgquery.brs` uses the same store, the same cache and the same tasks. There is nothing to pass between components.
+`initialize` attaches the store to the scene as a field, `__sgquery`, and every sgQuery function finds it there, so every component that imports `sgquery.brs` uses the same store, cache and tasks, with nothing to pass between them.
 
 Call sgQuery from components on the render thread. Task functions shouldn't call it.
 
@@ -45,8 +43,6 @@ The `maxEntries` cap counts entries, not bytes. A hundred small objects and a hu
 - pass only the args that identify the data, so one screen doesn't create many keys,
 - or lower `maxEntries` for the whole app.
 
-Requests in flight are never evicted, so the cache can briefly exceed the cap while many requests run.
-
 ## Cleaning up
 
 Screens and managers that watch or observe should undo it when they go away:
@@ -57,8 +53,6 @@ sub onClose()
     sgquery.unobserveEvents()
 end sub
 ```
-
-`getStats().watchers` is the quickest way to spot a missing `unwatch`.
 
 `sgquery.destroy()` clears the cache, stops every task and removes the store from the scene, for example when signing out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `invalidate()` first to clear that too.
 
