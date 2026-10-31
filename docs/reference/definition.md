@@ -34,7 +34,7 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 | Key | Default | Meaning |
 |---|---|---|
 | `cache` | `true` | `false` for mutations and per-call resources: the request is sent and parsed, but its result is never stored or shared |
-| `ttl` | `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, invalidated or marked stale by `expireAll`. |
+| `ttl` | the response's `Cache-Control`, else `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, invalidated or marked stale by `expireAll`. See [Freshness from the server](../guides/caching.md#freshness-from-the-server). |
 | `staleWhileRevalidate` | `true` | Return a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
 | `pages` | none | `{ next, arg, request, byPosition }`: makes this a query with pages. See [Pages](../guides/pagination.md#defining-the-pages). |

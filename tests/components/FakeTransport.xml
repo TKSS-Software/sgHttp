@@ -13,6 +13,8 @@
         <function name="answer" />
         <function name="answerBody" />
         <function name="answerNext" />
+        <function name="answerNextWith" />
+        <function name="answerWith" />
         <function name="fail" />
         <function name="requestAt" />
         <function name="promiseIdAt" />

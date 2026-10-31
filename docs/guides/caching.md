@@ -8,12 +8,37 @@ Each cached value is either **fresh** or **stale**. A fresh value is returned fr
 
 | `ttl` | Fresh for |
 |---|---|
-| omitted | the store default, `initialize({ defaultTtl })`, which is 300 seconds |
+| omitted | what the response's `Cache-Control` asks for (see below), else the store default, `initialize({ defaultTtl })`, which is 300 seconds |
 | `0` | no time at all: every query after the first sends a request to check the server |
 | positive | that many seconds |
 | negative | until it is expired, invalidated, or marked stale by `expireAll` |
 
 A value loaded from disk counts as fetched when it was first saved, not when it was loaded. So a body saved an hour ago is already stale with a `ttl` of 300.
+
+### Freshness from the server
+
+A definition without a `ttl` takes its freshness from the response's `Cache-Control` header, so the server can change it without an app release:
+
+- `max-age=N` keeps the value fresh for N seconds, less the response's `Age` when it has one.
+- `no-cache` makes the value stale at once, like `ttl: 0`: it's still returned from memory while the server is checked.
+- `no-store` keeps the body off the disk, whatever `persist` says. It's still cached in memory.
+
+A definition's own `ttl` wins over the header. A response with neither gets `defaultTtl`. The `max-age` is saved with a disk copy, so the next launch judges the copy the same way.
+
+For example, a guide whose freshness the server decides, leaving `ttl` out:
+
+```brightscript
+sghttp.define("guide", { request: { url: "/guide/{channel}" }, persist: true })
+```
+
+If the server answers with
+
+```
+Cache-Control: max-age=120
+Age: 30
+```
+
+the value is fresh for 90 seconds. Queries in that time are returned from memory with no request; after it, a query is still returned from memory and a background request checks the server. A copy saved to disk carries the 90 seconds too, so a launch 10 minutes later checks the server rather than trusting the copy. If the server later answers with `Cache-Control: no-store`, the guide is cached in memory but never written to disk again, and `Cache-Control: no-cache` makes every query after the first check the server. The app's code doesn't change in any of these cases.
 
 ## What a query does
 

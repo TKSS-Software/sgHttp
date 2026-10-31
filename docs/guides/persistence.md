@@ -15,7 +15,7 @@ sghttp.define("homePage", {
 
 The **raw body** is stored, not the parsed value, because ContentNode trees can't be written to a file. A body read from disk goes through the parser again, on the parser task.
 
-Each file starts with one line of JSON holding the time the body was saved, its hash, and any `ETag` / `Last-Modified` validators. The body follows, exactly as the server sent it. A later refresh of a disk-loaded value can therefore still detect an unchanged body and send [conditional](keeping-data-fresh.md#conditional-requests-conditional-true) headers.
+Each file starts with one line of JSON holding the time the body was saved, its hash, the freshness its `Cache-Control` asked for, and any `ETag` / `Last-Modified` validators. A response with `Cache-Control: no-store` is not written at all. The body follows, exactly as the server sent it. A later refresh of a disk-loaded value can therefore still detect an unchanged body and send [conditional](keeping-data-fresh.md#conditional-requests-conditional-true) headers.
 
 When a file is written or read, the render thread decodes only that first line; the body stays a string there. A body with a parser goes from the disk to the parser task as text and is decoded there. A body without a parser is decoded on the render thread, where its value is needed anyway.
 

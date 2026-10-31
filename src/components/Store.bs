@@ -229,6 +229,8 @@ function normalize(name as string, definition as object) as object
         client: clientName
         pages: normalizePages(definition.pages)
         priority: priorityLevel(definition.priority, "normal")
+        ' Without a ttl of its own, a response's Cache-Control sets the freshness (see ttlFor)
+        ttlGiven: definition.ttl <> invalid
     }
     ' ttl: invalid -> store default; negative -> fresh until invalidated
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
@@ -842,6 +844,7 @@ function startFetch(definition as object, key as string, args as object, now as 
                 m.stats.diskHits++
                 context.source = "disk"
                 context.persistedAt = envelope.storedAt
+                context.maxAge = envelope.maxAge
                 context.hash = asString(envelope.hash)
                 context.etag = asString(envelope.etag)
                 context.lastModified = asString(envelope.lastModified)
@@ -898,6 +901,7 @@ sub startNetwork(context as object)
         context.response = response
         context.etag = headerValue(response.headers, "etag")
         context.lastModified = headerValue(response.headers, "last-modified")
+        context.maxAge = cacheControlTtl(response.headers)
         entry = m.cache[context.key]
         hasValue = entry <> invalid and entry.hasValue
         if response.notModified = true then
@@ -915,7 +919,7 @@ sub startNetwork(context as object)
         end if
         context.body = response.body
         ' Only an answer the entry will keep is stored: not one from before a drop or expire
-        if context.definition.persist and currentEntry(context) <> invalid then writePersisted(context.key, bodyText(response), context)
+        if context.definition.persist and currentEntry(context) <> invalid and not cacheControlNoStore(response.headers) then writePersisted(context.key, bodyText(response), context)
         runParseStage(context)
         return invalid
     end function).catch(function(error as dynamic, context as object) as dynamic
@@ -1091,7 +1095,7 @@ sub settleValue(context as object, value as dynamic)
     entry.etag = asString(context.etag)
     entry.lastModified = asString(context.lastModified)
     entry.storedAt = now
-    ttl = definition.ttl
+    ttl = ttlFor(definition, context)
     if context.source = "disk" and (type(context.persistedAt) = "roInt" or type(context.persistedAt) = "roInteger") then
         ' A disk value counts as stored when it was fetched, so it may already be stale
         entry.storedAt = context.persistedAt
@@ -1141,7 +1145,8 @@ sub settleUnchanged(context as object)
     if asString(context.etag) <> "" then entry.etag = context.etag
     if asString(context.lastModified) <> "" then entry.lastModified = context.lastModified
     entry.storedAt = nowSeconds()
-    entry.freshUntil = (definition.ttl < 0) ? 2147483647 : entry.storedAt + definition.ttl
+    ttl = ttlFor(definition, context)
+    entry.freshUntil = (ttl < 0) ? 2147483647 : entry.storedAt + ttl
     m.stats.unchanged++
     emit("unchanged", definition.name, key, context.source, context.startedAt.totalMilliseconds())
     finishLink(context, true)
@@ -1701,7 +1706,7 @@ end function
 ' tell an unchanged response and send the validators
 sub writePersisted(key as string, body as dynamic, meta = {} as object)
     if not isNonEmptyString(body) or not isNode(m.persistence) then return
-    header = { format: ENVELOPE_FORMAT, version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified), decode: meta.decode <> false }
+    header = { format: ENVELOPE_FORMAT, version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified), decode: meta.decode <> false, maxAge: isWholeNumber(meta.maxAge) ? meta.maxAge : -1 }
     text = formatJson(header) + chr(10) + body
     if text <> "" then
         m.persistence.callFunc("execute", { type: "write", path: persistPath(key), text: text })
@@ -1740,6 +1745,34 @@ sub clearPersistedQuery(name as string, descendants as boolean)
 end sub
 
 '#endregion
+
+' How long a value stays fresh: the definition's ttl when it gives one, else what the
+' response's Cache-Control asked for (kept with a disk copy), else the store default
+function ttlFor(definition as object, context as object) as integer
+    if definition.ttlGiven then return definition.ttl
+    if isWholeNumber(context.maxAge) and context.maxAge >= 0 then return context.maxAge
+    return definition.ttl
+end function
+
+' The freshness a response's Cache-Control asks for, in seconds: max-age less the Age the
+' response already has, or 0 for no-cache. -1 when the header says nothing usable.
+function cacheControlTtl(headers as dynamic) as integer
+    control = lcase(headerValue(headers, "cache-control"))
+    if control = "" then return -1
+    if control.instr("no-cache") >= 0 then return 0
+    match = createObject("roRegex", "(?:^|[,\s])max-age=(\d+)", "").match(control)
+    if match.count() < 2 then return -1
+    ttl = match[1].toInt()
+    age = headerValue(headers, "age").trim()
+    if createObject("roRegex", "^\d+$", "").isMatch(age) then ttl = ttl - age.toInt()
+    if ttl < 0 then ttl = 0
+    return ttl
+end function
+
+' Whether the response's Cache-Control forbids keeping it on disk
+function cacheControlNoStore(headers as dynamic) as boolean
+    return lcase(headerValue(headers, "cache-control")).instr("no-store") >= 0
+end function
 
 ' A response header by name, whatever case the server sent it in
 function headerValue(headers as dynamic, name as string) as string

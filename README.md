@@ -74,7 +74,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 **The query cache**
 
 - Define an endpoint once, query it by name from any component
-- One shared cache, with request de-duplication and stale-while-revalidate
+- One shared cache, with request de-duplication, stale-while-revalidate, and freshness from the definition's `ttl` or the server's `Cache-Control`
 - Precaching, so the request for the data a screen needs can be started before the screen opens
 - Parsers that build ContentNode trees on a task thread
 - Persistence to `cachefs:/`, so the last response is returned on a cold start before the network responds

@@ -1459,6 +1459,99 @@ namespace tests
             end function)
         end function
 
+        @describe("Cache-Control")
+
+        @async
+        @it("takes freshness from Cache-Control when the definition gives no ttl")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "items.server", { request: { url: "/server/{id}" } })
+            first = m.store.callFunc("_query", "items.server", { id: "1" }, {})
+            m.fake.callFunc("answerWith", 0, "a", { "Cache-Control": "max-age=600" })
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Fresh for 600 seconds: a second query sends nothing
+                suite.store.callFunc("_query", "items.server", { id: "1" }, {})
+                suite.assertEqual(suite.fake.requestCount, 1)
+                ' Its max-age already used up by Age: stale at once, so the next query checks
+                second = suite.store.callFunc("_query", "items.server", { id: "2" }, {})
+                suite.fake.callFunc("answerWith", 1, "b", { "cache-control": "public, max-age=100", "Age": "100" })
+                return second
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_query", "items.server", { id: "2" }, {})
+                suite.assertEqual(suite.fake.requestCount, 3)
+                ' no-cache: every query checks
+                third = suite.store.callFunc("_query", "items.server", { id: "3" }, {})
+                suite.fake.callFunc("answerWith", 3, "c", { "Cache-Control": "no-cache" })
+                return third
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_query", "items.server", { id: "3" }, {})
+                suite.assertEqual(suite.fake.requestCount, 5)
+                ' A definition with a ttl of its own ignores the header
+                fourth = suite.query("1")
+                suite.fake.callFunc("answerWith", 5, "d", { "Cache-Control": "max-age=0" })
+                return fourth
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.query("1")
+                suite.assertEqual(suite.fake.requestCount, 6)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("keeps a no-store response off the disk")
+        function _()
+            m.makePersistingStore()
+            m.fake.callFunc("answerNextWith", "a", { "Cache-Control": "no-store" })
+            promises.chain(m.query("1"), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fake.callFunc("answerNext", "b")
+                return suite.query("2")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' Item 1 was evicted from memory, and has no disk copy to come back from
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("keeps the server's max-age with a disk copy")
+        function _()
+            m.makePersistingStore()
+            m.store.callFunc("_define", "items.server", { request: { url: "/server/{id}" }, persist: true })
+            m.fake.callFunc("answerNextWith", "a", { "Cache-Control": "max-age=0" })
+            promises.chain(m.store.callFunc("_query", "items.server", { id: "1" }, {}), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fake.callFunc("answerNext", "b")
+                return suite.query("2")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' Back from disk: stale at once by the server's max-age, so it is checked again
+                suite.fake.callFunc("answerNext", "c")
+                return suite.store.callFunc("_query", "items.server", { id: "1" }, {})
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("priorities")
 
         @async

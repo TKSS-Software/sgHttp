@@ -43,7 +43,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `version` | `"1"` | Cache version; change it to stop every body on disk from being read. Rarely needed: app releases, servers and definition changes already keep bodies apart. |
 | `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sghttp/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
 | `maxEntries` | 100 | In-memory entry cap |
-| `defaultTtl` | 300 | Seconds, for definitions without a `ttl` |
+| `defaultTtl` | 300 | Seconds, for definitions without a `ttl` whose responses carry no `Cache-Control: max-age` |
 | `debug` | `false` | Print every event and change to the console with its cache key, as `[sghttp] <type> <name> via <source> (<ms>ms) <key>`. See [Debugging](../guides/debugging.md#printing-every-event). |
 | `store` | none | An existing `Store` node to attach instead of creating one (tests) |
 | `persistence` | none | An existing `Persistence` node to run file operations on, left running by `destroy` (tests; see [Testing](../guides/testing.md#things-to-know)) |
