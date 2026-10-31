@@ -79,7 +79,7 @@ The folders of queries not defined by then are left alone, so a query defined la
 
 ## Turning it off
 
-`initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`.
+`initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`. The Persistence task starts, and creates the app's folder on `cachefs:/`, when the first such query is defined, or when `invalidate` or `invalidateScope` is called, since copies stored by an earlier launch may be on disk. An app that only sends requests never starts it.
 
 ## Things to know
 

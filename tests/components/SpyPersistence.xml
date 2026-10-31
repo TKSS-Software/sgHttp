@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A persistence task that does nothing but count the operations the store sends it, so a
+     spec can tell whether the store used the disk -->
+<component name="SpyPersistence" extends="Node">
+    <interface>
+        <field id="operations" type="integer" value="0" />
+        <function name="execute" />
+    </interface>
+</component>

@@ -17,6 +17,7 @@ namespace tests
         public legacyPath = ""
         public slow = invalid
         public authWatcher = invalid
+        public spy = invalid
 
         ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
         function makeStore()
@@ -1682,6 +1683,35 @@ namespace tests
                 ' Gone from the held requests: renewing the headers sends nothing
                 suite.store.callFunc("_reauthorize", { Authorization: "Bearer new" }, "")
                 suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("the disk")
+
+        @async
+        @it("is never touched by an app that only sends requests, and is set up by the first query that persists")
+        function _()
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.spy = createObject("roSGNode", "SpyPersistence")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persistence: m.spy })
+            m.slow = m.store.callFunc("_fetch", "/me", {})
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" } })
+            m.fake.callFunc("answer", 0, "me")
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.spy.operations, 0)
+                ' Its folders are made once, when a query that persists is defined
+                suite.store.callFunc("_define", "home", { request: { url: "/home" }, persist: true })
+                suite.assertEqual(suite.spy.operations, 2)
+                suite.store.callFunc("_define", "menu", { request: { url: "/menu" }, persist: true })
+                suite.assertEqual(suite.spy.operations, 2)
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

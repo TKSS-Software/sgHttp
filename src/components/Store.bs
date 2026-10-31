@@ -59,6 +59,10 @@ sub init()
     m.lastSetId = 0
     ' Persistence ops held back until the first disk read (see runCleanups)
     m.cleanups = invalid
+    ' The persistence task, once something needs the disk (see diskTask)
+    m.persistEnabled = false
+    m.persistence = invalid
+    m.givenPersistence = invalid
     m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
     m.parsers = []
     m.initialized = false
@@ -102,19 +106,14 @@ function _initialize(params = {} as object) as object
     ' This app's folder: sideloaded apps all run as the "dev" channel and may share cachefs, so
     ' every app (and every version of it) keeps its bodies apart from the others'
     m.persistDir = PERSIST_DIR + "/" + persistNamespace(params)
+    ' The persistence task starts at the first call that needs the disk (see diskTask), so an app
+    ' that only sends requests never runs it or touches cachefs:/. A persistence task of the
+    ' caller's (tests): file operations of several stores then run in one queue, in order, and
+    ' _destroy leaves it running.
     m.persistence = invalid
     m.ownsPersistence = false
+    m.givenPersistence = params.persistence
     if m.persistEnabled then
-        ' A persistence task of the caller's (tests): file operations of several stores then run
-        ' in one queue, in order, and _destroy leaves it running
-        if isNode(params.persistence) then
-            m.persistence = params.persistence
-        else
-            m.persistence = createObject("roSGNode", "Persistence")
-            m.ownsPersistence = true
-        end if
-        m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
-        m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
         ' Clean-ups wait until the first disk read has answered (see runCleanups), so a cold
         ' start never queues behind them. Bodies stored while the library was called sgQuery are
         ' never read again: this app's folders under OLD_PERSIST_DIR go, and the files of the
@@ -206,6 +205,8 @@ sub _define(name as string, definition as object)
     if client <> invalid and client.baseUrl <> "" and url.left(4) <> "http" then requestText = requestText + "|" + client.baseUrl
     normalized.requestHash = hashString(requestText)
     m.definitions[name] = normalized
+    ' A copy stored by an earlier launch may be deleted (set, invalidate) before it is ever read
+    if normalized.persist then diskTask()
 end sub
 
 ' A definition with every key present and defaulted, as the fetch path reads it
@@ -948,7 +949,7 @@ function startFetch(definition as object, key as string, args as object, now as 
 
     ' Disk first, when allowed and nothing is in memory yet. The read is asynchronous
     ' (task thread); a miss or a failure falls through to the network.
-    if not background and not skipDisk and not entry.hasValue and definition.persist and isNode(m.persistence) then
+    if not background and not skipDisk and not entry.hasValue and definition.persist and isNode(diskTask()) then
         readPromise = m.persistence.callFunc("execute", { type: "read", path: persistPath(key) })
         promises.chain(readPromise, context).then(function(text as dynamic, context as object) as dynamic
             runCleanups()
@@ -2022,7 +2023,7 @@ end function
 ' meta: { hash, etag, lastModified, decode } kept beside the body so a cold start can still
 ' tell an unchanged response and send the validators
 sub writePersisted(key as string, body as dynamic, meta = {} as object)
-    if not isNonEmptyString(body) or not isNode(m.persistence) then return
+    if not isNonEmptyString(body) or not isNode(diskTask()) then return
     header = { format: ENVELOPE_FORMAT, version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified), decode: meta.decode <> false, maxAge: isWholeNumber(meta.maxAge) ? meta.maxAge : -1 }
     text = formatJson(header) + chr(10) + body
     if text <> "" then
@@ -2048,17 +2049,33 @@ function parseEnvelope(text as dynamic, key as string) as dynamic
     return envelope
 end function
 
+' The persistence task, started now if this is the first call that needs the disk; invalid when
+' persistence is off. A single key's copy is deleted only through a running task (deletePersisted):
+' a query that persists starts it when it is defined.
+function diskTask() as dynamic
+    if isNode(m.persistence) or not m.persistEnabled then return m.persistence
+    if isNode(m.givenPersistence) then
+        m.persistence = m.givenPersistence
+    else
+        m.persistence = createObject("roSGNode", "Persistence")
+        m.ownsPersistence = true
+    end if
+    m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
+    m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
+    return m.persistence
+end function
+
 sub deletePersisted(key as string)
     if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "delete", path: persistPath(key) })
 end sub
 
 sub clearPersisted()
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clear", dir: m.persistDir })
+    if isNode(diskTask()) then m.persistence.callFunc("execute", { type: "clear", dir: m.persistDir })
 end sub
 
 ' Deletes every stored body of a query, and of its dotted descendants when descendants is true
 sub clearPersistedQuery(name as string, descendants as boolean)
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
+    if isNode(diskTask()) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
 end sub
 
 '#endregion

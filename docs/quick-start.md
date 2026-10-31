@@ -29,7 +29,7 @@ sub init()
 end sub
 ```
 
-This starts the transport, the Task that sends every request. It keeps a pool of `roUrlTransfer` objects and a queue, retries network failures and server errors, applies a timeout, and adds the headers every request shares. To begin with, `baseUrl` is the only setting you need; see [`initialize`](reference/api.md#initialize) for the rest.
+This starts the transport, the Task that sends every request, and nothing else: no disk or parser task runs until a query or setting asks for one. It keeps a pool of `roUrlTransfer` objects and a queue, retries network failures and server errors, applies a timeout, and adds the headers every request shares. To begin with, `baseUrl` is the only setting you need; see [`initialize`](reference/api.md#initialize) for the rest.
 
 ### 2. Send a request
 

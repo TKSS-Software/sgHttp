@@ -1,0 +1,7 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+
+' Counts the operation and answers as an empty disk would
+function execute(op as object) as object
+    m.top.operations = m.top.operations + 1
+    return promises.resolve(invalid)
+end function

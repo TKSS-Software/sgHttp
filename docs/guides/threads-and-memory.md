@@ -7,7 +7,7 @@
 | Cache lookups, keys, freshness, bookkeeping | `Store` node, on the render thread |
 | HTTP, gzip, body hashing, JSON decoding of network bodies without a parser (a disk copy without a parser is decoded on the render thread) | `Transport` task, one per client |
 | JSON decoding of bodies with a parser, parsers, parsed-value hashing | Your `ParserTask` subclass, two of them by default |
-| Reading, writing and deleting `cachefs:/` files | `Persistence` task |
+| Reading, writing and deleting `cachefs:/` files | `Persistence` task, started when the first query with `persist: true` is defined |
 
 The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes.
 
