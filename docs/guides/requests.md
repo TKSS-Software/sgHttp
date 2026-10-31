@@ -120,6 +120,35 @@ sghttp.fetch({ url: "/auth/refresh", method: "POST", body: { refreshToken: "{tok
 
 Headers in `initialize({ baseHeaders })`, such as device ids and platform tags, are sent with every request, even one with `auth: false`.
 
+### When the token expires
+
+An app with short-lived access tokens can renew them in one place. `onUnauthorized` names a function in the calling component that's called when a request that sent the shared headers is answered `401`. The request doesn't fail. It's held, along with any other request of the client answered `401` meanwhile, until the app calls `reauthorize`:
+
+```brightscript
+' in the main scene
+sghttp.onUnauthorized("renewToken")
+
+sub renewToken(event as object)
+    request = { url: "/auth/refresh", method: "POST", body: { refreshToken: "{token}" }, auth: false }
+    promises.chain(sghttp.fetch(request, { token: m.refreshToken }), m).then(function(response as object, m as object) as dynamic
+        sghttp.reauthorize({ Authorization: "Bearer " + response.body.accessToken })
+        return invalid
+    end function).catch(function(error as dynamic, m as object) as dynamic
+        sghttp.reauthorize(invalid)   ' the held requests fail with their 401
+        showSignIn()
+        return invalid
+    end function)
+end sub
+```
+
+- `reauthorize(headers)` merges the headers into the client's shared headers, as `setHeaders` does, and sends each held request again with them, once. If it's answered `401` again, it fails.
+- `reauthorize(invalid)` makes the held requests fail with their `401`, and their callers see the error as usual.
+- The app must call `reauthorize` after every call to its function. Until it does, the held requests wait.
+- A request sent while the token is being renewed isn't held: its `401` fails it at once, since it may be the renewal itself. A request with `auth: false` is never held.
+- A request that went out before `setHeaders` changed the shared headers, and is then answered `401`, is sent again with the new headers without calling the function.
+- A held request can be [cancelled](#cancelling-a-request) whatever its method, since the server didn't act on it.
+- `event.getData()` is `{ client, url }`. Each client is renewed separately: `onUnauthorized` and `reauthorize` take the client's name as a second argument, and use the default client without one.
+
 ## The response
 
 The promise resolves with the transport's whole response:
@@ -147,7 +176,7 @@ Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 The promise rejects when the status is outside `successCodes` (200–299 by default) or the request couldn't complete. It rejects with the same shape as a response, plus a `message`. `code` is the HTTP status or, for a network failure, the negative error `roUrlTransfer` reports, such as `-28` for a timeout. The body of a failed request is left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers. [The transport](transport.md) covers when it retries and how to change that.
+Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers (for a `POST` or `PATCH`, only those it can't have applied). [The transport](transport.md) covers when it retries and how to change that.
 
 ### Reacting to a 401 everywhere
 
@@ -162,7 +191,7 @@ sub onRequestEvent(event as object)
 end sub
 ```
 
-`e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. Every event field is in [Events](../reference/events-and-stats.md#events).
+`e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. A request held by [`onUnauthorized`](#when-the-token-expires) emits its error event only if it finally fails. Every event field is in [Events](../reference/events-and-stats.md#events).
 
 A `fetch` can give its events a `name`, so one observer can tell calls apart. Without one, the events say `"fetch"`:
 
@@ -221,7 +250,7 @@ See [More than one server](multiple-servers.md).
 | `auth: false` | Leave out the client's shared headers. |
 | `proxy: false` | Send directly, even when a debugging proxy is set (see [Debugging](debugging.md#routing-traffic-through-a-proxy)). |
 | `timeout` | Seconds before the request is given up and retried. Default: the transport's (30). |
-| `retries` | Attempts after the first. Default: the transport's. |
+| `retries` | Attempts after the first. Default: the transport's. Set on a `POST` or `PATCH`, it also retries timeouts and 5xx, which by default it doesn't. |
 | `successCodes` | Statuses treated as success. Default: 200–299. |
 | `parser` | A parser name to run the body through on the parser task. |
 | `priority` | `"high"`, `"normal"` or `"low"`: where the request waits when the pool is busy. Default `"normal"`. See [Priorities](transport.md#priorities). |

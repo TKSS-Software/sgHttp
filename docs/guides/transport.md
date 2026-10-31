@@ -10,7 +10,7 @@ The default `Transport` is a Task with:
 - **gzip and HTTPS**, using the Roku's certificate bundle.
 - **JSON decoding** of successful responses on the task thread. A body that will go to a [parser](parsers.md) is left as text, and the parser task decodes it.
 - **Body hashing** (MD5) of responses to cached queries, so the cache can [tell when a payload hasn't changed](keeping-data-fresh.md).
-- **Retries** on network failures and `429` and 5xx responses. If the answer has a `Retry-After` header (seconds or an HTTP date), the transport waits that long; otherwise it backs off exponentially (1 s, 2 s, 4 s, ...). If `Retry-After` asks for more than 60 seconds, the request fails at once rather than keep its callers waiting. A `POST` answered with `502` is never retried, because the gateway may have passed it on, and repeating it could apply the change twice. A `429` is retried for any method, because the server rejected the request before handling it.
+- **Retries** on network failures and `429` and 5xx responses. If the answer has a `Retry-After` header (seconds or an HTTP date), the transport waits that long; otherwise it backs off exponentially (1 s, 2 s, 4 s, ...). If `Retry-After` asks for more than 60 seconds, the request fails at once rather than keep its callers waiting. A `POST` or `PATCH` is retried only when it can't have been applied: on a `429`, which the server rejected before handling it, or when the connection never opened (the host name didn't resolve, the connection was refused, or the TLS handshake failed). After a timeout or a 5xx it may already have gone through, and repeating it could apply the change twice, so it fails instead. A `POST` or `PATCH` that sets `retries` itself is retried like any other request.
 - **Cancellation**: a request still queued, or waiting to retry, can be dropped, and one in flight aborted (see [Cancelling a request](requests.md#cancelling-a-request)).
 - **A hard timeout** per request (`timeout`, default 30 seconds). A request with no complete answer in that time fails, and is retried if it has retries left.
 - **HTTP/2** when asked for (`httpVersion: "http2"`), on firmware that supports it. Other firmware ignores the setting.
@@ -38,7 +38,7 @@ Set these at the top level of `initialize` for the default client, or per client
 | `baseHeaders` | `{}` | Headers sent with every request, even one with `auth: false`. Read when the transport starts. |
 | `maxConcurrent` | 4 | How many requests can be in flight at once |
 | `timeout` | 30 | Seconds before a request is given up |
-| `retries` | 1 | Retries for network failures, 429 and 5xx responses |
+| `retries` | 1 | Retries for network failures, 429 and 5xx responses (a `POST` or `PATCH` only on a 429 or a connection that never opened) |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 |
 | `proxy` | `""` | A debugging proxy as `host:port`; see [Debugging](debugging.md#routing-traffic-through-a-proxy) |
 

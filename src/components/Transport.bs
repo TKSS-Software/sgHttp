@@ -205,19 +205,33 @@ function nextJob() as dynamic
     return invalid
 end function
 
-' Network failures, 429 and 5xx responses are retried, except a POST answered with 502: the
-' gateway may have passed it on, and repeating it could apply the change twice. A 429 was
-' turned away before it was handled, so any method is retried.
+' Network failures, 429 and 5xx responses are retried. A POST or PATCH may already have been
+' applied when it fails that way (a timeout, a 500, a gateway's 502), and repeating it could
+' apply the change twice, so it is only retried when it cannot have been: a 429, which was
+' turned away before it was handled, or a connection that never opened. A request that sets
+' retries itself is retried like any other.
 function isRetryable(spec as object, code as integer) as boolean
     if code = 429 then return true
     if code > 0 and code < 500 then return false
     method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
-    if method = "POST" and code = 502 then return false
-    return true
+    if method <> "POST" and method <> "PATCH" then return true
+    if isWholeNumber(spec.retries) then return true
+    return neverConnected(code)
+end function
+
+' roUrlTransfer's codes (curl's, negated) for a request that never reached the server: the
+' proxy or host name did not resolve, the connection was refused, or the TLS handshake failed
+function neverConnected(code as integer) as boolean
+    return code = -5 or code = -6 or code = -7 or code = -35
+end function
+
+function isWholeNumber(value as dynamic) as boolean
+    valueType = type(value)
+    return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
 end function
 
 function retriesFor(spec as object) as integer
-    if type(spec.retries) = "roInt" or type(spec.retries) = "roInteger" or type(spec.retries) = "Integer" then return spec.retries
+    if isWholeNumber(spec.retries) then return spec.retries
     return m.top.retries
 end function
 

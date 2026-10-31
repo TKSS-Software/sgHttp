@@ -12,7 +12,8 @@
         <field id="maxConcurrent" type="integer" value="4" />
         <!-- Hard timeout per request, seconds -->
         <field id="timeoutSeconds" type="integer" value="30" />
-        <!-- Default retries for network failures and 5xx responses (never a POST answered with 502) -->
+        <!-- Default retries for network failures, 429 and 5xx responses (for a POST or PATCH, only
+             a 429 or a connection that never opened, unless the request sets retries) -->
         <field id="retries" type="integer" value="1" />
         <!-- "http2" to request HTTP/2 multiplexing where the firmware supports it -->
         <field id="httpVersion" type="string" value="" />

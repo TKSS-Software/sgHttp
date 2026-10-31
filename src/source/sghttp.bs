@@ -427,6 +427,30 @@ sub setHeaders(headers as object, client = "" as string)
     getStore().callFunc("_setHeaders", headers, client)
 end sub
 
+' Calls functionName(event) in the calling component when a request that sent the client's
+' shared headers is answered 401, so the app can renew them (refresh an access token) in one
+' place. The event's data is { client, url }. The request is held rather than failed, and so is
+' every other request of the client answered 401 until the app calls reauthorize: with new
+' headers they are sent again, once; with invalid they fail with their 401. A request sent while
+' the headers are being renewed is not held (it may be the renewal itself), and neither is one
+' with auth: false. The app must call reauthorize after every event, or the held requests wait.
+' A request answered 401 after setHeaders changed the headers it went out with is sent again with
+' the new ones, without an event. client: the client to watch, the default client when none is
+' named.
+sub onUnauthorized(functionName as string, client = "" as string)
+    watcher = createObject("roSGNode", "Node")
+    watcher.addField("unauthorized", "assocarray", true)
+    watcher.observeFieldScoped("unauthorized", functionName)
+    getStore().callFunc("_onUnauthorized", watcher, client)
+end sub
+
+' The answer to an onUnauthorized event: headers are merged into the client's shared headers as
+' setHeaders does, and the held requests are sent again with them; invalid makes them fail with
+' their 401 (e.g. the refresh token was rejected and the user must sign in again).
+sub reauthorize(headers as dynamic, client = "" as string)
+    getStore().callFunc("_reauthorize", headers, client)
+end sub
+
 ' Calls functionName(event) in the calling component whenever a cached value is replaced
 ' by different content, typically a background refresh that found new data. The event's
 ' data is { name, key, source }; match it to a query with isChange(). A first value never

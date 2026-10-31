@@ -25,7 +25,7 @@ sghttp.define("episodes", {
 | `request.headers` | none | Headers for this query, filled like the url |
 | `request.body` | none | An associative array or array (sent as JSON), or a string. `"{name}"` alone passes an arg through as is. |
 | `request.parseJson` | `true` | `false` keeps the raw response text |
-| `request.retries` | the client's | Retries for network failures, 429 and 5xx |
+| `request.retries` | the client's | Retries for network failures, 429 and 5xx. Set on a `POST` or `PATCH`, it also retries timeouts and 5xx, which by default it doesn't ([Retries](../guides/transport.md#the-built-in-transport)). |
 
 See [Filling the request](../guides/requests.md#filling-the-request) for the exact rules.
 

@@ -25,6 +25,8 @@
         <function name="_unwatch" />
         <function name="_setScope" />
         <function name="_setHeaders" />
+        <function name="_onUnauthorized" />
+        <function name="_reauthorize" />
         <function name="_getStats" />
         <function name="_keyFor" />
         <function name="_destroy" />

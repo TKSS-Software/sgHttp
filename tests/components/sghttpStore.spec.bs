@@ -16,6 +16,7 @@ namespace tests
         public partner = invalid
         public legacyPath = ""
         public slow = invalid
+        public authWatcher = invalid
 
         ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
         function makeStore()
@@ -1567,6 +1568,105 @@ namespace tests
             end function)
         end function
 
+        @describe("onUnauthorized")
+
+        ' The store reports 401s to the default client on this node's unauthorized field; the
+        ' returned promise resolves with the first report
+        function watchUnauthorized() as object
+            m.authWatcher = createObject("roSGNode", "Node")
+            m.authWatcher.addFields({ arrived: promises.create() })
+            m.authWatcher.addField("unauthorized", "assocarray", true)
+            m.authWatcher.observeFieldScoped("unauthorized", "onSpecUnauthorized")
+            m.store.callFunc("_onUnauthorized", m.authWatcher, "")
+            return m.authWatcher.arrived
+        end function
+
+        @async
+        @it("holds a 401 while the app renews the headers, then sends it again with them")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.slow = m.store.callFunc("_fetch", "/me", {})
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                ' The app is asked, and nothing has failed yet
+                suite.assertEqual(suite.authWatcher.unauthorized.client, "default")
+                suite.assertEqual(suite.store.callFunc("_getStats").errors, 0)
+                suite.store.callFunc("_reauthorize", { Authorization: "Bearer new" }, "")
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).headers.Authorization, "Bearer new")
+                suite.fake.callFunc("answer", 1, "me")
+                return suite.slow
+            end function).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(response.body, "me")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("fails held requests when the app can't renew, and never holds the renewal itself")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.slow = m.store.callFunc("_fetch", "/me", {})
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Sent while the headers are being renewed: its 401 fails it at once
+                renewal = suite.store.callFunc("_fetch", "/token", {})
+                suite.fake.callFunc("fail", 1, 401)
+                return promises.chain(renewal).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise()
+            end function).then(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 401)
+                suite.store.callFunc("_reauthorize", invalid, "")
+                return promises.chain(suite.slow).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise()
+            end function).then(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 401)
+                suite.assertEqual(suite.store.lastEvent.code, 401)
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("cancels a held request whatever its method")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.slow = m.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true })
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertTrue(suite.store.callFunc("_cancel", suite.slow))
+                return promises.chain(suite.slow).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise()
+            end function).then(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                ' Gone from the held requests: renewing the headers sends nothing
+                suite.store.callFunc("_reauthorize", { Authorization: "Bearer new" }, "")
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("Cache-Control")
 
         @async
@@ -1763,3 +1863,9 @@ namespace tests
         end function
     end class
 end namespace
+
+' Settles a spec's watchUnauthorized promise when the store reports a 401
+sub onSpecUnauthorized(event as object)
+    watcher = event.getRoSGNode()
+    if watcher.arrived.promiseState = "pending" then promises.resolve(event.getData(), watcher.arrived)
+end sub

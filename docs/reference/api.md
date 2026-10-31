@@ -9,7 +9,7 @@ The shapes the functions take and return (`sghttp.Definition`, `sghttp.FetchSpec
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
-- Requests: [`fetch`](#fetch)
+- Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize)
 - Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
@@ -33,7 +33,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `proxy` | none | Debugging proxy as `"host:port"` (default client). See [Debugging](../guides/debugging.md#routing-traffic-through-a-proxy). |
 | `maxConcurrent` | 4 | Requests in flight at once (default client) |
 | `timeout` | 30 | Seconds before a request is given up (default client) |
-| `retries` | 1 | Retries for network failures, 429 and 5xx (default client) |
+| `retries` | 1 | Retries for network failures, 429 and 5xx (default client). A `POST` or `PATCH` only on a 429 or a connection that never opened. |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 (default client) |
 | `transport` | a new `Transport` task | A node with `makeRequest(spec)` (default client). See [The transport](../guides/transport.md#replacing-the-transport). |
 | `clients` | none | More servers: `{ <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout, retries, httpVersion, transport } }`. See [More than one server](../guides/multiple-servers.md). |
@@ -223,6 +223,22 @@ Merges headers into a client's shared headers, or into the default client's when
 sghttp.setHeaders({ Authorization: "Bearer " + token })   ' sign in
 sghttp.setHeaders({ Authorization: invalid })              ' sign out
 ```
+
+## onUnauthorized
+
+```brightscript
+sghttp.onUnauthorized(functionName as string, client = "" as string)
+```
+
+Calls `functionName(event)` in the calling component when a request of the client (the default client when `client` is omitted) that sent its shared headers is answered `401`. The event's data is `{ client, url }`. The request is held, not failed, along with every other request of the client answered `401` until the app calls [`reauthorize`](#reauthorize). A request sent while the headers are being renewed, and a request with `auth: false`, are not held. A request answered `401` after `setHeaders` changed the headers it was sent with is sent again with the new ones, without a call. See [When the token expires](../guides/requests.md#when-the-token-expires).
+
+## reauthorize
+
+```brightscript
+sghttp.reauthorize(headers as dynamic, client = "" as string)
+```
+
+The app's answer to an `onUnauthorized` call. With an associative array, merges it into the client's shared headers as `setHeaders` does and sends each held request again with them, once. With `invalid`, the held requests reject with their `401`. Prints a warning for an unknown client.
 
 ## watch
 

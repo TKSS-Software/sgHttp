@@ -24,7 +24,7 @@ Delivered to `observeEvents` callbacks as `event.getData()`. The store's `lastEv
 | `unchanged` | A response matches the cached value (same body hash, same parsed hash, or `304`) and the entry is renewed |
 | `set` | A value is written with `set` or an optimistic mutation (source `local`) |
 | `cancel` | A `fetch` or mutation is cancelled with [`cancel`](api.md#cancel). Not counted as an error. |
-| `error` | A request or parse fails, including background refreshes and mutations |
+| `error` | A request or parse fails, including background refreshes and mutations. A `401` held by [`onUnauthorized`](api.md#onunauthorized) emits one only if the request finally fails. |
 
 A query whose name was never defined rejects without an event.
 
