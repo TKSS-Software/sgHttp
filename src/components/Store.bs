@@ -355,14 +355,14 @@ end function
 ' for data a screen will want, asked for before the screen opens. Nothing happens when
 ' memory holds a fresh value or a request is already in flight. Returns whether a disk
 ' read or a request started.
-function _prefetch(name as string, args = {} as object) as boolean
+function _precache(name as string, args = {} as object) as boolean
     definition = m.definitions[name]
     if definition = invalid then
-        print `[sgquery] prefetch: no query named "${name}"`
+        print `[sgquery] precache: no query named "${name}"`
         return false
     end if
     if not definition.cache then
-        print `[sgquery] prefetch: "${name}" is cache: false, nothing to keep`
+        print `[sgquery] precache: "${name}" is cache: false, nothing to keep`
         return false
     end if
     if type(args) <> "roAssociativeArray" then args = {}

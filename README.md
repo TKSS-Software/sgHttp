@@ -51,7 +51,7 @@ end function)
 
 - Define an endpoint once, query it by name from any component
 - One shared cache, with request de-duplication and stale-while-revalidate
-- Prefetching, so the data a screen needs is on its way before the screen opens
+- Precaching, so the data a screen needs is on its way before the screen opens
 - Parsers that build ContentNode trees on a task thread
 - Persistence to `cachefs:/`, so a cold start draws before the network answers
 - Background refreshes that skip parsing and redraws when the server's data hasn't changed

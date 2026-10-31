@@ -10,7 +10,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch)
-- Queries: [`define`](#define), [`query`](#query), [`prefetch`](#prefetch), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
+- Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
 - Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
@@ -86,10 +86,10 @@ Returns a promise that resolves with the query's value (the parser's result, or 
 
 Rejects with an [error](events-and-stats.md#errors) when the request or parse fails, or with `{ message }` when no query has that name. For a `cache: false` query, runs it like [`mutate`](#mutate), without the cached-query check.
 
-## prefetch
+## precache
 
 ```brightscript
-sgquery.prefetch(name as string, args = {} as object) as boolean
+sgquery.precache(name as string, args = {} as object) as boolean
 ```
 
 Starts the query without waiting for its answer, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight; otherwise does what a plain `query` would, disk first for a `persist` query. For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).

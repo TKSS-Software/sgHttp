@@ -1318,22 +1318,22 @@ namespace tests
             end function)
         end function
 
-        @describe("prefetch")
+        @describe("precache")
 
         @async
         @it("starts a query that a later query joins, and does nothing while one is in flight or fresh")
         function _()
             m.makeStore()
-            m.assertTrue(m.store.callFunc("_prefetch", "items", { id: "1" }))
-            m.assertFalse(m.store.callFunc("_prefetch", "items", { id: "1" }))
-            m.assertFalse(m.store.callFunc("_prefetch", "nothing", {}))
-            m.assertFalse(m.store.callFunc("_prefetch", "items.save", { id: "1" }))
+            m.assertTrue(m.store.callFunc("_precache", "items", { id: "1" }))
+            m.assertFalse(m.store.callFunc("_precache", "items", { id: "1" }))
+            m.assertFalse(m.store.callFunc("_precache", "nothing", {}))
+            m.assertFalse(m.store.callFunc("_precache", "items.save", { id: "1" }))
             waiting = m.query("1")
             m.assertEqual(m.fake.requestCount, 1)
             m.fake.callFunc("answerBody", 0, { name: "one" })
             promises.chain(waiting, m).then(function(value as object, suite as object) as dynamic
                 suite.assertEqual(value.name, "one")
-                suite.assertFalse(suite.store.callFunc("_prefetch", "items", { id: "1" }))
+                suite.assertFalse(suite.store.callFunc("_precache", "items", { id: "1" }))
                 suite.assertEqual(suite.fake.requestCount, 1)
                 suite.done()
                 return invalid
@@ -1348,9 +1348,9 @@ namespace tests
         @it("loads the first page of a query with pages, which a later query answers with")
         function _()
             m.makePagedStore()
-            m.assertTrue(m.store.callFunc("_prefetch", "list", {}))
+            m.assertTrue(m.store.callFunc("_precache", "list", {}))
             m.assertEqual(m.fake.callFunc("requestAt", 0).url, "/list")
-            ' The query joins the prefetch's request, and answers with the pages
+            ' The query joins the precache's request, and answers with the pages
             waiting = m.store.callFunc("_query", "list", {}, {})
             m.assertEqual(m.fake.requestCount, 1)
             m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })

@@ -41,14 +41,14 @@ sgquery.query("homePage", args, { force: true })
 
 ## Asking ahead
 
-`sgquery.prefetch(name, args)` starts a query without waiting for it, so the screen that wants the data later finds it in flight or already in memory:
+`sgquery.precache(name, args)` starts a query without waiting for it, so the screen that wants the data later finds it in flight or already in memory:
 
 ```brightscript
 sub init()
     sgquery.initialize({ baseUrl: "https://api.example.com", parserTask: "AppParserTask" })
     registerQueries()
-    sgquery.prefetch("menu")                         ' wanted by the first screen, after sign-in checks
-    sgquery.prefetch("homePage", { slug: "main" })
+    sgquery.precache("menu")                         ' wanted by the first screen, after sign-in checks
+    sgquery.precache("homePage", { slug: "main" })
 end sub
 ```
 
