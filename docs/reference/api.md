@@ -33,7 +33,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `proxy` | none | Debugging proxy as `"host:port"` (default client). See [Debugging](../guides/debugging.md#routing-traffic-through-a-proxy). |
 | `maxConcurrent` | 4 | Requests in flight at once (default client) |
 | `timeout` | 30 | Seconds before a request is given up (default client) |
-| `retries` | 1 | Retries for network failures and 5xx (default client) |
+| `retries` | 1 | Retries for network failures, 429 and 5xx (default client) |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 (default client) |
 | `transport` | a new `Transport` task | A node with `makeRequest(spec)` (default client). See [The transport](../guides/transport.md#replacing-the-transport). |
 | `clients` | none | More servers: `{ <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout, retries, httpVersion, transport } }`. See [More than one server](../guides/multiple-servers.md). |

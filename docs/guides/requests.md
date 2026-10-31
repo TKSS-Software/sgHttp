@@ -142,7 +142,7 @@ Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 The promise rejects with the same shape plus `message` when the status is outside `successCodes` (default 200–299) or the request couldn't complete. `code` is the HTTP status, or negative for a network failure: the error `roUrlTransfer` reports, such as `-28` for a timeout. Failure bodies are left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried network failures and `5xx` answers. When it retries, and how to change that, is in [The transport](transport.md).
+Before a promise rejects, the transport has already retried network failures, `429` and `5xx` answers. When it retries, and how to change that, is in [The transport](transport.md).
 
 ### Reacting to a 401 everywhere
 

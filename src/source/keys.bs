@@ -98,3 +98,22 @@ end function
 function isNonEmptyString(value as dynamic) as boolean
     return (type(value) = "roString" or type(value) = "String") and value <> ""
 end function
+
+' The wait a Retry-After header asks for, in seconds: delta-seconds ("120") or an HTTP date
+' ("Wed, 21 Oct 2015 07:28:00 GMT"), counted from now. A date already past is 0. -1 when
+' the header is missing or neither form.
+function retryAfterSeconds(value as dynamic, now as integer) as integer
+    if not isNonEmptyString(value) then return -1
+    text = value.trim()
+    if createObject("roRegex", "^[0-9]{1,9}$", "").isMatch(text) then return text.toInt()
+    ' IMF-fixdate: day, DD Mon YYYY HH:MM:SS GMT
+    parts = createObject("roRegex", "^[A-Za-z]{3}, ([0-9]{2}) ([A-Za-z]{3}) ([0-9]{4}) ([0-9]{2}:[0-9]{2}:[0-9]{2}) GMT$", "").match(text)
+    if parts.count() <> 5 then return -1
+    month = (lcase("JanFebMarAprMayJunJulAugSepOctNovDec").instr(lcase(parts[2])) / 3) + 1
+    if month < 1 or (month - int(month)) <> 0 then return -1
+    date = createObject("roDateTime")
+    date.fromISO8601String(parts[3] + "-" + right("0" + int(month).toStr(), 2) + "-" + parts[1] + "T" + parts[4] + "Z")
+    seconds = date.asSeconds() - now
+    if seconds < 0 then return 0
+    return seconds
+end function

@@ -1,4 +1,5 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
 
 ' The store driven through a FakeTransport, so each spec decides when (and in what
 ' order) the server answers. Promise callbacks get the suite as their context.
@@ -318,6 +319,32 @@ namespace tests
                 suite.done()
                 return invalid
             end function)
+        end function
+
+        @describe("Retry-After")
+
+        @it("reads delta-seconds")
+        function _()
+            m.assertEqual(retryAfterSeconds("120", 0), 120)
+            m.assertEqual(retryAfterSeconds(" 0 ", 0), 0)
+        end function
+
+        @it("reads an HTTP date as the seconds from now, and a past one as 0")
+        function _()
+            ' Wed, 21 Oct 2015 07:28:00 GMT is 1445412480
+            m.assertEqual(retryAfterSeconds("Wed, 21 Oct 2015 07:28:00 GMT", 1445412450), 30)
+            m.assertEqual(retryAfterSeconds("Wed, 21 Oct 2015 07:28:00 GMT", 1445412490), 0)
+            m.assertEqual(retryAfterSeconds("Sat, 01 Jan 2000 00:00:00 GMT", 946684790), 10)
+        end function
+
+        @it("answers -1 for a missing or unreadable header")
+        function _()
+            m.assertEqual(retryAfterSeconds(invalid, 0), -1)
+            m.assertEqual(retryAfterSeconds("", 0), -1)
+            m.assertEqual(retryAfterSeconds("-5", 0), -1)
+            m.assertEqual(retryAfterSeconds("soon", 0), -1)
+            m.assertEqual(retryAfterSeconds("Wed, 21 Foo 2015 07:28:00 GMT", 0), -1)
+            m.assertEqual(retryAfterSeconds("Wednesday, 21-Oct-15 07:28:00 GMT", 0), -1)
         end function
 
         @describe("apps sharing cachefs")

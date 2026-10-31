@@ -2,9 +2,10 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 
 ' Default HTTP transport: a single task with a bounded pool of roUrlTransfer
-' objects, a FIFO queue, retries with backoff, gzip, JSON decoding, and promise
-' settlement from the task thread. Any node with the same makeRequest(spec)
-' contract can replace it via initialize({ transport: node }) or a client's transport.
+' objects, a FIFO queue, retries with backoff (or the wait a Retry-After asks for), gzip,
+' JSON decoding, and promise settlement from the task thread. Any node with the same
+' makeRequest(spec) contract can replace it via initialize({ transport: node }) or a client's
+' transport.
 ' The store starts it (control RUN) once its fields are set: the task reads its pool size
 ' and base headers when it starts.
 '
@@ -15,6 +16,10 @@ import "pkg:/source/keys.bs"
 '   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
 '                 render thread), so the store can tell an unchanged payload without parsing
 '   notModified - true for a 304 answering a conditional request (spec.allowNotModified)
+
+' The longest Retry-After wait honoured; a longer one fails the request at once rather than
+' hold its callers
+const MAX_RETRY_AFTER_SECONDS = 60
 
 sub init()
     m.port = createObject("roMessagePort")
@@ -114,9 +119,11 @@ sub enqueue(request as object)
     m.queue.push(job)
 end sub
 
-' Network failures and 5xx responses are retried, except a POST answered with 502: the
-' gateway may have passed it on, and repeating it could apply the change twice.
+' Network failures, 429 and 5xx responses are retried, except a POST answered with 502: the
+' gateway may have passed it on, and repeating it could apply the change twice. A 429 was
+' turned away before it was handled, so any method is retried.
 function isRetryable(spec as object, code as integer) as boolean
+    if code = 429 then return true
     if code > 0 and code < 500 then return false
     method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
     if method = "POST" and code = 502 then return false
@@ -246,8 +253,18 @@ sub onUrlEvent(event as object)
 
     retryable = isRetryable(job.spec, code) and job.attempts < job.maxAttempts
     if not success and retryable then
-        ' Exponential backoff: 1s, 2s, 4s...
-        job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
+        ' The wait the server asks for (429, 503), else exponential backoff: 1s, 2s, 4s...
+        retryAfter = -1
+        if type(response.headers) = "roAssociativeArray" then retryAfter = retryAfterSeconds(response.headers["retry-after"], nowSeconds())
+        if retryAfter > MAX_RETRY_AFTER_SECONDS then
+            finish(job, response, false)
+            return
+        end if
+        if retryAfter >= 0 then
+            job.retryAfterMs = 1000 * retryAfter
+        else
+            job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
+        end if
         job.retryTimer.mark()
         m.retryQueue.push(job)
         return

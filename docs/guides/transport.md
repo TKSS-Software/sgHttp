@@ -10,7 +10,7 @@ The default `Transport` is a Task with:
 - **gzip** and HTTPS using the Roku's certificate bundle.
 - **JSON decoding** of successful responses, on the task thread. A body bound for a [parser](parsers.md) is left as text for the parser task to decode.
 - **Body hashing** (MD5) of cached queries' responses, for [unchanged-payload detection](keeping-data-fresh.md).
-- **Retries** with exponential backoff (1 s, 2 s, 4 s, ...) on network failures and 5xx responses. A `POST` answered with `502` is never retried, because the gateway may have passed it on and repeating it could apply the change twice.
+- **Retries** on network failures, `429` and 5xx responses, after the wait the answer's `Retry-After` header asks for (seconds or an HTTP date), else with exponential backoff (1 s, 2 s, 4 s, ...). A `Retry-After` of more than 60 seconds fails the request at once instead of holding its callers. A `POST` answered with `502` is never retried, because the gateway may have passed it on and repeating it could apply the change twice. A `429` is retried for any method: the server turned it away before handling it.
 - **A hard timeout** per request (`timeout`, default 30 seconds). A request with no complete answer in that time fails, and is retried if it has retries left.
 - **Optional HTTP/2** (`httpVersion: "http2"`) where the firmware supports it. It's ignored on firmware that doesn't.
 
@@ -25,7 +25,7 @@ Set these at the top level of `initialize` for the default client, or per client
 | `baseHeaders` | `{}` | Headers sent with every request without exception. Read when the transport starts. |
 | `maxConcurrent` | 4 | Requests in flight at once |
 | `timeout` | 30 | Seconds before a request is given up |
-| `retries` | 1 | Retries for network failures and 5xx responses |
+| `retries` | 1 | Retries for network failures, 429 and 5xx responses |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 |
 | `proxy` | `""` | A debugging proxy as `host:port`; see [Debugging](debugging.md#routing-traffic-through-a-proxy) |
 
