@@ -1035,6 +1035,8 @@ sub settleValue(context as object, value as dynamic)
     entry.value = value
     entry.hasValue = true
     entry.expired = false
+    ' A server value is newer than any local write, so a failed mutation's rollback leaves it
+    entry.setId = 0
     entry.hash = asString(context.hash)
     entry.parsedHash = parsedHash
     entry.etag = asString(context.etag)

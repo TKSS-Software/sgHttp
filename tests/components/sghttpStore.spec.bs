@@ -812,6 +812,35 @@ namespace tests
             end function)
         end function
 
+        @async
+        @it("keeps a response that arrived after the write when the request fails")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.slow = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: "saved" }] })
+                ' A check started after the write answers before the mutation does
+                checking = suite.query("1", { force: true })
+                suite.fake.callFunc("answer", 2, "fromServer")
+                return promises.chain(checking, suite).then(function(value as dynamic, suite as object) as dynamic
+                    suite.fake.callFunc("fail", 1, 500)
+                    return promises.chain(suite.slow).catch(function(error as dynamic) as dynamic
+                        return "failed"
+                    end function).toPromise()
+                end function).toPromise()
+            end function).then(function(outcome as dynamic, suite as object) as dynamic
+                suite.assertEqual(outcome, "failed")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "fromServer")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("refresh")
 
         @async
