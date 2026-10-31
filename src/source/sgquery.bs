@@ -62,6 +62,9 @@ interface Pages
     optional arg as string
     ' The request for pages after the first. Default: the definition's
     optional request as Request
+    ' The API cuts pages by position (page=2): a later page that has expired is read again by
+    ' nextPage rather than kept, since a change shifts entries between pages. Default false
+    optional byPosition as boolean
 end interface
 
 ' What define takes (see define for each key's meaning and default)
@@ -265,10 +268,12 @@ end function
 '              parser task) when the body differs: the same parsed value renews the entry
 '              without a change notification. For responses with volatile fields the parser
 '              drops. Default "body".
-'   pages    - { next, arg, request } makes this a query with pages: next is the path in a page's value
+'   pages    - { next, arg, request, byPosition } makes this a query with pages: next is the path in a page's value
 '              to the cursor of the page after it (empty or missing on the last page), arg the arg
 '              that cursor is passed as (default "next"), request the request for pages after the
 '              first (default: request). query and nextPage then resolve with { pages, hasNext }.
+'              byPosition: true for an API that cuts pages by position (page=2): a later page that
+'              has expired (a mutation's expires) is read again by nextPage, not kept.
 ' Every cached query compares the response body's hash with the cached one: an unchanged
 ' payload renews the entry without parsing and without a change notification.
 sub define(name as string, definition as Definition)

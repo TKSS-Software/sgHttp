@@ -1190,6 +1190,48 @@ namespace tests
             end function)
         end function
         @async
+        @it("reads an expired later page again when the listing is paged by position")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "list", { request: { url: "/list" }, ttl: 300, pages: { next: "next", arg: "cursor", request: { url: "/list?after={cursor}" }, byPosition: true } })
+            first = m.store.callFunc("_query", "list", {}, {})
+            m.fake.callFunc("answerBody", 0, { items: ["a"], next: "c2" })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.fake.callFunc("answerBody", 1, { items: ["b"], next: "" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                ' A write lands at the front: the first page now points to the same next page,
+                ' whose content has moved on
+                suite.store.callFunc("_expire", "list", {})
+                waiting = suite.store.callFunc("_query", "list", {}, {})
+                suite.fake.callFunc("answerBody", 2, { items: ["new"], next: "c2" })
+                return waiting
+            end function).then(function(result as object, suite as object) as dynamic
+                ' The old second page is not kept: the listing ends at the first, with more to read
+                suite.assertEqual(result.pages.count(), 1)
+                suite.assertEqual(result.pages[0].items[0], "new")
+                suite.assertTrue(result.hasNext)
+                more = suite.store.callFunc("_nextPage", "list", {})
+                suite.assertEqual(suite.fake.requestCount, 4)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 3).url, "/list?after=c2")
+                suite.fake.callFunc("answerBody", 3, { items: ["a"], next: "c3" })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(result.pages[1].items[0], "a")
+                suite.assertTrue(result.hasNext)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
         @it("keeps the later pages when a changed first page still points to the same next page")
         function _()
             m.makePagedStore()

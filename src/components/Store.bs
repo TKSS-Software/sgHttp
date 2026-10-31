@@ -229,13 +229,16 @@ end function
 
 ' pages: { next: path in a page's value to the next page's cursor (empty or missing on the last
 ' page), arg: the arg the cursor is passed as (default "next"), request: the request for pages
-' after the first (default: the definition's) }, or invalid for a query without pages
+' after the first (default: the definition's), byPosition: the API cuts pages by position
+' (page=2), so a change anywhere shifts entries onto the pages after it: a later page that has
+' expired is read again rather than kept (see lastPage) }, or invalid for a query without pages
 function normalizePages(pages as dynamic) as dynamic
     if type(pages) <> "roAssociativeArray" or not isNonEmptyString(pages.next) then return invalid
     return {
         next: pages.next
         arg: isNonEmptyString(pages.arg) ? pages.arg : "next"
         request: type(pages.request) = "roAssociativeArray" ? pages.request : invalid
+        byPosition: pages.byPosition = true
     }
 end function
 
@@ -585,19 +588,25 @@ end function
 function assemblePages(definition as object, headKey as string) as object
     head = m.cache[headKey]
     if head = invalid or not head.hasValue then return { pages: [], hasNext: false }
+    ' lastPage first: it drops the members that no longer follow, which are not read
+    last = lastPage(head)
     pages = [head.value]
     for each key in head.chain
         pages.push(m.cache[key].value)
     end for
-    return { pages: pages, hasNext: nextCursor(definition, lastPage(head)) <> invalid }
+    return { pages: pages, hasNext: nextCursor(definition, last) <> invalid }
 end function
 
 ' The last page in a head's chain, after dropping the chain from the first page that is no
-' longer in memory (evicted): the pages after it would not follow from what is left
+' longer in memory (evicted): the pages after it would not follow from what is left. For a
+' query paged by position, also from the first page that has expired (a write expires the
+' listing): it was cut from the listing as it was, and nextPage reads it again
 function lastPage(head as object) as object
+    definition = m.definitions[head.name]
+    byPosition = definition <> invalid and definition.pages <> invalid and definition.pages.byPosition
     for i = 0 to head.chain.count() - 1
         entry = m.cache[head.chain[i]]
-        if entry = invalid or not entry.hasValue then
+        if entry = invalid or not entry.hasValue or (byPosition and entry.expired) then
             cutChain(head, i)
             exit for
         end if

@@ -37,7 +37,7 @@ See [Filling the request from args](../guides/queries.md#filling-the-request-fro
 | `ttl` | `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: until expired, invalidated or `expireAll`. |
 | `staleWhileRevalidate` | `true` | Serve a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
-| `pages` | none | `{ next, arg, request }`: makes this a query with pages. `next` is the path in a page's value to the next page's cursor, `arg` the arg it is passed as (default `"next"`), `request` the request for later pages (default: `request`). See [Pages](../guides/pagination.md). |
+| `pages` | none | `{ next, arg, request }`: makes this a query with pages. `next` is the path in a page's value to the next page's cursor, `arg` the arg it is passed as (default `"next"`), `request` the request for later pages (default: `request`), `byPosition: true` for an API that cuts pages by position, so a later page that has expired is read again rather than kept. See [Pages](../guides/pagination.md). |
 | `bucket` | none | Seconds. `floor(now / bucket)` joins the key; earlier buckets are dropped when it rolls over. See [Time buckets](../guides/scopes-and-buckets.md#time-buckets). |
 | `persist` | `false` | Save the raw body to `cachefs:/` and serve it when memory has nothing. See [Persistence](../guides/persistence.md). |
 
