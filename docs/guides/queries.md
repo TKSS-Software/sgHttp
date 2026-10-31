@@ -1,6 +1,6 @@
 # Queries and keys
 
-A **query** is a [request](requests.md) with a name: where it goes, how its response is parsed, and how long the result stays fresh. You register it once with `define`, then query it by name with args. Where `fetch` gives you the whole response and forgets it, `query` gives you the value and keeps it.
+A **query** is a [request](requests.md) that has been registered with `define` and is called with `query`. The definition says where the request goes, how the response is parsed and how long the result stays fresh. You register it once, under a name, then call `query` with that name and args. `fetch` returns the whole response and does not store it. `query` returns the value and stores it in the cache.
 
 ```brightscript
 sghttp.define("episodes", {
@@ -13,12 +13,12 @@ sghttp.define("episodes", {
 })
 
 sghttp.query("episodes", { showId: "abc", season: 2, page: 1 })
-' GET https://api.example.com/shows/abc/seasons/2/episodes?page=1&limit=50
+' GET https://api.example.com/shows/abc/seasons/2/episodes?limit=50&page=1
 ```
 
 ## Naming queries
 
-Query names are plain strings, and dots in them mean something. Every function that matches by name (`invalidate`, `expire`, a mutation's `expires` and `invalidates`) covers the name **and its dotted descendants**. `"favorites"` also covers `"favorites.check"` and `"favorites.add"`.
+Query names are plain strings. A dot in a name makes the query a descendant of the name before the dot. Every function that matches by name (`invalidate`, `expire`, a mutation's `expires` and `invalidates`) covers the name **and its dotted descendants**. `"favorites"` also covers `"favorites.check"` and `"favorites.add"`.
 
 Use that to group related queries:
 
@@ -34,11 +34,11 @@ Defining a name a second time replaces the first definition and prints a warning
 
 ## Filling the request from args
 
-`{name}` placeholders in the request are filled from the query's args, then from the current scopes, by the same rules as `fetch`: see [Filling the request](requests.md#filling-the-request). Every arg is also part of the cache key, below.
+`{name}` placeholders in the request are filled from the query's args, then from the current scopes. The rules are the same as for `fetch`; see [Filling the request](requests.md#filling-the-request). Every arg is also part of the cache key, described below.
 
 ## Cache keys
 
-Every query of a cached query is stored under a **key** made of:
+Each result of a cached query is stored under a **key** made of:
 
 ```
 name | scope=value ... | bucket=N | args

@@ -1,20 +1,20 @@
 # Keeping data fresh
 
-Data changes behind the app's back, on another device or on the server, while the screen shows a cached copy. sgHttp keeps checking cheap: a refresh that finds nothing new costs a request and nothing more, and a refresh that finds something new can redraw the screen without it asking.
+Data can change on the server, or be changed from another device, while a screen is showing a cached copy. sgHttp checks for such changes with background refreshes, and keeps each check cheap. A refresh that finds nothing new costs one request and nothing more. A refresh that finds new data notifies the screens watching that query, so they can redraw without querying again.
 
 ## Unchanged payloads cost a request, not a parse
 
-The transport hashes (MD5) the raw body of every cached query's response, on its task thread. When a refresh returns the same hash as the cached value:
+The transport takes an MD5 hash of the raw body of every cached query's response, on its task thread. When a refresh returns a body with the same hash as the cached value:
 
 - the entry is renewed, and its `ttl` starts again
 - nothing is parsed, nothing is written to disk, and no watcher is notified
 - the [event](../reference/events-and-stats.md#events) is `unchanged`
 
-That makes short `ttl`s on volatile queries affordable: a check every 30 seconds costs a request, not a parse and a redraw.
+Because of this, a short `ttl` is affordable for data that changes often. A check every 30 seconds costs one request, and only parses and redraws when the data has changed.
 
 ## Responses with volatile fields: `compare: "parsed"`
 
-Some APIs put a value in every response that changes every time (a request id, a server timestamp), so the bytes never match even when the data does. If your parser drops that field, set `compare: "parsed"`:
+Some APIs include a value that's different in every response (a request id, a server timestamp), so the bytes never match even when the data does. If your parser drops that field, set `compare: "parsed"`:
 
 ```brightscript
 sghttp.define("guide.now", {
@@ -27,7 +27,7 @@ sghttp.define("guide.now", {
 
 When the body hash differs, the parser runs as usual, then the parser task hashes the parsed value's JSON. If that matches the cached value's hash, the entry is renewed silently, and the new body hash is remembered, so the next identical response skips the parser.
 
-It costs one `formatJson` per differing response. A parsed value that can't be turned into JSON, such as one that holds nodes, always counts as changed. Use it with parsers that return associative arrays and arrays.
+The cost is one `formatJson` call for each response whose bytes differ. A parsed value that can't be turned into JSON, such as one that holds nodes, always counts as changed. Use it with parsers that return associative arrays and arrays.
 
 ## Conditional requests: `conditional: true`
 
@@ -37,7 +37,7 @@ If the server sends `ETag` or `Last-Modified` headers, `conditional: true` sends
 sghttp.define("catalog", { request: { url: "/catalog" }, ttl: 120, conditional: true, persist: true })
 ```
 
-The validators are saved with persisted bodies, so a cold start can send them too. It only helps where the server sends validators. Without them it does nothing.
+The validators are saved with persisted bodies, so a cold start can send them too. It only helps if the server sends validators; without them, it does nothing.
 
 ## Watching a query
 
@@ -60,7 +60,7 @@ end sub
 
 - **With args**, a watcher hears only the entry those args key to at the moment of the change, using the current scopes and time bucket.
 - **Without args**, it hears every entry of the query.
-- A **first** value never notifies; the query that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
+- A **first** value from a request or disk never notifies watchers; the query that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
 - The callback runs in the component that called `watch`. Call `unwatch` when that component goes away, because the store holds on to every watcher until you do.
 
 ### Every change, from one place
@@ -90,21 +90,21 @@ end function)
 ' if the server's copy differs, the watcher above receives it
 ```
 
-`revalidate` plus a watcher is the usual pair: the query draws the screen now, and the watcher redraws it if the check finds something.
+`revalidate` and a watcher are usually used together. The query returns the cached data so the screen can draw now, and the watcher receives the new data if the check finds a change, so the screen can redraw.
 
 ## Refreshing what's on screen
 
-Expiry is lazy: nothing is sent until someone asks, so a screen that's already open and watching a query would keep showing the old value until it was reopened. `refresh` closes that gap:
+Expiring a value does not send a request by itself. The request is sent only when something queries the data again. So a screen that is already open and watching a query would keep showing the old value until it was reopened. `refresh` sends that request for the screens that are open:
 
 ```brightscript
 sghttp.refresh("favorites")            ' every watched entry of favorites and favorites.*
-sghttp.refresh("favorites", { model })  ' that one, if watched
+sghttp.refresh("favorites", { model: "show" })  ' that one, if watched
 sghttp.refresh()                        ' everything watched, e.g. on resume
 ```
 
-It sends the request again, now, for every matching entry that has a watcher. Each keeps serving its value meanwhile, and a different answer reaches the watchers. Entries nobody watches are left alone, since nobody would see the result; a `revalidate` query is the way to check one of those. It returns a promise that resolves, with the number of refreshes started, once they've all settled.
+It sends a new request right away for every matching entry that has a watcher. Each entry keeps serving its current value in the meantime, and if the answer is different, the watchers receive it. Entries without a watcher are not refreshed, since nothing would receive the result. To check one of those, query it with `revalidate`. `refresh` returns a promise that resolves once all the refreshes have settled, with the number it started.
 
-A mutation's `expires` list calls it for the queries it expires, so the screens showing them update without asking.
+A mutation's `expires` list calls `refresh` for the queries it expires, so the screens watching them receive the new data without querying again.
 
 ## Next
 

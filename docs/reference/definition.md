@@ -33,13 +33,13 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 
 | Key | Default | Meaning |
 |---|---|---|
-| `cache` | `true` | `false` for mutations and per-call resources: the request runs and parses, but is never stored or shared |
-| `ttl` | `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: until expired, invalidated or `expireAll`. |
-| `staleWhileRevalidate` | `true` | Serve a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
+| `cache` | `true` | `false` for mutations and per-call resources: the request is sent and parsed, but its result is never stored or shared |
+| `ttl` | `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, invalidated or marked stale by `expireAll`. |
+| `staleWhileRevalidate` | `true` | Return a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
 | `pages` | none | `{ next, arg, request, byPosition }`: makes this a query with pages. See [Pages](../guides/pagination.md#defining-the-pages). |
 | `bucket` | none | Seconds. `floor(now / bucket)` joins the key; earlier buckets are dropped when it rolls over. See [Time buckets](../guides/scopes-and-buckets.md#time-buckets). |
-| `persist` | `false` | Save the raw body to `cachefs:/` and serve it when memory has nothing. See [Persistence](../guides/persistence.md). |
+| `persist` | `false` | Save the raw body to `cachefs:/` and return it when memory has nothing. See [Persistence](../guides/persistence.md). |
 
 ## Parsing and change detection
 
@@ -47,7 +47,7 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 |---|---|---|
 | `parser` | none | Name passed to your parser task's `getParser`. Without one, the value is the decoded body. |
 | `compare` | `"body"` | `"parsed"` also compares the parsed value when the body differs, for responses with volatile fields. See [`compare: "parsed"`](../guides/keeping-data-fresh.md#responses-with-volatile-fields-compare-parsed). |
-| `conditional` | `false` | Send the cached `ETag` / `Last-Modified` back; a `304` renews the entry |
+| `conditional` | `false` | Send the cached `ETag` / `Last-Modified` back. A `304` renews the entry. |
 
 ## Mutations
 
@@ -63,5 +63,5 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 | `client` | the default client | Name of a client from `initialize({ clients })`. See [More than one server](../guides/multiple-servers.md). |
 | `auth` | `true` | `false` leaves the client's shared headers out of this query's requests. `baseHeaders` are still sent. |
 | `proxy` | `true` | `false` sends this query's requests directly, even when a debugging proxy is set |
-| `timeout` | the client's (30) | Seconds before a request with no answer is given up, and retried if it has retries left |
+| `timeout` | the client's (30) | Seconds before a request with no response is given up, and retried if it has retries left |
 | `successCodes` | 200 to 299 | Array of HTTP statuses that count as success |

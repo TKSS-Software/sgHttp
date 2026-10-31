@@ -2,7 +2,7 @@
 
 Every function is in the `sghttp` namespace. Call them from render-thread components that import `pkg:/source/roku_modules/sghttp/sghttp.brs`.
 
-`initialize`, `fetch` and `setHeaders` are the HTTP client, and are all an app has to use. Everything under Queries, Cache control and Changes applies only to queries the app defines.
+`initialize`, `fetch` and `setHeaders` make up the HTTP client, and are all an app needs to send requests. Everything under Queries, Cache control and Changes applies only to queries the app defines.
 
 The shapes the functions take and return (`sghttp.Definition`, `sghttp.FetchSpec`, `sghttp.Response`, `sghttp.PagedValue`, and so on) are declared as interfaces in the package's typedef, for completion and hover; see [Editor support](../installation.md#editor-support).
 
@@ -57,7 +57,11 @@ Returns the store node.
 sghttp.fetch(spec as dynamic, args = {} as object) as object
 ```
 
-Sends one request with no definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted. `spec` is a url, or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`) with `{name}` placeholders filled from `args` and the current scopes, plus `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events. Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }` without sending anything when the spec has no url, when the client doesn't exist, or when the string isn't a url (doesn't start with `/` or `http`), which is what a query name passed here by mistake looks like: the message says to call [`query`](#query). See [Requests](../guides/requests.md).
+Sends one request without a definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted.
+
+`spec` is a url, or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`) with `{name}` placeholders filled from `args` and the current scopes. It also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events.
+
+Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, or the string isn't a url (it doesn't start with `/` or `http`). That last case is usually a query name passed by mistake, and the message says to call [`query`](#query). See [Requests](../guides/requests.md).
 
 ## define
 
@@ -92,7 +96,7 @@ Rejects with an [error](events-and-stats.md#errors) when the request or parse fa
 sghttp.precache(name as string, args = {} as object) as boolean
 ```
 
-Starts the query without waiting for its answer, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight; otherwise does what a plain `query` would, disk first for a `persist` query. For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
+Starts the query without waiting for its result, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight. Otherwise it does what a plain `query` would, reading the disk first for a `persist` query. For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
 
 ## nextPage
 
@@ -100,7 +104,7 @@ Starts the query without waiting for its answer, so a later `query` with the sam
 sghttp.nextPage(name as string, args = {} as object) as object
 ```
 
-For a query defined with `pages`: loads the page after the last one loaded for these args and returns a promise for every page so far, `{ pages, hasNext }`, the shape `query` resolves with for such a query. With nothing loaded it loads the first page. On the last page (`hasNext` false) it resolves at once without a request. A load already running for these args is shared. Rejects for a query without `pages`. See [Pages](../guides/pagination.md).
+For a query defined with `pages`: loads the page after the last one loaded for these args, and returns a promise for all the pages so far, `{ pages, hasNext }`, the same shape `query` resolves with. With nothing loaded it loads the first page. On the last page (`hasNext` false) it resolves at once without a request. A load already running for these args is shared. Rejects for a query without `pages`. See [Pages](../guides/pagination.md).
 
 ## peek
 
@@ -108,7 +112,7 @@ For a query defined with `pages`: loads the page after the last one loaded for t
 sghttp.peek(name as string, args = {} as object) as dynamic
 ```
 
-Returns the value cached in memory for those args (fresh, stale or expired), or `invalid`. Synchronous. Never makes a request or reads the disk.
+Returns the value cached in memory for those args (fresh, stale or expired), or `invalid`. For a query with pages, returns `{ pages, hasNext }`. Synchronous. Never makes a request or reads the disk.
 
 ## mutate
 
@@ -120,7 +124,7 @@ Runs a `cache: false` query and returns a promise for its parsed response. On su
 
 | Option | Meaning |
 |---|---|
-| `optimistic: [{ name, args, value }]` | Values to [`set`](#set) before the request goes out, put back if it fails unless a newer `set` or a response has replaced them. See [Showing the change at once](../guides/mutations.md#showing-the-change-at-once). |
+| `optimistic: [{ name, args, value }]` | Values to [`set`](#set) before the request goes out. If it fails, they're put back, unless a newer `set` or a response has replaced them. See [Showing the change at once](../guides/mutations.md#showing-the-change-at-once). |
 
 ## set
 
@@ -128,7 +132,7 @@ Runs a `cache: false` query and returns a promise for its parsed response. On su
 sghttp.set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
 ```
 
-Puts `value` in the cache for a query and args as if the server had just answered with it: fresh for the definition's `ttl`, delivered to watchers with `source: "local"`, with a `set` event. A response to a request that started before the call doesn't replace it (its callers still get it). The disk copy is deleted. `invalid` removes the entry. Returns the previous value, or `invalid`. For a query with pages, sets the first page. Prints a warning and returns `invalid` for an unknown or `cache: false` query.
+Puts `value` in the cache for a query and args as if the server had just answered with it. The value is fresh for the definition's `ttl`, is delivered to watchers with `source: "local"`, and is reported with a `set` event. A response to a request that started before the call doesn't replace it, though that request's callers still receive the response. The disk copy is deleted. `invalid` removes the entry. Returns the previous value, or `invalid`. For a query with pages, sets the page those args name, and watchers are notified under the first page's key. Prints a warning and returns `invalid` for an unknown or `cache: false` query.
 
 ## expire
 
@@ -136,10 +140,10 @@ Puts `value` in the cache for a query and args as if the server had just answere
 sghttp.expire(name as string, args = invalid as dynamic)
 ```
 
-Marks values out of date without dropping them. `peek` and `revalidate` queries still get them. A plain query waits for the server and falls back to the kept value on failure. Disk copies saved before now aren't served.
+Marks values out of date without dropping them. `peek` and `revalidate` queries still return them. A plain query waits for the server, and returns the kept value if the request fails. Disk copies saved before now aren't returned.
 
 - Name only: every entry of the query and its dotted descendants.
-- Name and args: the one entry those args key to now.
+- Name and args: the one entry those args key to now, and the pages loaded after it.
 
 Doesn't notify watchers.
 
@@ -153,9 +157,9 @@ Drops values from memory and disk.
 
 - No arguments: everything, including every file in this app's folder under `cachefs:/sghttp/`.
 - Name only: every entry of the query and its dotted descendants, and their files.
-- Name and args: the one entry those args key to now, and its file.
+- Name and args: the one entry those args key to now, and the pages loaded after it, with their files.
 
-A request in flight for a dropped entry still answers its callers, but isn't stored. Doesn't notify watchers.
+A request in flight for a dropped entry still resolves for its callers, but its result isn't stored. Doesn't notify watchers.
 
 ## expireAll
 
@@ -163,7 +167,7 @@ A request in flight for a dropped entry still answers its callers, but isn't sto
 sghttp.expireAll()
 ```
 
-Marks every cached value stale. Each is served from the cache on its next query and refreshed in the background. For coming back from the background; follow it with [`refresh`](#refresh) to update the open screens too.
+Marks every cached value stale. Each is returned from the cache on its next query and refreshed in the background. Use it when the app comes back from the background, and follow it with [`refresh`](#refresh) to update the open screens too.
 
 ## refresh
 
@@ -171,7 +175,13 @@ Marks every cached value stale. Each is served from the cache on its next query 
 sghttp.refresh(name = invalid as dynamic, args = invalid as dynamic) as object
 ```
 
-Sends the request again, now, for every entry of the query and its dotted descendants that has a [watcher](#watch); with `args`, that one entry when watched; with no name, every watched entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), as are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/keeping-data-fresh.md#refreshing-whats-on-screen).
+Sends the request again, now, for entries that have a [watcher](#watch):
+
+- Name only: every watched entry of the query and its dotted descendants.
+- Name and args: that one entry, if it's watched.
+- No arguments: every watched entry.
+
+Each entry keeps returning its current value in the meantime, and if the response is different, its watchers are notified. Entries nobody watches are left alone (use [`query`](#query) with `revalidate` for one of those), and so are entries with a request already in flight. For a query with pages, refreshes the first page. A mutation's `expires` calls this for the queries it expires. Returns a promise that resolves, with the number of refreshes started, once they have all settled. See [Refreshing what's on screen](../guides/keeping-data-fresh.md#refreshing-whats-on-screen).
 
 ## setScope
 
@@ -179,7 +189,7 @@ Sends the request again, now, for every entry of the query and its dotted descen
 sghttp.setScope(scopeName as string, value as dynamic, options = {} as object)
 ```
 
-Sets a scope value. When it changes from one value to another, every entry of every query listing the scope is dropped, from memory and disk, unless `options.keep` is `true`. `invalid` clears the scope. See [Scopes](../guides/scopes-and-buckets.md#scopes).
+Sets a scope value. When it changes from one value to another, sgHttp drops every entry of every query that lists the scope, in memory and on disk, unless `options.keep` is `true`. `invalid` clears the scope. See [Scopes](../guides/scopes-and-buckets.md#scopes).
 
 ## invalidateScope
 
@@ -195,7 +205,7 @@ Drops every entry, and every stored body, of every query that lists the scope. T
 sghttp.setHeaders(headers as object, client = "" as string)
 ```
 
-Merges headers into a client's shared headers: the default client's when `client` is omitted. A header set to `invalid` is removed. Takes effect for requests sent from then on. Prints a warning for an unknown client.
+Merges headers into a client's shared headers, or into the default client's when `client` is omitted. A header set to `invalid` is removed. Takes effect for requests sent from then on. Prints a warning for an unknown client.
 
 ```brightscript
 sghttp.setHeaders({ Authorization: "Bearer " + token })   ' sign in
@@ -213,7 +223,7 @@ Calls `functionName(event)` in the calling component when a value of the query i
 - With `args`: only the entry those args key to at the time of the change.
 - Without: every entry of the query.
 
-Not called for a first value, an unchanged refresh, an expiry or an invalidation. Returns a watcher node; keep it for `unwatch`. See [Watching a query](../guides/keeping-data-fresh.md#watching-a-query).
+Not called for a first value from a request or disk, an unchanged refresh, an expiry or an invalidation. A `set` always notifies, even with the same value. Returns a watcher node; keep it for `unwatch`. See [Watching a query](../guides/keeping-data-fresh.md#watching-a-query).
 
 ## unwatch
 
@@ -245,7 +255,7 @@ Removes the calling component's `observeChanges` observer.
 sghttp.isChange(change as dynamic, name as string, args = invalid as dynamic) as boolean
 ```
 
-Whether a change event's data is for this query, and for these args when given (using the current scopes and time bucket).
+Returns whether a change event's data is for this query, and for these args when given (using the current scopes and time bucket).
 
 ## observeEvents
 
@@ -253,7 +263,7 @@ Whether a change event's data is for this query, and for these args when given (
 sghttp.observeEvents(functionName as string)
 ```
 
-Calls `functionName(event)` in the calling component for every event: each request, cache hit, miss and error. `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#events).
+Calls `functionName(event)` in the calling component for every event; the types are listed under [Cache events](events-and-stats.md#events). `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#events).
 
 ## unobserveEvents
 

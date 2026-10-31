@@ -1,6 +1,6 @@
 # Requests
 
-`fetch` sends one request and gives you the response. It's the primary thing sgHttp does, and on its own it's a complete HTTP client: nothing has to be defined, cached or configured beyond a `baseUrl`. This guide covers everything a request can be.
+`fetch` sends one request and gives you the response. It's the core of sgHttp, and a complete HTTP client on its own: you don't have to define, cache or configure anything beyond, at most, a `baseUrl`. This guide covers every part of a request.
 
 ```brightscript
 promises.chain(sghttp.fetch("/shows/abc"), m).then(function(response as object, m as object) as dynamic
@@ -16,14 +16,14 @@ end function)
 
 ### A url
 
-A string is a `GET`. A relative url is joined to the client's `baseUrl`; one starting with `http` is sent as is.
+A string argument sends a `GET` to that url. A relative url is joined to the client's `baseUrl`; one starting with `http` is sent as is.
 
 ```brightscript
 sghttp.fetch("/shows/abc")
 sghttp.fetch("https://images.example.com/manifest.json")
 ```
 
-The string has to look like a url, starting with `/` or `http`. A query name passed by mistake, `fetch("homePage")`, rejects at once with a message pointing at `query`, instead of quietly asking the server for `/homePage`.
+The string must start with `/` or `http`. If you pass a query name by mistake, as in `fetch("homePage")`, the promise rejects at once with a message that tells you to call `query`, instead of sending a request to `/homePage`.
 
 ### A spec
 
@@ -43,7 +43,7 @@ A spec takes the same keys as a definition's `request` (`url`, `method`, `header
 
 ## Filling the request
 
-`{name}` placeholders anywhere in the url, query, headers or body are filled from the second argument, then from the current [scopes](scopes-and-buckets.md#scopes), so one spec can serve many calls. Strings, numbers and booleans fill a placeholder. Arrays, associative arrays and nodes don't. The rules are the same for `fetch` and for a definition's `request`, whose placeholders are filled from the query's args.
+sgHttp fills `{name}` placeholders in the url, query, headers and body from the second argument, then from the current [scopes](scopes-and-buckets.md#scopes), so one spec can serve many calls. Strings, numbers and booleans can fill a placeholder; arrays, associative arrays and nodes can't. The same rules apply to a definition's `request`, whose placeholders are filled from the query's args.
 
 ### Url
 
@@ -51,7 +51,7 @@ A spec takes the same keys as a definition's `request` (`url`, `method`, `header
 request: { url: "/shows/{showId}" }
 ```
 
-If a placeholder in the url is left unfilled, sgHttp still sends the request (it usually reaches some other route) and prints a warning: `[sghttp] "show" url has an unfilled placeholder: /shows/{showId}`.
+If a url placeholder is left unfilled, sgHttp still sends the request, which usually reaches some other route, and prints a warning: `[sghttp] "show" url has an unfilled placeholder: /shows/{showId}`.
 
 ### Query string
 
@@ -64,9 +64,9 @@ request: {
 
 - A parameter whose value is a `{placeholder}` is **dropped** when no arg or scope fills it, or when it fills to an empty string. This is how optional parameters work: `profile_id` above disappears when no profile scope is set.
 - Literal values (`sort: "relevance"`) are always sent.
-- An array value repeats the parameter: `?genre=drama&genre=comedy`. That happens either with an array literal in the definition, or with a value of exactly `"{name}"` whose arg is an array. An empty array drops the parameter.
+- An array value repeats the parameter, as in `?genre=drama&genre=comedy`. The array can be a literal in the definition, or the arg of a value that is exactly `"{name}"`. An empty array drops the parameter.
 - Numbers and booleans, literal or from args, are sent as their text: `{ page: 2, hd: true }` becomes `?page=2&hd=true`.
-- Names and values are url-escaped by the transport.
+- The transport url-escapes names and values.
 
 ### Headers
 
@@ -74,7 +74,7 @@ request: {
 request: { url: "/stream/{id}", headers: { "X-Device-Id": "{deviceId}" } }
 ```
 
-Header values are filled the same way, and added to the client's shared headers for this request. Headers every request needs (auth tokens) belong on the client instead; see [Auth](#auth-headers-on-every-request).
+Header values are filled the same way and sent along with the client's shared headers. Headers that every request needs, such as an auth token, belong on the client instead; see [Auth](#auth-headers-on-every-request).
 
 ### Body
 
@@ -93,10 +93,9 @@ An associative array or array body is sent as JSON, with `Content-Type: applicat
 
 ### Method and decoding
 
-`method` defaults to `GET`. `GET` and `HEAD` are sent as such. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or an empty body if there isn't one.
+`method` defaults to `GET`. `GET` and `HEAD` are sent without a body. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or with an empty body if there is none.
 
-Successful responses are JSON-decoded on the transport task. A body that isn't JSON stays a string. `parseJson: false` always leaves the raw text.
-
+The transport task decodes successful responses as JSON. A body that isn't JSON stays a string, and `parseJson: false` always keeps the raw text.
 
 ## Auth: headers on every request
 
@@ -113,7 +112,7 @@ sghttp.setHeaders({ Authorization: invalid })              ' after sign-out: rem
 sghttp.fetch({ url: "/auth/refresh", method: "POST", body: { refreshToken: "{token}" }, auth: false }, { token: refresh })
 ```
 
-`initialize({ baseHeaders })` are sent with every request without exception, even where `auth` is false: device ids, platform tags.
+Headers in `initialize({ baseHeaders })`, such as device ids and platform tags, are sent with every request, even one with `auth: false`.
 
 ## The response
 
@@ -123,11 +122,11 @@ The promise resolves with the transport's whole response:
 { code: 200, headers: { ... }, body: <decoded JSON, or the raw text>, url: "https://...", ms: 84 }
 ```
 
-`body` is JSON-decoded when the text parses as JSON, the raw string otherwise, or a parser's result when the spec names one (see below). `ms` is the time from sending to the answer.
+`body` is the decoded JSON when the text parses as JSON, and the raw string otherwise. When the spec names a parser, it's the parser's result (see below). `ms` is the time taken by the attempt that answered; retries and their waits aren't included.
 
 ## Building the body off the render thread
 
-Whatever you do with `response.body` in `then` runs on the render thread. For a small body that's fine. For a large one that becomes a ContentNode tree, name a **parser** in the spec, and the body is turned into the value on a task thread before the promise resolves:
+Whatever you do with `response.body` in `then` runs on the render thread. That's fine for a small body. For a large body that becomes a ContentNode tree, name a **parser** in the spec. sgHttp runs it on a task thread and resolves the promise with its result:
 
 ```brightscript
 promises.chain(sghttp.fetch({ url: "/home/main", parser: "HomePageParser" }), m).then(function(response as object, m as object) as dynamic
@@ -140,9 +139,9 @@ Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 ## Failures
 
-The promise rejects with the same shape plus `message` when the status is outside `successCodes` (default 200–299) or the request couldn't complete. `code` is the HTTP status, or negative for a network failure: the error `roUrlTransfer` reports, such as `-28` for a timeout. Failure bodies are left as raw text. See [Errors](../reference/events-and-stats.md#errors).
+The promise rejects when the status is outside `successCodes` (200–299 by default) or the request couldn't complete. It rejects with the same shape as a response, plus a `message`. `code` is the HTTP status or, for a network failure, the negative error `roUrlTransfer` reports, such as `-28` for a timeout. The body of a failed request is left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried network failures, `429` and `5xx` answers. When it retries, and how to change that, is in [The transport](transport.md).
+Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers. [The transport](transport.md) covers when it retries and how to change that.
 
 ### Reacting to a 401 everywhere
 
@@ -157,11 +156,11 @@ sub onRequestEvent(event as object)
 end sub
 ```
 
-`e.auth` says whether the request carried the shared headers, so a public endpoint's 401 isn't mistaken for an expired token. Every event field is in [Events](../reference/events-and-stats.md#events).
+`e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. Every event field is in [Events](../reference/events-and-stats.md#events).
 
 ## More than one server
 
-Each server is a **client** with its own base url, shared headers and transport pool. `initialize` sets up the default one from its top-level settings and any others under `clients`; a spec picks one by name:
+Each server is a **client** with its own base url, shared headers and transport pool. `initialize` sets up the default client from its top-level settings, and any others from `clients`. A spec picks one by name:
 
 ```brightscript
 sghttp.fetch({ url: "/entitlements", client: "billing" })
@@ -184,7 +183,7 @@ See [More than one server](multiple-servers.md).
 
 ## What fetch doesn't do
 
-A request is never cached, never de-duplicated, never persisted. Two identical calls send two requests, and the second knows nothing about the first. That's the right behaviour for most calls, and for the rest, the ones made from several places or shown on several screens, there's the [query cache](queries.md). If the app uses it, a `fetch` that changes data on the server should say so: `sghttp.expire("favorites")`.
+sgHttp never caches, de-duplicates or persists a `fetch`. Two identical calls send two requests, and the second isn't affected by the first. That's the right behaviour for most calls. For data that several components ask for, or that several screens show, use the [query cache](queries.md). If the app uses it, a `fetch` that changes data on the server should expire the queries it affects: `sghttp.expire("favorites")`.
 
 ## Next
 

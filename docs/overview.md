@@ -1,36 +1,36 @@
 # Overview
 
-sgHttp is an HTTP client for Roku SceneGraph apps. Its job is to send requests and hand back responses without blocking the render thread. Everything else it offers (a query cache, parsers, disk persistence, background refreshes) is built on top of that and switched on per request, when you ask for it. You can use sgHttp for the life of an app without defining a single query.
+sgHttp is an HTTP client for Roku SceneGraph apps. Its job is to send requests and hand back responses without blocking the render thread. A request can name a parser, which is not required, but lets the response be turned into ContentNodes on a task thread instead of the render thread. sgHttp also has a query cache. The cache returns previously fetched data from memory, saves responses to disk for the next launch, and refreshes data in the background. Each of these is turned on per request, in its definition, and `fetch` works the same whether or not the app uses them.
 
 ## Motivation
 
 SceneGraph gives you `roUrlTransfer`, Task nodes and message ports, and leaves combining them to you. Every channel ends up solving the same problems:
 
 - **Threads.** `roUrlTransfer` can't run on the render thread, so every request means a Task, a port, a field to observe and a callback to route the answer back.
-- **Concurrency.** A screen that needs five things wants five requests in flight, but not fifty. That's a pool and a queue to write.
-- **Failures.** Timeouts, retries with backoff, and knowing which failures are safe to retry: not a `POST` that may already have gone through.
+- **Concurrency.** A screen that needs five things wants five requests in flight, but not fifty. That means writing a pool and a queue.
+- **Failures.** Requests need timeouts and retries with backoff, and not every failure is safe to retry: a `POST` may already have gone through.
 - **Headers.** The auth token has to reach every request, and change when the user signs in or out.
-- **Decoding.** JSON parsing on the render thread stalls animation. It belongs on the task.
+- **Decoding.** JSON parsing on the render thread can stall animation. It belongs on the task.
 - **Answers.** The component that asked wants something it can chain, not a field to poll.
 
-sgHttp's HTTP client is that work done once: a pooled transport task per server, retries, timeouts, shared headers, a debugging proxy, JSON decoding, and a promise back on the render thread.
+sgHttp's HTTP client does that work. Each server gets a transport task with a pool of `roUrlTransfer` objects, retries and timeouts. Shared headers are added to every request, JSON is decoded on the task, a debugging proxy can be set in `initialize`, and the render thread receives a promise.
 
-### And, only when you want it, a cache
+### The query cache
 
-Some data is asked for by more than one screen, more than once. For that, sgHttp can treat a request as a **query** and take on the next set of problems:
+Much of an app's data is requested by more than one screen, and more than once. Define such a request with `define` and call it with `query` instead of `fetch`, and the cache handles the following for it:
 
-- **Caching and de-duplication.** Two screens showing the same rail make one request; going back to a screen shows no spinner; three components asking at the same moment share one answer.
-- **Staleness.** Knowing when data is out of date, and refreshing it without making the user wait for data they already have.
-- **Cold starts.** The first screen after launch shouldn't wait for the network when the app showed the same data an hour ago.
+- **Caching and de-duplication.** Two screens showing the same rail cause one request, and three components asking at the same moment receive the same response. When the user goes back to a screen, its data is returned from memory, so the screen can draw without a spinner.
+- **Staleness.** Knowing when cached data is out of date, and refreshing it in the background while the cached copy is still shown.
+- **Cold starts.** Showing the first screen after launch from the last response, instead of waiting for the network.
 - **Writes.** After the user adds a favorite, every screen showing favorites needs the new list.
 - **Per-user data.** Switching profile must never show the previous profile's data.
-- **Memory.** A Roku has little of it, so the cache needs a bound.
+- **Memory.** A Roku has little memory, so the cache has a limit on the number of entries it holds.
 
-Each of these is opt-in, per definition. A request you never define is never cached, and `fetch` behaves the same whether or not the app uses queries anywhere else.
+Each query's definition says which of these it uses. A request you never define is never cached, and `fetch` behaves the same whether or not the app uses queries anywhere else.
 
-## Optionally, name a request
+## Name a request
 
-With `sghttp.initialize({ baseUrl })` in the main scene, `fetch` works from any component (the [quick start](quick-start.md) walks through it). If the home page is wanted by several screens, define it:
+With `sghttp.initialize({ baseUrl })` in the main scene, `fetch` works from any component (the [quick start](quick-start.md) walks through it). If several screens need the home page, define it:
 
 ```brightscript
 sghttp.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
@@ -47,16 +47,16 @@ end function)
 
 The first call sends the request, exactly as `fetch` would, and keeps the body in memory under the query's name and args. From then on:
 
-- **For the next five minutes** (the `ttl`), a query with the same args, from any component, is answered from memory. No request is sent.
-- **After that**, the value is stale. A query is still answered from memory at once, and sgHttp sends a request in the background to check. If the server's answer is different, the cache is updated and any watcher of the query hears about it. If it's byte-for-byte the same, nothing happens.
+- **For the next five minutes** (the `ttl`), a query with the same args, from any component, is returned from memory. No request is sent.
+- **After that**, the value is stale. A query is still returned from memory at once, and sgHttp sends a request in the background to check. If the server's answer is different, the cache is updated and any watcher of the query hears about it. If it's byte-for-byte the same, the value is kept, its `ttl` restarts, and nothing is parsed or redrawn.
 - **At any moment**, if a request for this query is already in flight, a second query joins it instead of sending another.
 
-From here, each need is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so the next launch draws the screen before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds them in that order, after the HTTP client.
+From here, each feature is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so on the next launch the query is returned from disk and the screen can draw before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds `parser` and `persist` this way, after the HTTP client.
 
 ## What next
 
 - Install it: [Installation](installation.md)
 - Use it: [Quick start](quick-start.md)
 - Everything `fetch` can do: [Requests](guides/requests.md)
-- If you want the cache: [Queries and keys](guides/queries.md)
+- Use the cache: [Queries and keys](guides/queries.md)
 - Look something up: [API reference](reference/api.md)

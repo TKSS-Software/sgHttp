@@ -1,6 +1,6 @@
 # More than one server
 
-Most channels talk to one API, and need nothing from this page. When yours talks to several (your API, an analytics collector, a partner's catalog), give each extra server a **client**.
+Most channels talk to one API and don't need anything on this page. If yours talks to several, such as your own API, an analytics collector and a partner's catalog, give each extra server a **client**.
 
 ## The default client
 
@@ -34,9 +34,9 @@ sghttp.define("homePage", { request: { url: "/home/{slug}" } })                 
 sghttp.define("partner.homePage", { client: "partner", request: { url: "/home/{slug}" } })
 ```
 
-Query names are shared by every client, so prefix another server's queries with its name. Each call then says which server it reaches, and `invalidate("partner")` or `expire("partner")` covers that whole server.
+All clients share one set of query names, so prefix another server's queries with its name. Each call then shows which server it reaches, and `invalidate("partner")` or `expire("partner")` covers that whole server.
 
-Defining a query that names a client `initialize` didn't set up prints a warning. Its queries reject with `sghttp: query "..." names client "...", which initialize did not set up`, without sending anything.
+If a definition names a client that `initialize` didn't set up, sgHttp prints a warning, and queries of it reject without sending anything: `sghttp: query "..." names client "...", which initialize did not set up`.
 
 ## Headers per client
 

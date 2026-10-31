@@ -1,6 +1,6 @@
 # Parsers
 
-A parser turns a response body into the value your screens use, usually a ContentNode tree. Parsers run on a task thread, so building large trees never stalls the UI.
+A parser turns a response body into the value your screens use, usually a ContentNode tree. sgHttp runs parsers on a task thread, so building a large tree never stalls the UI.
 
 ## Writing a parser
 
@@ -20,12 +20,12 @@ end class
 
 - `body` is the decoded JSON (an associative array or array), or the raw string when the response wasn't JSON or the request set `parseJson: false`.
 - `args` are the args passed to `fetch`, `query` or `mutate`, or `{}`.
-- The return value is what `query` resolves with (and what the cache stores), or what a `fetch` resolves with as `response.body`. Return anything: a node, an associative array, a string.
+- The return value is what `query` resolves with (and what the cache stores), or what a `fetch` resolves with as `response.body`. It can be anything: a node, an associative array, a string.
 - If `parse` throws, the promise rejects with `{ message: "sghttp parser \"ShowParser\" threw: ...", error }`.
 
 ## The parser task
 
-Parsers are looked up by name on a Task that extends sgHttp's `ParserTask`. Override `getParser` to map names to instances:
+sgHttp looks parsers up by name on a Task that extends its `ParserTask`. Override `getParser` there to return an instance for each name:
 
 ```xml
 <component name="AppParserTask" extends="sghttp_ParserTask">
@@ -56,25 +56,25 @@ sghttp.define("show", { request: { url: "/shows/{id}" }, parser: "ShowParser" })
 sghttp.fetch({ url: "/shows/{id}", parser: "ShowParser" }, { id: "abc" })
 ```
 
-- `getParser` is called for every response, so each parse gets a new instance. Don't rely on state kept between parses.
+- `getParser` is called for every response, so it can return a fresh instance each time. Don't rely on state kept between parses.
 - An unknown name (`getParser` returns `invalid`) rejects with `sghttp parser: unknown parser "..."`.
 - Naming a parser when no `parserTask` was configured rejects with a message saying so.
-- A request names a parser, not a task: any of the app's parser tasks can run it.
+- A request names a parser, not a task, so any of the app's parser tasks can run it.
 - Without a `parser`, a query resolves with the decoded body itself, and a `fetch`'s `response.body` is the decoded body.
 
 ## Nodes come back by reference
 
-ContentNode trees built in the parser are handed to the render thread by reference, not copied. The cache stores that same tree, and every query of the key returns it. See [Threads and memory](threads-and-memory.md#cached-nodes-are-shared) for what that means when you attach it to the screen.
+ContentNode trees built in the parser are passed to the render thread by reference, not copied. The cache stores that same tree, and every query of the key returns it. See [Threads and memory](threads-and-memory.md#cached-nodes-are-shared) for what that means when you attach it to the screen.
 
 ## Parser threads
 
-`initialize` starts two copies of `parserTask`, each on its own thread. Each parse goes to the copy with the fewest parses waiting, so a small body, like a menu, isn't held behind a large page of rows. Each copy parses one body at a time, in the order they reach it. A slow parser delays only the parses behind it on its own task, and never the UI.
+`initialize` starts two copies of `parserTask`, each on its own thread. Each parse goes to the copy with the fewest parses waiting, so a small body, like a menu, isn't held behind a large page of rows. Each copy parses one body at a time, in the order the bodies arrive. A slow parser delays only the parses behind it on its own task, and never the UI.
 
 ```brightscript
 sghttp.initialize({ parserTask: "AppParserTask", parserThreads: 3 })
 ```
 
-Keep parsers to building the value; do any further work where the value is used.
+Keep a parser to building the value, and do any further work where the value is used.
 
 ## Next
 

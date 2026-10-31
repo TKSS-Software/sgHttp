@@ -21,7 +21,7 @@ The store runs on the render thread and only does bookkeeping. Network, parsing 
 npm run build
 ```
 
-On the first run this installs the package's own tools. It then copies the `promises` dependency into `src/` for compilation, compiles `src/` to `dist/` (`.brs` plus `.d.bs` type definitions), and strips the dependency copies and source maps from `dist/`. The consuming app's ropm install supplies those itself.
+On the first run, this installs the package's own tools. It then copies the `promises` dependency into `src/` for compilation, compiles `src/` to `dist/` (`.brs` plus `.d.bs` type definitions), and strips the dependency copies and source maps from `dist/`. The consuming app's ropm install supplies those itself.
 
 ropm installs the package from `dist/`; [Installation](installation.md#install-with-ropm) covers picking up a new build in the app.
 
@@ -40,9 +40,9 @@ Then:
 npm test
 ```
 
-This builds the package, compiles the test app (`bsconfig-test.json`), deploys it, and prints the Rooibos report. The deploy goes through `scripts/rooibos.js`, which runs the Rooibos CLI but replaces the dev channel instead of deleting it first. Deleting it would wipe the registry that every sideloaded app shares, signing you out of the app you sideload next. The specs' disk cache lives in the test app's own `cachefs:/` folder, so clearing it never touches another sideloaded app's cache. The device's debug console (port 8085) must be free. A VS Code debug session or BrightScript console attached to the device makes the run fail with `SocketConnectionInUseError`.
+This builds the package, compiles the test app (`bsconfig-test.json`), deploys it, and prints the Rooibos report. The deploy goes through `scripts/rooibos.js`, which runs the Rooibos CLI but replaces the dev channel instead of deleting it first. Deleting it would wipe the registry that every sideloaded app shares, signing you out of the app you sideload next. The specs' disk cache lives in the test app's own `cachefs:/` folder, so clearing it never touches another sideloaded app's folder. The device's debug console (port 8085) must be free. A VS Code debug session or BrightScript console attached to the device makes the run fail with `SocketConnectionInUseError`.
 
-The specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. For requests that start later, after a disk read for a `persist: true` query, `answerNext(body)` queues an answer for the next request made.
+The specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
 
 ## Documentation
 

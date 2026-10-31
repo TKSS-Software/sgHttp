@@ -2,7 +2,7 @@
 
 ## Events
 
-Every request and cache decision is reported as an event. Observe them from any component:
+sgHttp reports every request and every cache decision as an event. Observe them from any component:
 
 ```brightscript
 sghttp.observeEvents("onCacheEvent")
@@ -17,21 +17,20 @@ The event types and their fields are in [Events](../reference/events-and-stats.m
 
 ## Printing every event
 
-`initialize({ debug: true })` prints each event and each change as it happens, with the cache key, so a session's traffic reads straight off the console:
+With `initialize({ debug: true })`, sgHttp prints every event and change as it happens, with the cache key, so you can follow a session's traffic on the console:
 
 ```
-[sghttp] miss homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
 [sghttp] resolve homePage via network (412ms) homePage|profile=|{"slug":"home-page"}
 [sghttp] hit homePage via memory (0ms) homePage|profile=|{"slug":"home-page"}
 [sghttp] error favorites.add via network (1203ms) code 401 
 [sghttp] change homePage via network homePage|profile=|{"slug":"home-page"}
 ```
 
-The key shows the args (and, for a page after the first, the cursor), so it tells which page or which profile a line is about. It's the same information `observeEvents` delivers, printed; turn it on in development builds only.
+The key shows the args, and the cursor for any page after the first, so you can tell which page or profile a line is about. It's the same information `observeEvents` delivers. Turn it on in development builds only.
 
 ## Stats
 
-`sghttp.getStats()` returns running counters since `initialize`:
+`sghttp.getStats()` returns counters kept since `initialize`:
 
 ```brightscript
 stats = sghttp.getStats()
@@ -42,10 +41,10 @@ print "partner in flight: "; stats.clients.partner.active
 
 Useful checks:
 
-- **`watchers` only grows** as you move between screens: something calls `watch` without `unwatch`.
-- **`entries` sits at `maxEntries`**: the cache is evicting. Look at which args fork your keys (see [Cache keys](queries.md#cache-keys)), or raise the cap.
-- **`requests` is far above `misses`**: many background refreshes. Look at your `ttl`s.
-- **`unchanged` is close to `requests`**: refreshes are mostly finding nothing. Longer `ttl`s, or `conditional: true`, would save bandwidth.
+- **`watchers` only grows** as you move between screens: something calls `watch` and never `unwatch`.
+- **`entries` sits at `maxEntries`**: the cache is evicting. Look at which args are creating extra keys (see [Cache keys](queries.md#cache-keys)), or raise the cap.
+- **`requests` is far above `misses`**: many background refreshes, or many `fetch` and mutation calls, which count as requests but never as misses. Look at your `ttl`s.
+- **`unchanged` is close to `requests`**: most refreshes find nothing new. Longer `ttl`s would save requests, and `conditional: true` saves bandwidth if the server sends validators.
 
 ## Console warnings
 
@@ -59,11 +58,13 @@ sgHttp prints to the BrightScript console (port 8085) when something is probably
 | `proxy "..." is not host:port, ignoring it` | The `proxy` setting couldn't be used |
 | `setHeaders: no client "y"` | `setHeaders` named a client that doesn't exist |
 | `a client cannot be named "default"` | `clients` has an entry named `default` |
+| `precache: no query named "x"` / `set: no query named "x"` | `precache` or `set` named a query that isn't defined |
+| `precache: "x" is cache: false, nothing to keep` / `set: "x" is cache: false, nothing to set` | `precache` or `set` was called for a mutation |
 | `transport: request ... delivered twice` / `parser: job ... delivered twice` | A field update to a task was lost. Please report it, with what the app was doing. |
 
 ## Routing traffic through a proxy
 
-Roku apps can't set an HTTP proxy, but a proxy such as Charles can still see their traffic if each url is prefixed with the proxy's address. Pass `proxy` to `initialize` (or to a client):
+Roku apps can't set an HTTP proxy. A proxy such as Charles can still see their traffic, though, if each url is prefixed with the proxy's address. Pass `proxy` to `initialize`, or to a client:
 
 ```brightscript
 sghttp.initialize({
@@ -74,12 +75,12 @@ sghttp.initialize({
 
 Every request url then becomes `http://192.168.1.20:8888/;https://api.example.com/...`. Configure the proxy to forward urls in that form.
 
-- Requests to private and local hosts (`10.*`, `172.16-31.*`, `192.168.*`, `169.254.*`, `localhost`, `*.local`) go direct, since the proxy may not be able to reach that network.
+- Requests to private and local hosts (`10.*`, `127.*`, `172.16-31.*`, `192.168.*`, `169.254.*`, `localhost`, `*.local`) go direct, since the proxy may not be able to reach that network.
 - A definition with `proxy: false` always goes direct.
-- An empty or missing `proxy` turns it off. A value that isn't `host:port` is ignored, with a console warning.
+- An empty or missing `proxy` turns proxying off. A value that isn't `host:port` is ignored, with a console warning.
 
 Keep it out of release builds.
 
 ## Next
 
-Optional, the query cache: [Queries and keys](queries.md)
+The query cache: [Queries and keys](queries.md)

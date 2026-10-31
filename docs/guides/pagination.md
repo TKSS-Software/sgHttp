@@ -1,6 +1,6 @@
 # Pages
 
-Rails, search results and "view more" grids come from the server a page at a time. A query defined with `pages` loads them one by one, keeps every page it has loaded, and hands you all of them together, so a screen can append the new page and sgHttp can treat the whole listing as one thing to cache, expire and watch.
+Rails, search results and "view more" grids come from the server a page at a time. A query defined with `pages` loads them one at a time and keeps every page it has loaded. It returns all of the loaded pages together, so a screen can append each new page as it arrives. sgHttp caches, expires and watches the whole listing as one unit.
 
 ```brightscript
 sghttp.define("titles", {
@@ -33,7 +33,7 @@ promises.chain(sghttp.nextPage("titles", { genre: "drama" }), m).then(function(r
 end function)
 ```
 
-`query` answers with every page loaded so far, not only the first, so a screen opened on a listing that was paged through earlier gets all of it at once. Draw all of `pages`; `nextPage` then adds the one after the last.
+`query` returns every page loaded so far, not only the first. So when a screen opens on a listing the user paged through earlier, it gets all of those pages at once. Draw every page in `pages`. `nextPage` then loads the page after the last one.
 
 ## Defining the pages
 
@@ -41,12 +41,12 @@ end function)
 
 | Key | Meaning |
 |---|---|
-| `next` | The path in a page's **value** (the parser's result, or the decoded body) to the cursor of the page after it: a url, a page number, a token. Dotted for nested fields (`"paging.next"`). The last page leaves it missing, empty or `false`. |
-| `arg` | The arg the cursor is passed as when the next page is requested. Default `"next"`. |
+| `next` | The path, in a page's **value** (the parser's result, or the decoded body), to the cursor of the next page: a url, a page number or a token. Use dots for nested fields (`"paging.next"`). On the last page it's missing, empty or `false`. |
+| `arg` | The name of the arg that carries the cursor when the next page is requested. Default `"next"`. |
 | `request` | The request for pages after the first, when it differs from the definition's. Default: the definition's `request`. |
 | `byPosition` | `true` for an API that cuts pages by position, so an expired later page is read again rather than kept. See below. Default `false`. |
 
-The next page's args are the first page's args plus `arg`, so a parser that needs the original args (the genre, the model) still gets them, and the request's other placeholders still fill.
+The next page's args are the first page's args plus `arg`, so a parser that needs the original args (the genre, the model) still gets them, and the request's other placeholders are still filled.
 
 Two common shapes:
 
@@ -61,13 +61,13 @@ pages: { next: "nextPage", arg: "page" }
 
 ## What you get back
 
-For a query with pages, `query`, `nextPage` and `peek` all answer with the same shape:
+For a query with pages, `query`, `nextPage` and `peek` all return the same shape:
 
 ```brightscript
 { pages: [page1, page2, ...], hasNext: true }
 ```
 
-`pages` holds each page's value in order, `hasNext` whether the last one points to another. `query` loads the first page if nothing is loaded and otherwise answers with every page so far; `nextPage` loads one more. On the last page, `nextPage` answers at once with what there is, without a request. Two `nextPage` calls for the same args while one is loading share it.
+`pages` holds each page's value in order, and `hasNext` says whether the last one points to another. `query` loads the first page if nothing is loaded yet, and otherwise returns every page loaded so far. `nextPage` loads one more. When the last page has been loaded, `nextPage` returns the pages it has at once, without sending a request. If `nextPage` is called twice for the same args while a page is loading, both calls share that load.
 
 ## How pages are kept
 
@@ -75,16 +75,16 @@ Each page is an ordinary cache entry, keyed by its own args (the first page's ar
 
 Because of that, the cache's rules apply per page and per listing:
 
-- **A changed first page starts the listing over.** When a refresh finds the first page different (a `revalidate` query, a stale query, an `expire` then a query), the pages after it belonged to the old listing and are dropped from it. The query then answers with one page, and a watcher of the query hears about it with `pages` of one. `nextPage` follows the new listing from there; if its pages happen to be the same urls, they're already in memory.
-- **A changed page that still points to the same next page keeps the pages after it.** Same cursor, same listing: only the page's own content is new. A first page found byte-for-byte unchanged keeps them too.
-- **`byPosition: true` re-reads expired later pages.** An API that cuts pages by position (`page=2`, `offset=20`) shifts entries between pages on every change: add one at the front and the last entry of page 1 moves to page 2. Its next-page cursor stays the same, so by the rule above the old page 2 would be kept, one entry short. With `byPosition`, a later page that has expired (a mutation's `expires`, or `expire`) is no longer part of the listing: the query answers with the pages up to it, `hasNext` is true, and `nextPage` reads it again. Use it for lists the user edits (favorites); leave it off for listings whose later pages don't move when the first changes.
+- **A first page whose next-page cursor changed starts the listing over.** When a refresh finds the first page different (a `revalidate` query, a stale query, an `expire` then a query) and its cursor to the next page changed too, the pages after it belong to the old listing, so they're dropped from it. The query then returns one page, and a watcher of the query is notified with `pages` holding that one page. `nextPage` follows the new listing from there; if its pages happen to have the same urls, they're already in memory.
+- **A changed page that still points to the same next page keeps the pages after it.** If the cursor is the same, the listing is treated as the same one, and only that page's own content is new. A first page that is found byte-for-byte unchanged keeps the pages after it too.
+- **`byPosition: true` re-reads expired later pages.** An API that cuts pages by position (`page=2`, `offset=20`) shifts entries between pages on every change: add one at the front, and the last entry of page 1 moves to page 2. The next-page cursor stays the same, so under the rule above the old page 2 would be kept, one entry short. With `byPosition`, a later page that has expired (through a mutation's `expires`, or `expire`) is no longer part of the listing. The query returns the pages before it, `hasNext` is true, and `nextPage` loads it again. Use it for lists the user edits, like favorites; leave it off for listings whose later pages don't move when the first one changes.
 - **`expire(name, args)` and `invalidate(name, args)`** on the first page's args cover the pages after it. By name (`expire("titles")`) they cover every page of every listing, as always.
 - **Eviction** can drop a middle page from memory (`maxEntries`). The listing then ends at the page before it, and `nextPage` reloads from there.
-- **Persistence** keeps each page on disk. On a cold start the first page is served from disk as usual; later pages are loaded again by `nextPage` (and may come from disk too).
+- **Persistence** keeps each page on disk. On a cold start, the first page is returned from disk as usual. Later pages are loaded again by `nextPage`, and may also come from disk.
 
 ## Watching a listing
 
-`watch(name, callback, args)` with the first page's args hears about the listing: the callback's `value` is `{ pages, hasNext }`. Pages after the first never notify on their own; a change in one of them is reported as the listing's, under the first page's key.
+A watcher made with `watch(name, callback, args)` and the first page's args is notified about the whole listing; the callback's `value` is `{ pages, hasNext }`. Pages after the first never send notifications of their own. A change in one of them is reported as a change to the listing, under the first page's key.
 
 ## Next
 

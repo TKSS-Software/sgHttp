@@ -1,6 +1,6 @@
 # Quick start
 
-Part 1 is the HTTP client: set it up, send requests, handle the answers. It's complete on its own, and for many apps it's all of sgHttp they ever use. Part 2 is optional: naming a request so sgHttp caches it, and what each further key adds.
+Part 1 is the HTTP client: set it up, send requests and handle the answers. It works on its own. Part 2 is the query cache: you define a request and call it with `query` so that sgHttp caches its result, then add parsing and persistence to its definition.
 
 The examples talk to `https://api.example.com`, whose `GET /home/{slug}` answers with:
 
@@ -29,7 +29,7 @@ sub init()
 end sub
 ```
 
-This starts the transport: a Task with a pool of `roUrlTransfer` objects, a queue, retries, a timeout and the headers every request shares. `baseUrl` is the only setting worth giving at first; see [`initialize`](reference/api.md#initialize) for the rest.
+This starts the transport, the Task that sends every request. It keeps a pool of `roUrlTransfer` objects and a queue, retries network failures and server errors, applies a timeout, and adds the headers every request shares. To begin with, `baseUrl` is the only setting you need; see [`initialize`](reference/api.md#initialize) for the rest.
 
 ### 2. Send a request
 
@@ -50,7 +50,7 @@ sub load()
 end sub
 ```
 
-The request goes out on the transport task, the JSON is decoded there, and the promise resolves on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. A relative url is joined to `baseUrl`; a url starting with `http` is sent as is.
+The request goes out on the transport task, the JSON is decoded there, and the `then` callback runs on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. A relative url is joined to `baseUrl`; a url starting with `http` is sent as is.
 
 ### 3. Send data
 
@@ -70,14 +70,14 @@ Query strings, headers and raw bodies work the same way; see [Requests](guides/r
 
 ### 4. Sign the user in
 
-Headers that every request needs, like the auth token, are set once on the client and sent from then on:
+Set the headers every request needs, like the auth token, once. sgHttp sends them with every request from then on, except one marked `auth: false`:
 
 ```brightscript
 sghttp.setHeaders({ Authorization: "Bearer " + token })   ' after sign-in
 sghttp.setHeaders({ Authorization: invalid })              ' after sign-out
 ```
 
-To react when the token expires, observe sgHttp's events from the main scene. Each failed request reports its status:
+To react when the token expires, observe sgHttp's events from the main scene. Every failed request is reported with its HTTP status, a negative code for a network failure, or `0` when there was no response:
 
 ```brightscript
 sghttp.observeEvents("onRequestEvent")
@@ -90,15 +90,17 @@ end sub
 
 ### 5. Handle failures
 
-A promise rejects when the status is outside 200–299 or the request couldn't complete. `error.code` is the HTTP status, or negative for a network failure (`-28` is a timeout). Retries with backoff happen before the promise settles, so by the time `catch` runs, the transport has already given up.
+A promise rejects when the status is outside 200–299 or the request couldn't complete. `error.code` is the HTTP status, or negative for a network failure: the curl error code `roUrlTransfer` reports, such as `-28` for a timeout. The transport retries with backoff before the promise settles, so by the time `catch` runs, it has already given up.
 
-**That's the HTTP client.** Nothing below is needed to use it, and nothing below changes how it behaves.
+**That's the HTTP client.** Nothing in Part 2 changes how it behaves.
 
-## Part 2: optional, the query cache
+## Part 2: the query cache
 
-### 6. Give a request a name
+Part 2 turns the home page request into a query, then adds a parser and persistence to its definition. By the end, the home page is returned from memory when it was fetched recently, its ContentNode tree is built on a task thread, and on the next launch it is returned from disk.
 
-A request the app makes from more than one place can be defined once, next to `initialize`:
+### 6. Define the request and query it
+
+Define the request once, next to `initialize`:
 
 ```brightscript
 sghttp.define("homePage", {
@@ -106,7 +108,7 @@ sghttp.define("homePage", {
 })
 ```
 
-and queried by name:
+Then any component can query it by name:
 
 ```brightscript
 sub load()
@@ -120,7 +122,7 @@ sub load()
 end sub
 ```
 
-Two things changed. `query` resolves with the body alone (the decoded JSON), since a query is about the data, not the exchange. And the result is **cached**: a second `query("homePage", { slug: "main" })` from any component, within the default five minutes, resolves at once with no request. Two components querying it at the same moment share one request. See [Queries and keys](guides/queries.md).
+Two things change. `query` resolves with the body alone (the decoded JSON), not the whole response. And the result is **cached**: for the next five minutes (the default), `query("homePage", { slug: "main" })` from any component resolves at once with no request. Components that query it at the same moment share one request. See [Queries and keys](guides/queries.md).
 
 ### 7. Say how long it stays fresh
 
@@ -131,11 +133,11 @@ sghttp.define("homePage", {
 })
 ```
 
-Within `ttl` seconds, a query is answered from memory. After that the cached value is **stale**: a query still resolves at once with it, and sgHttp checks the server in the background. If the server's response is byte-for-byte the same, nothing else happens. See [Caching and freshness](guides/caching.md).
+Within `ttl` seconds, a query is returned from memory. After that, the cached value is **stale**: a query still resolves with it at once, and sgHttp checks the server in the background. If the server's response is byte-for-byte the same, nothing else happens. See [Caching and freshness](guides/caching.md).
 
 ### 8. Build the screen's content off the render thread
 
-Setting a label is cheap. Building a ContentNode tree for a RowList from a large response is not, and doing it in `then` runs it on the render thread. A **parser** moves that work to a task.
+Setting a label is cheap. Building a ContentNode tree for a RowList from a large response is not, and code in `then` runs on the render thread. A **parser** does that work on a task thread instead.
 
 A parser is any class with `parse(body, args)`:
 
@@ -160,7 +162,7 @@ class HomePageParser
 end class
 ```
 
-Parsers are looked up by name on a Task you extend from sgHttp's `ParserTask` (prefixed `sghttp_ParserTask` after installing):
+sgHttp looks parsers up by name on a Task that extends its `ParserTask` (installed as `sghttp_ParserTask`):
 
 ```xml
 <!-- components/AppParserTask.xml -->
@@ -203,7 +205,7 @@ promises.chain(sghttp.query("homePage", { slug: "main" }), m).then(function(page
 end function)
 ```
 
-A `fetch` can name a parser too (`parser` in its spec), when a one-off request wants its body built off the render thread. See [Parsers](guides/parsers.md).
+`fetch` can use a parser too: add `parser` to its spec when a one-off request needs its body built off the render thread. See [Parsers](guides/parsers.md).
 
 ### 9. Keep it for the next launch
 
@@ -216,7 +218,7 @@ sghttp.define("homePage", {
 })
 ```
 
-On the next launch, the first query reads the saved body from disk, parses it, and resolves before the network answers, then refreshes it in the background if it's older than `ttl`. See [Persistence](guides/persistence.md).
+On the next launch, the first query reads the saved body from disk, parses it and resolves before the network answers. If the body is older than `ttl`, sgHttp then refreshes it in the background. See [Persistence](guides/persistence.md).
 
 ### 10. Redraw when the data changes
 
@@ -243,11 +245,11 @@ See [Keeping data fresh](guides/keeping-data-fresh.md).
 
 ### Optional: if your app uses sgRouter
 
-sgHttp needs no router; the screen above is the normal way to use it. If your app happens to use [sgRouter](https://github.com/rokucommunity/sgRouter), the two fit together: sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so you can hand it the query and the screen appears with its data already drawn:
+sgHttp doesn't need a router; the screen above is the normal way to use it. If your app uses [sgRouter](https://github.com/rokucommunity/sgRouter), the two work together. sgRouter waits for a promise returned from `beforeViewOpen` before it shows the view, so when you return the query's promise, the view appears with its data already drawn:
 
 ```brightscript
 function beforeViewOpen(params as object) as dynamic
-    return promises.chain(sghttp.query("homePage", { slug: "home-page" }), m).then(function(page as object, m as object) as dynamic
+    return promises.chain(sghttp.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
         m.rowList.content = page
         return invalid
     end function).toPromise()
@@ -257,10 +259,10 @@ end function
 ## What you have now
 
 - Every request in the app goes through one pooled transport, with retries, a timeout and the user's auth header, and comes back as a promise.
-- A 401 anywhere sends the app to sign-in.
-- Opening the home screen a second time within five minutes draws it immediately, with no request and no parsing.
-- After five minutes, it still draws immediately from the cache, and sgHttp checks the server in the background. If the response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
-- On the next launch, the home screen is drawn from the body saved on `cachefs:/`, then refreshed if it's older than five minutes.
+- A 401 from any request sends the app to sign-in.
+- When the home screen opens again within five minutes, its query is returned from memory with no request and no parsing, so the screen draws at once.
+- After five minutes, the query is still returned at once from the cache, and sgHttp checks the server in the background. If the response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
+- On the next launch, the query is returned from the body saved on `cachefs:/`, so the home screen draws before the network answers. sgHttp then refreshes it if it's older than five minutes.
 - A one-off call anywhere in the app is still just `sghttp.fetch(...)`.
 
 ## Next
