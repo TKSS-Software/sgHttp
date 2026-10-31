@@ -2,6 +2,13 @@
   <img src="media/logo.png" alt="sgQuery" width="640">
 </p>
 
+<p align="center">
+  <a href="https://github.com/TKSS-Software/sgQuery/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/TKSS-Software/sgQuery/build.yml?branch=main&logo=github" alt="Build status"></a>
+  <a href="https://www.npmjs.com/package/sgquery"><img src="https://img.shields.io/npm/v/sgquery?logo=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/sgquery"><img src="https://img.shields.io/npm/dm/sgquery" alt="Monthly downloads"></a>
+  <a href="https://github.com/TKSS-Software/sgQuery/blob/main/LICENSE"><img src="https://img.shields.io/github/license/TKSS-Software/sgQuery" alt="License"></a>
+</p>
+
 # sgQuery
 
 An HTTP client for Roku SceneGraph apps. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts, shared headers and JSON decoding; the render thread only ever sees the promise.
