@@ -16,7 +16,7 @@ An HTTP client for Roku SceneGraph apps. Send a request from any component and g
 When you want your app faster, the same library can also cache what it fetches. Data that was previously fetched through a query is returned from memory without a request, components that ask for the same data at the same time share one request, and on a cold start the last response is read from disk before the network answers.
 
 ```brightscript
-' once, in the main scene
+' once, either in the main scene or another function that runs before your first request
 sghttp.initialize({ baseUrl: "https://api.example.com" })
 
 ' anywhere
