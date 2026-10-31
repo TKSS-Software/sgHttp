@@ -11,7 +11,11 @@ import "pkg:/source/keys.bs"
 ' and base headers when it starts.
 '
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
-'         allowNotModified, timeoutSeconds, keepRawBody, priority }
+'         allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat, graphql }
+'   graphql     - true for a GraphQL request: a response with errors and no data fails, and a
+'                 failure carries the errors (see graphqlFailure)
+'   safeToRepeat - true when the request only reads, whatever its method (a cached query sent
+'                 as a POST, such as a GraphQL query): it is retried as a GET would be
 '   priority    - "high", "normal" (the default) or "low": which queue the request waits in.
 '                 The store moves a queued request through the promote field, { id, priority }:
 '                 up when a caller that waits on it joins it, down when its callers give up.
@@ -208,13 +212,14 @@ end function
 ' Network failures, 429 and 5xx responses are retried. A POST or PATCH may already have been
 ' applied when it fails that way (a timeout, a 500, a gateway's 502), and repeating it could
 ' apply the change twice, so it is only retried when it cannot have been: a 429, which was
-' turned away before it was handled, or a connection that never opened. A request that sets
-' retries itself is retried like any other.
+' turned away before it was handled, or a connection that never opened. A request that only
+' reads (safeToRepeat), or that sets retries itself, is retried like any other.
 function isRetryable(spec as object, code as integer) as boolean
     if code = 429 then return true
     if code > 0 and code < 500 then return false
     method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
     if method <> "POST" and method <> "PATCH" then return true
+    if spec.safeToRepeat = true then return true
     if isWholeNumber(spec.retries) then return true
     return neverConnected(code)
 end function
@@ -352,6 +357,16 @@ sub onUrlEvent(event as object)
         end if
     end if
 
+    if job.spec.graphql = true then
+        failure = graphqlFailure(response.body, rawBody)
+        if failure <> invalid then
+            ' A failed body is left as text, as for any failure
+            if success then response.body = rawBody
+            success = false
+            response.append(failure)
+        end if
+    end if
+
     retryable = isRetryable(job.spec, code) and job.attempts < job.maxAttempts
     if not success and retryable then
         ' The wait the server asks for (429, 503), else exponential backoff: 1s, 2s, 4s...
@@ -382,6 +397,22 @@ sub finish(job as object, response as object, success as boolean)
         promises.reject(response, job.promise)
     end if
 end sub
+
+' A GraphQL server reports a failed operation in the body: with a 200, or with a 4xx, as
+' { errors: [...] } and no data. That is a failure (never cached, nor kept on disk), with the
+' errors and the first one's message. Partial data with errors succeeds; the errors are for the
+' fields that failed. invalid when the body reports nothing.
+function graphqlFailure(body as dynamic, rawBody as string) as dynamic
+    if rawBody.instr(chr(34) + "errors" + chr(34)) < 0 then return invalid
+    document = body
+    if type(document) <> "roAssociativeArray" then document = parseJson(rawBody)
+    if type(document) <> "roAssociativeArray" or type(document.errors) <> "roArray" or document.errors.count() = 0 then return invalid
+    if document.data <> invalid then return invalid
+    failure = { errors: document.errors, message: "GraphQL error" }
+    first = document.errors[0]
+    if type(first) = "roAssociativeArray" and isNonEmptyString(first.message) then failure.message = first.message
+    return failure
+end function
 
 function isSuccess(code as integer, spec as object) as boolean
     codes = spec.successCodes

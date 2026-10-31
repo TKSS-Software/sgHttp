@@ -25,7 +25,8 @@ sghttp.define("episodes", {
 | `request.headers` | none | Headers for this query, filled like the url |
 | `request.body` | none | An associative array or array (sent as JSON), or a string. `"{name}"` alone passes an arg through as is. |
 | `request.parseJson` | `true` | `false` keeps the raw response text |
-| `request.retries` | the client's | Retries for network failures, 429 and 5xx. Set on a `POST` or `PATCH`, it also retries timeouts and 5xx, which by default it doesn't ([Retries](../guides/transport.md#the-built-in-transport)). |
+| `request.graphql` | none | A GraphQL operation, `{ query, variables, operationName }`, sent as JSON in a `POST`. The query resolves with the response's `data`. See [GraphQL](../guides/graphql.md). |
+| `request.retries` | the client's | Retries for network failures, 429 and 5xx. Set on a `POST` or `PATCH` with `cache: false`, it also retries timeouts and 5xx, which by default it doesn't. A cached query is retried like a `GET` whatever its method ([Retries](../guides/transport.md#the-built-in-transport)). |
 
 See [Filling the request](../guides/requests.md#filling-the-request) for the exact rules.
 
@@ -33,11 +34,11 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 
 | Key | Default | Meaning |
 |---|---|---|
-| `cache` | `true` | `false` for mutations and per-call resources: the request is sent and parsed, but its result is never stored or shared |
+| `cache` | `true` | `false` for mutations and per-call resources: the request is sent and parsed, but its result is never stored or shared. A GraphQL `mutation` is never cached, without it. |
 | `ttl` | the response's `Cache-Control`, else `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, invalidated or marked stale by `expireAll`. See [Freshness from the server](../guides/caching.md#freshness-from-the-server). |
 | `staleWhileRevalidate` | `true` | Return a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
-| `pages` | none | `{ next, arg, request, byPosition }`: makes this a query with pages. See [Pages](../guides/pagination.md#defining-the-pages). |
+| `pages` | none | `{ next, arg, request, hasNext, byPosition }`: makes this a query with pages. See [Pages](../guides/pagination.md#defining-the-pages). |
 | `bucket` | none | Seconds. `floor(now / bucket)` joins the key; earlier buckets are dropped when it rolls over. See [Time buckets](../guides/scopes-and-buckets.md#time-buckets). |
 | `persist` | `false` | Save the raw body to `cachefs:/` and return it when memory has nothing. See [Persistence](../guides/persistence.md). |
 

@@ -99,7 +99,7 @@ An associative array or array body is sent as JSON, with `Content-Type: applicat
 
 ### Method and decoding
 
-`method` defaults to `GET`. `GET` and `HEAD` are sent without a body. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or with an empty body if there is none.
+`method` defaults to `GET` (`POST` for a [GraphQL](graphql.md) request). `GET` and `HEAD` are sent without a body. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or with an empty body if there is none.
 
 The transport task decodes successful responses as JSON. A body that isn't JSON stays a string, and `parseJson: false` always keeps the raw text.
 
@@ -176,7 +176,7 @@ Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 The promise rejects when the status is outside `successCodes` (200–299 by default) or the request couldn't complete. It rejects with the same shape as a response, plus a `message`. `code` is the HTTP status or, for a network failure, the negative error `roUrlTransfer` reports, such as `-28` for a timeout. The body of a failed request is left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers (for a `POST` or `PATCH`, only those it can't have applied). [The transport](transport.md) covers when it retries and how to change that.
+Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers (for a `POST` or `PATCH`, only those it can't have applied, unless it's a defined query sent with `fetch(name)`). [The transport](transport.md) covers when it retries and how to change that.
 
 ### Reacting to a 401 everywhere
 
@@ -226,7 +226,7 @@ end sub
 ```
 
 - A request still waiting in the queue, or waiting to retry, is dropped without being sent.
-- A `GET` or `HEAD` in flight is aborted. A request with any other method that has already been sent is left to finish, since the server may have acted on it; only a queued one is dropped.
+- A `GET` or `HEAD` in flight is aborted, and so is a defined query sent with `fetch(name)`, whatever its method, since it only reads. A request with any other method that has already been sent is left to finish, since the server may have acted on it; only a queued one is dropped.
 - A cancelled promise rejects with `{ cancelled: true, code: 0, message: "sghttp: cancelled" }`. It emits a `cancel` event, not `error`, so an observer watching for 401s doesn't see it, and the `errors` stat doesn't count it.
 - `cancel` returns whether the promise was still pending.
 

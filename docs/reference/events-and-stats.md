@@ -62,6 +62,8 @@ A rejected `fetch`, `query` or `mutate` promise carries one of these:
 { code: 404, body: "<raw response text>", headers: { ... }, url: "https://...", ms: 120, message: "..." }
 ```
 
+**A GraphQL failure**: a [GraphQL](../guides/graphql.md#errors) response with `errors` and no `data`, with any status. It's an HTTP failure as above, with the server's `errors` added and the first error's message as `message`.
+
 **A network failure**, also from the transport. `code` is negative. It's the error `roUrlTransfer` reports, such as `-28` for a timeout, or `-1` when the request couldn't be started.
 
 **A parse failure:**

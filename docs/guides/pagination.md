@@ -41,9 +41,10 @@ end function)
 
 | Key | Meaning |
 |---|---|
-| `next` | The path, in a page's **value** (the parser's result, or the decoded body), to the cursor of the next page: a url, a page number or a token. Use dots for nested fields (`"paging.next"`). On the last page it's missing, empty or `false`. |
+| `next` | The path, in a page's **value** (the parser's result, or the decoded body), to the cursor of the next page: a url, a page number or a token. Use dots for nested fields (`"paging.next"`). On the last page it's missing, empty or `false`, unless `hasNext` is set. |
 | `arg` | The name of the arg that carries the cursor when the next page is requested. Default `"next"`. |
 | `request` | The request for pages after the first, when it differs from the definition's. Default: the definition's `request`. |
+| `hasNext` | The path, in a page's value, to whether another page follows it (`true` or `false`), for an API that still sends a cursor on the last page, such as GraphQL's Relay `pageInfo`. When it's set, the cursor counts only when this is `true`. Optional. |
 | `byPosition` | `true` for an API that cuts pages by position, so an expired later page is read again rather than kept. See below. Default `false`. |
 
 The next page's args are the first page's args plus `arg`, so a parser that needs the original args (the genre, the model) still gets them, and the request's other placeholders are still filled.
@@ -57,6 +58,9 @@ pages: { next: "nextUrl", arg: "url", request: { url: "{url}" } }
 ' The server takes a page number: the parser returns nextPage (page + 1, or invalid on the last)
 request: { url: "/favorites", query: { page: "{page}" } }
 pages: { next: "nextPage", arg: "page" }
+
+' GraphQL with Relay connections: endCursor stays set on the last page, hasNextPage says it's the last
+pages: { next: "shows.pageInfo.endCursor", hasNext: "shows.pageInfo.hasNextPage" }
 ```
 
 ## What you get back

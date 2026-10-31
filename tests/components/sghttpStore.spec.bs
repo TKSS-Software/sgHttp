@@ -1536,6 +1536,30 @@ namespace tests
         end function
 
         @async
+        @it("treats a cached query sent as a POST as a read: retried like a GET, and aborted when cancelled")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "search", { request: { url: "/graphql", method: "POST", body: { query: "{ shows { title } }" } } })
+            m.store.callFunc("_query", "search", {}, {})
+            m.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true })
+            m.assertTrue(m.fake.callFunc("requestAt", 0).safeToRepeat)
+            m.assertFalse(m.fake.callFunc("requestAt", 1).safeToRepeat)
+            ' fetch by name sends the cached query's request, so a cancel aborts it even in flight
+            m.slow = m.store.callFunc("_fetch", "search", {})
+            m.fake.callFunc("markSent", 2)
+            m.store.callFunc("_cancel", m.slow)
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.fail("a cancelled fetch resolved")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
         @it("gives up a query's claim: a request no one else waits on drops to low priority")
         function _()
             m.makeStore()
@@ -1658,6 +1682,112 @@ namespace tests
                 ' Gone from the held requests: renewing the headers sends nothing
                 suite.store.callFunc("_reauthorize", { Authorization: "Bearer new" }, "")
                 suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("GraphQL")
+
+        @async
+        @it("sends a query as JSON, fills only its variables, keeping their types, and resolves with data")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "shows", { request: { url: "/graphql", graphql: { query: "query Shows($first: Int){shows(first:$first){slug}}", variables: { first: "{first}", filter: { genre: "{genre}", label: "id-{genre}" }, missing: "{nothing}" } } } })
+            shows = m.store.callFunc("_query", "shows", { first: 20, genre: "drama", slug: "never" }, {})
+            spec = m.fake.callFunc("requestAt", 0)
+            m.assertEqual(spec.method, "POST")
+            ' {slug} in the selection set is the query's own text, not a placeholder
+            m.assertEqual(spec.body.query, "query Shows($first: Int){shows(first:$first){slug}}")
+            m.assertEqual(spec.body.variables.first, 20)
+            m.assertEqual(spec.body.variables.filter.genre, "drama")
+            m.assertEqual(spec.body.variables.filter.label, "id-drama")
+            m.assertFalse(spec.body.variables.doesExist("missing"))
+            m.assertTrue(spec.graphql)
+            m.assertTrue(spec.safeToRepeat)
+            m.fake.callFunc("answerBody", 0, { data: { shows: [{ slug: "a" }] } })
+            promises.chain(shows, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value.shows[0].slug, "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("treats a mutation as a write, read from the operation and not from a field's name")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "favorite.add", { request: { url: "/graphql", graphql: { query: "# adds a favorite" + chr(10) + "mutation Add($id: ID!) { add(id: $id) { ok } }", variables: { id: "{id}" } } } })
+            m.store.callFunc("_define", "settings", { request: { url: "/graphql", graphql: { query: "query Settings { settings { mutation } }" } } })
+            ' A mutation needs no cache: false: mutate accepts it
+            m.slow = m.store.callFunc("_query", "favorite.add", { id: "1" }, { mutation: true })
+            m.store.callFunc("_query", "settings", {}, {})
+            m.assertFalse(m.fake.callFunc("requestAt", 0).safeToRepeat)
+            m.assertTrue(m.fake.callFunc("requestAt", 1).safeToRepeat)
+            m.fake.callFunc("answerBody", 0, { data: { add: { ok: true } } })
+            promises.chain(m.slow, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertTrue(value.add.ok)
+                suite.assertInvalid(suite.store.callFunc("_peek", "favorite.add", { id: "1" }))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("loads a Relay listing a page at a time, ending where hasNextPage is false")
+        function _()
+            m.makeStore()
+            query = "query Shows($after: String) { shows(first: 1, after: $after) { edges { node { title } } pageInfo { endCursor hasNextPage } } }"
+            m.store.callFunc("_define", "shows", { request: { url: "/graphql", graphql: { query: query, variables: { after: "{next}" } } }, pages: { next: "shows.pageInfo.endCursor", hasNext: "shows.pageInfo.hasNextPage" } })
+            first = m.store.callFunc("_query", "shows", {}, {})
+            ' The first page has no cursor: the variable is left out
+            m.assertFalse(m.fake.callFunc("requestAt", 0).body.variables.doesExist("after"))
+            m.fake.callFunc("answerBody", 0, { data: { shows: { edges: [{ node: { title: "a" } }], pageInfo: { endCursor: "c1", hasNextPage: true } } } })
+            promises.chain(first, m).then(function(result as object, suite as object) as dynamic
+                suite.assertTrue(result.hasNext)
+                more = suite.store.callFunc("_nextPage", "shows", {})
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).body.variables.after, "c1")
+                ' The last page still has a cursor; hasNextPage says it is the last
+                suite.fake.callFunc("answerBody", 1, { data: { shows: { edges: [{ node: { title: "b" } }], pageInfo: { endCursor: "c2", hasNextPage: false } } } })
+                return more
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.pages.count(), 2)
+                suite.assertEqual(result.pages[1].shows.edges[0].node.title, "b")
+                suite.assertFalse(result.hasNext)
+                return suite.store.callFunc("_nextPage", "shows", {})
+            end function).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("hands fetch the errors that come with partial data")
+        function _()
+            m.makeStore()
+            m.slow = m.store.callFunc("_fetch", { url: "/graphql", graphql: { query: "{ show { title rating } }" } }, {})
+            m.assertTrue(m.fake.callFunc("requestAt", 0).safeToRepeat)
+            m.fake.callFunc("answerBody", 0, { data: { show: { title: "Pilot", rating: invalid } }, errors: [{ message: "rating unavailable" }] })
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(response.body.show.title, "Pilot")
+                suite.assertEqual(response.errors[0].message, "rating unavailable")
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

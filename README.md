@@ -11,7 +11,7 @@
 
 # sgHttp
 
-An HTTP client for Roku SceneGraph apps. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts, shared headers and JSON decoding; the render thread only ever sees the promise. A request can also name a parser, which is not required, but lets the response be turned into ContentNodes on a task thread instead of the render thread.
+An HTTP client for Roku SceneGraph apps, for REST and GraphQL APIs. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts, shared headers and JSON decoding; the render thread only ever sees the promise. A request can also name a parser, which is not required, but lets the response be turned into ContentNodes on a task thread instead of the render thread.
 
 When you want your app faster, the same library can also cache what it fetches. Data that was previously fetched through a query is returned from memory without a request, components that ask for the same data at the same time share one request, and on a cold start the last response is read from disk before the network answers.
 
@@ -72,6 +72,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 - A debugging proxy switch for Charles or mitmproxy
 - Three request priorities, with background refreshes and precaches queued behind the requests a screen is waiting on
 - Cancellation: `cancel(promise)` drops a queued request or aborts one in flight
+- **GraphQL support:** queries and mutations with variables filled from args, resolving with `data`, and `errors` treated as failures. Queries are cached like any other ([GraphQL](docs/guides/graphql.md))
 
 **The query cache**
 

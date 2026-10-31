@@ -33,7 +33,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `proxy` | none | Debugging proxy as `"host:port"` (default client). See [Debugging](../guides/debugging.md#routing-traffic-through-a-proxy). |
 | `maxConcurrent` | 4 | Requests in flight at once (default client) |
 | `timeout` | 30 | Seconds before a request is given up (default client) |
-| `retries` | 1 | Retries for network failures, 429 and 5xx (default client). A `POST` or `PATCH` only on a 429 or a connection that never opened. |
+| `retries` | 1 | Retries for network failures, 429 and 5xx (default client). A `POST` or `PATCH` that isn't a cached query, only on a 429 or a connection that never opened. |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 (default client) |
 | `transport` | a new `Transport` task | A node with `makeRequest(spec)` (default client). See [The transport](../guides/transport.md#replacing-the-transport). |
 | `clients` | none | More servers: `{ <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent, timeout, retries, httpVersion, transport } }`. See [More than one server](../guides/multiple-servers.md). |
@@ -107,7 +107,7 @@ sghttp.cancel(promise as object) as boolean
 
 Gives up a promise that `fetch`, `query`, `mutate` or `nextPage` returned. Returns whether it was still pending. See [Cancelling a request](../guides/requests.md#cancelling-a-request).
 
-- **`fetch` and `mutate`:** the request is dropped if it is still queued, or aborted if it is in flight and its method is `GET` or `HEAD`. A request with any other method that has already been sent is left to finish, since the server may have acted on it. A cancelled call's promise rejects with `{ cancelled: true, code: 0, message }` and emits a `cancel` [event](events-and-stats.md#events), not `error`. A mutation's optimistic writes are put back.
+- **`fetch` and `mutate`:** the request is dropped if it is still queued, or aborted if it is in flight and its method is `GET` or `HEAD` (or it is a defined query sent with `fetch(name)`, which only reads). A request with any other method that has already been sent is left to finish, since the server may have acted on it. A cancelled call's promise rejects with `{ cancelled: true, code: 0, message }` and emits a `cancel` [event](events-and-stats.md#events), not `error`. A mutation's optimistic writes are put back.
 - **`query` and `nextPage`:** the request may be shared with other callers, and the cache keeps its answer, so it isn't stopped. If no other caller is waiting on it, it moves to low [priority](../guides/transport.md#priorities). The caller's own promise still settles.
 
 ## nextPage

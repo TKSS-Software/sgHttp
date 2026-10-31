@@ -211,6 +211,9 @@ end sub
 ' A definition with every key present and defaulted, as the fetch path reads it
 function normalize(name as string, definition as object) as object
     clientName = isNonEmptyString(definition.client) ? definition.client : DEFAULT_CLIENT
+    ' A GraphQL mutation is a write: never cached, retried or aborted as a read would be
+    graphql = type(definition.request) = "roAssociativeArray" and type(definition.request.graphql) = "roAssociativeArray"
+    graphqlMutation = graphql and isGraphqlMutation(definition.request.graphql.query)
     if m.clients[clientName] = invalid then
         print `[sghttp] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
     end if
@@ -224,7 +227,9 @@ function normalize(name as string, definition as object) as object
         scopes: type(definition.scopes) = "roArray" ? definition.scopes : []
         bucket: definition.bucket
         successCodes: definition.successCodes
-        cache: definition.cache <> false
+        cache: definition.cache <> false and not graphqlMutation
+        graphql: graphql
+        graphqlMutation: graphqlMutation
         invalidates: type(definition.invalidates) = "roArray" ? definition.invalidates : []
         expires: type(definition.expires) = "roArray" ? definition.expires : []
         auth: definition.auth <> false
@@ -245,7 +250,9 @@ end function
 
 ' pages: { next: path in a page's value to the next page's cursor (empty or missing on the last
 ' page), arg: the arg the cursor is passed as (default "next"), request: the request for pages
-' after the first (default: the definition's), byPosition: the API cuts pages by position
+' after the first (default: the definition's), hasNext: path in a page's value to whether a page
+' follows it, for an API whose last page still has a cursor (GraphQL's Relay pageInfo:
+' endCursor and hasNextPage), byPosition: the API cuts pages by position
 ' (page=2), so a change anywhere shifts entries onto the pages after it: a later page that has
 ' expired is read again rather than kept (see lastPage) }, or invalid for a query without pages
 function normalizePages(pages as dynamic) as dynamic
@@ -254,6 +261,7 @@ function normalizePages(pages as dynamic) as dynamic
         next: pages.next
         arg: isNonEmptyString(pages.arg) ? pages.arg : "next"
         request: type(pages.request) = "roAssociativeArray" ? pages.request : invalid
+        hasNext: isNonEmptyString(pages.hasNext) ? pages.hasNext : invalid
         byPosition: pages.byPosition = true
     }
 end function
@@ -875,6 +883,12 @@ end function
 
 function cursorOf(definition as object, value as dynamic) as dynamic
     if definition.pages = invalid then return invalid
+    ' The page says whether another follows: its cursor counts only when one does
+    if definition.pages.hasNext <> invalid then
+        follows = valueAtPath(value, definition.pages.hasNext)
+        if type(follows) <> "roBoolean" and type(follows) <> "Boolean" then return invalid
+        if not follows then return invalid
+    end if
     cursor = valueAtPath(value, definition.pages.next)
     if cursor = invalid then return invalid
     if (type(cursor) = "roString" or type(cursor) = "String") and cursor = "" then return invalid
@@ -1053,9 +1067,10 @@ function runUncached(definition as object, args as object, raw = false as boolea
     ' A parser's body crosses to its task as text and is decoded there (see parseOnTask)
     context.decode = spec.parseJson
     if isNonEmptyString(definition.parser) then spec.parseJson = false
-    ' Only a request that changes nothing can be abandoned once it is sent (see _cancel)
+    ' Only a request that changes nothing can be abandoned once it is sent (see _cancel): a GET,
+    ' a HEAD, or a cached query's request sent with fetch(name)
     method = ucase(spec.method)
-    context.safeToAbort = method = "GET" or method = "HEAD"
+    context.safeToAbort = method = "GET" or method = "HEAD" or spec.safeToRepeat = true
     context.cancelled = false
     m.calls[pending.id] = context
 
@@ -1067,9 +1082,11 @@ function runUncached(definition as object, args as object, raw = false as boolea
             if m.parsers.count() = 0 then
                 return promises.reject({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             end if
-            return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode })
+            return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql })
         end if
-        return response.body
+        ' Partial data comes with the errors of the fields that failed: fetch hands them back
+        if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
+        return graphqlData(definition, response.body)
     end function).then(function(value as dynamic, context as object) as dynamic
         if context.cancelled then return promises.reject(cancelledError())
         m.calls.delete(context.pending.id)
@@ -1224,7 +1241,7 @@ sub runParseStage(context as object)
             return
         end if
         hashResult = definition.compare = "parsed"
-        parsePromise = parseOnTask({ parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult, decode: context.decode = true })
+        parsePromise = parseOnTask({ parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult, decode: context.decode = true, graphql: definition.graphql })
         promises.chain(parsePromise, context).then(function(parsed as dynamic, context as object) as dynamic
             if context.definition.compare = "parsed" and type(parsed) = "roAssociativeArray" then
                 context.parsedHash = asString(parsed.hash)
@@ -1237,7 +1254,7 @@ sub runParseStage(context as object)
             return invalid
         end function).toPromise()
     else
-        settleValue(context, context.body)
+        settleValue(context, graphqlData(definition, context.body))
     end if
 end sub
 
@@ -1419,6 +1436,9 @@ function buildRequestSpec(definition as object, args as object) as object
         includeSharedHeaders: definition.auth
         useProxy: definition.proxy
         priority: definition.priority
+        ' A cached query reads, whatever its method (a search sent as a POST), and so does a
+        ' GraphQL query, cached or not: the transport retries it as it would a GET
+        safeToRepeat: definition.cache or (definition.graphql = true and not definition.graphqlMutation)
     }
     if type(spec.headers) <> "roAssociativeArray" then spec.headers = {}
     ' An unfilled path placeholder still reaches some other route on the server, with a
@@ -1478,6 +1498,19 @@ function buildRequestSpec(definition as object, args as object) as object
         end for
         spec.body = filledBody
     end if
+    if type(request.graphql) = "roAssociativeArray" then
+        ' GraphQL: the operation goes as JSON, in a POST unless the request names a method. Its
+        ' text is never a template, since a selection set such as {slug} reads as a placeholder;
+        ' only variables are filled.
+        if not isNonEmptyString(request.method) then spec.method = "POST"
+        body = {}
+        body.setModeCaseSensitive()
+        body["query"] = request.graphql.query
+        if request.graphql.variables <> invalid then body["variables"] = fillVariables(request.graphql.variables, args)
+        if isNonEmptyString(request.graphql.operationName) then body["operationName"] = request.graphql.operationName
+        spec.body = body
+        spec.graphql = true
+    end if
     return spec
 end function
 
@@ -1486,6 +1519,84 @@ end function
 '*************************************************************************
 '#region Invalidation and eviction
 '*************************************************************************
+
+' GraphQL variables with values of exactly "{name}" taken from args, then scopes, as they are:
+' a number stays a number, an object an object. Other strings are filled as text, and nested
+' objects and arrays the same way. A "{name}" with no arg or scope is left out, so the server
+' sees the variable as null.
+function fillVariables(value as dynamic, args as object) as dynamic
+    valueType = type(value)
+    if valueType = "roAssociativeArray" then
+        filled = {}
+        filled.setModeCaseSensitive()
+        for each key in value
+            item = fillVariables(value[key], args)
+            if item <> invalid then filled[key] = item
+        end for
+        return filled
+    end if
+    if valueType = "roArray" then
+        filled = []
+        for each item in value
+            filled.push(fillVariables(item, args))
+        end for
+        return filled
+    end if
+    if valueType <> "roString" and valueType <> "String" then return value
+    whole = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "").match(value)
+    if whole.count() <> 2 then return fillTemplate(value, args, m.scopes)
+    name = whole[1]
+    if type(args) = "roAssociativeArray" and args[name] <> invalid then return args[name]
+    return m.scopes[name]
+end function
+
+' Whether a GraphQL document's operation is a mutation: its keyword is read at the top level
+' only (outside braces, strings and comments), so a field named mutation never counts
+function isGraphqlMutation(document as dynamic) as boolean
+    if not isNonEmptyString(document) then return false
+    nameChars = createObject("roRegex", "[A-Za-z0-9_$]", "")
+    depth = 0
+    word = ""
+    inString = false
+    inComment = false
+    escaped = false
+    for i = 0 to document.len() - 1
+        c = document.mid(i, 1)
+        if depth = 0 and not inString and not inComment and nameChars.isMatch(c) then
+            word = word + c
+        else
+            if word = "mutation" then return true
+            word = ""
+            if inComment then
+                if c = chr(10) or c = chr(13) then inComment = false
+            else if inString then
+                if escaped then
+                    escaped = false
+                else if c = "\" then
+                    escaped = true
+                else if c = chr(34) then
+                    inString = false
+                end if
+            else if c = "#" then
+                inComment = true
+            else if c = chr(34) then
+                inString = true
+            else if c = "{" then
+                depth++
+            else if c = "}" then
+                depth--
+            end if
+        end if
+    end for
+    return word = "mutation"
+end function
+
+' What a GraphQL query resolves with: the response's data. A response with errors and no data
+' has already failed in the transport.
+function graphqlData(definition as object, body as dynamic) as dynamic
+    if definition.graphql = true and type(body) = "roAssociativeArray" and body.doesExist("data") then return body.data
+    return body
+end function
 
 sub _invalidate(name = invalid as dynamic, args = invalid as dynamic)
     if name = invalid then
