@@ -256,9 +256,14 @@ end function
 ' headers.
 function _fetch(spec as dynamic, args = {} as object) as object
     if type(spec) = "roString" or type(spec) = "String" then
-        ' A query name passed here by mistake would quietly become a request to baseUrl/<name>
         if spec.left(1) <> "/" and lcase(spec.left(4)) <> "http" then
-            return promises.reject({ message: `sghttp: fetch takes a url; to run the query "${spec}", call query()`, code: 0 })
+            ' The name of a defined query: its request is sent as is, with the definition's
+            ' client, headers, parser and the rest, but nothing is read from or kept in the cache.
+            ' Any other string would quietly become a request to baseUrl/<string>.
+            definition = m.definitions[spec]
+            if definition = invalid then return promises.reject({ message: `sghttp: fetch takes a url or the name of a defined query; "${spec}" is neither`, code: 0 })
+            if type(args) <> "roAssociativeArray" then args = {}
+            return runUncached(definition, args, true)
         end if
         spec = { url: spec }
     end if

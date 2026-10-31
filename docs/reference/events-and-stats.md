@@ -69,6 +69,6 @@ A rejected `fetch`, `query` or `mutate` promise carries one of these:
 { message: "sghttp parser \"ShowParser\" threw: ...", error: <the exception> }
 ```
 
-**A setup problem**: an unknown parser, a parser with no `parserTask`, a client that doesn't exist, an undefined query, or `mutate` on a cached query. These carry a `message`. An unknown client, and a `fetch` with no url or with a string that isn't a url, also carry `code: 0`; the others carry no `code`.
+**A setup problem**: an unknown parser, a parser with no `parserTask`, a client that doesn't exist, an undefined query, or `mutate` on a cached query. These carry a `message`. An unknown client, and a `fetch` with no url or with a string that is neither a url nor a defined query, also carry `code: 0`; the others carry no `code`.
 
 In error events, `code` is the error's `code`, or `0` when it has none.

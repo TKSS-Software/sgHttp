@@ -57,11 +57,11 @@ Returns the store node.
 sghttp.fetch(spec as dynamic, args = {} as object) as object
 ```
 
-Sends one request without a definition and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted.
+Sends one request and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted.
 
-`spec` is a url, or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`) with `{name}` placeholders filled from `args` and the current scopes. It also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events.
+`spec` is a url; the name of a defined query, whose request, client, parser and settings are used with `{name}` placeholders filled from `args` and the current scopes, and whose cache is neither read nor written; or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), which also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events.
 
-Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, or the string isn't a url (it doesn't start with `/` or `http`). That last case is usually a query name passed by mistake, and the message says to call [`query`](#query). See [Requests](../guides/requests.md).
+Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, or the string is neither a url (starting with `/` or `http`) nor a defined query. See [Requests](../guides/requests.md).
 
 ## define
 

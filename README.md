@@ -62,7 +62,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 
 **The HTTP client**
 
-- `fetch(url)` or `fetch({ url, method, headers, body, query })`, with `{placeholders}` filled from args
+- `fetch(url)`, `fetch({ url, method, headers, body, query })` or `fetch(queryName)`, with `{placeholders}` filled from args
 - A pool of `roUrlTransfer` objects on a task thread, with a queue, per-request timeouts and retries with backoff
 - Shared headers for auth, changed at any time with `setHeaders`
 - More than one server, each with its own base url, headers and pool

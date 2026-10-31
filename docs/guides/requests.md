@@ -23,7 +23,13 @@ sghttp.fetch("/shows/abc")
 sghttp.fetch("https://images.example.com/manifest.json")
 ```
 
-The string must start with `/` or `http`. If you pass a query name by mistake, as in `fetch("homePage")`, the promise rejects at once with a message that tells you to call `query`, instead of sending a request to `/homePage`.
+The string can also be the name of a [defined query](queries.md). Its request is sent with the definition's client, headers, parser and settings, filled from the args, but nothing is read from the cache or written to it, and you get the whole response:
+
+```brightscript
+sghttp.fetch("homePage", { slug: "main" })
+```
+
+Any other string, one that doesn't start with `/` or `http` and names no query, rejects at once instead of sending a request to `baseUrl/<string>`.
 
 ### A spec
 
@@ -157,6 +163,19 @@ end sub
 ```
 
 `e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. Every event field is in [Events](../reference/events-and-stats.md#events).
+
+A `fetch` can give its events a `name`, so one observer can tell calls apart. Without one, the events say `"fetch"`:
+
+```brightscript
+sghttp.fetch({ url: "/streams/{id}/start", method: "POST", name: "stream.start" }, { id: streamId })
+
+sub onRequestEvent(event as object)
+    e = event.getData()
+    if e.type = "error" and e.name = "stream.start" then showPlaybackError(e.code)
+end sub
+```
+
+The name only labels the events. A named `fetch` is still not registered, cached or shared; for that, see [Queries and keys](queries.md).
 
 ## More than one server
 

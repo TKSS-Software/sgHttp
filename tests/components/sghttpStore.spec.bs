@@ -1035,16 +1035,45 @@ namespace tests
         end function
 
         @async
-        @it("refuses a query name in place of a url, and says to call query()")
+        @it("runs a defined query's request by name, without reading or writing its cache")
         function _()
             m.makeStore()
-            promises.chain(m.store.callFunc("_fetch", "items", {}), m).then(function(response as object, suite as object) as dynamic
-                suite.fail("sent a request for a query name")
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Fresh in memory, but fetch asks the server anyway
+                waiting = suite.store.callFunc("_fetch", "items", { id: "1" })
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).url, "/items/1")
+                suite.fake.callFunc("answer", 1, "b")
+                return waiting
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.assertEqual(response.body, "b")
+                suite.assertEqual(suite.store.lastEvent.name, "items")
+                ' The cache still holds what the query put there
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("refuses a string that is neither a url nor a defined query")
+        function _()
+            m.makeStore()
+            promises.chain(m.store.callFunc("_fetch", "homePage", {}), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("sent a request for an unknown name")
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.assertEqual(suite.fake.requestCount, 0)
-                suite.assertTrue(error.message.instr("query()") >= 0)
+                suite.assertEqual(error.code, 0)
+                suite.assertTrue(error.message.instr("neither") >= 0)
                 suite.done()
                 return invalid
             end function)

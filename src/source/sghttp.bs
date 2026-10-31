@@ -280,16 +280,18 @@ sub define(name as string, definition as Definition)
     getStore().callFunc("_define", name, definition)
 end sub
 
-' Sends one request with no definition and never caches it: sghttp as a plain HTTP client.
-' The request goes through a client (the default one, or spec.client), so it gets the baseUrl,
-' shared headers, proxy, retries and timeout set up by initialize. Resolves with the whole
-' response { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when
-' spec names one. Rejects with the same shape plus message on a failing status or a network
-' failure (code negative).
-' @param {Dynamic} spec - a url (relative, or starting with http), or a FetchSpec: { url, method, headers,
-'   body, query, parseJson, retries } as in a definition's request, with {arg} placeholders
-'   filled from args and scopes; plus client, auth, proxy, timeout, successCodes and parser as
-'   in define; and name, for events. A query name here rejects at once: use query() for those.
+' Sends one request and never caches it: sghttp as a plain HTTP client. The request goes
+' through a client (the default one, or spec.client), so it gets the baseUrl, shared headers,
+' proxy, retries and timeout set up by initialize. Resolves with the whole response
+' { code, headers, body, url, ms }: the body JSON-decoded, or the parser's result when a parser
+' is named. Rejects with the same shape plus message on a failing status or a network failure
+' (code negative).
+' @param {Dynamic} spec - a url (relative, or starting with http); the name of a defined query,
+'   whose request, client, parser and settings are used but whose cache is neither read nor
+'   written; or a FetchSpec: { url, method, headers, body, query, parseJson, retries } as in a
+'   definition's request, with {arg} placeholders filled from args and scopes, plus client,
+'   auth, proxy, timeout, successCodes and parser as in define, and name, for events. Any other
+'   string rejects at once.
 function fetch(spec as dynamic, args = {} as object) as object
     return getStore().callFunc("_fetch", spec, args)
 end function
