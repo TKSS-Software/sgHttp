@@ -228,6 +228,7 @@ function normalize(name as string, definition as object) as object
         compare: definition.compare = "parsed" ? "parsed" : "body"
         client: clientName
         pages: normalizePages(definition.pages)
+        priority: priorityLevel(definition.priority, "normal")
     }
     ' ttl: invalid -> store default; negative -> fresh until invalidated
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
@@ -280,6 +281,7 @@ function _fetch(spec as dynamic, args = {} as object) as object
         timeout: spec.timeout
         successCodes: spec.successCodes
         parser: spec.parser
+        priority: spec.priority
         cache: false
     })
     return runUncached(definition, args, true)
@@ -384,7 +386,8 @@ function _precache(name as string, args = {} as object) as boolean
         if entry.promise <> invalid then return false
         if entry.hasValue and not entry.expired and now < entry.freshUntil then return false
     end if
-    runQuery(definition, args, {})
+    ' Nothing waits on a precache, so it queues behind the requests screens are waiting on
+    runQuery(definition, args, { priority: "low" })
     return true
 end function
 
@@ -406,6 +409,8 @@ function runQuery(definition as object, args as object, options as object) as ob
         servable = entry.hasValue and not entry.expired and (revalidate or now < entry.freshUntil or definition.staleWhileRevalidate)
         if entry.promise <> invalid and not servable then
             emit("dedupe", name, key, "memory", 0)
+            ' This caller waits on the request, so it goes ahead of anything queued lower
+            promote(entry.fetch, priorityFor(definition, options, false))
             return { key: key, promise: entry.promise }
         end if
 
@@ -417,14 +422,14 @@ function runQuery(definition as object, args as object, options as object) as ob
             if revalidate then
                 m.stats.staleHits++
                 emit("stale", name, key, "memory", 0)
-                startFetch(definition, key, args, now, true)
+                startFetch(definition, key, args, now, true, false, false, priorityFor(definition, options, true))
                 return { key: key, promise: invalid }
             end if
             ' Known to be out of date (expire): wait for the server; the kept value answers if
             ' the request fails
             if entry.expired then
                 m.stats.misses++
-                return { key: key, promise: startFetch(definition, key, args, now, false, true) }
+                return { key: key, promise: startFetch(definition, key, args, now, false, true, false, priorityFor(definition, options, false)) }
             end if
             if now < entry.freshUntil then
                 m.stats.hits++
@@ -435,7 +440,7 @@ function runQuery(definition as object, args as object, options as object) as ob
             if definition.staleWhileRevalidate then
                 m.stats.staleHits++
                 emit("stale", name, key, "memory", 0)
-                startFetch(definition, key, args, now, true)
+                startFetch(definition, key, args, now, true, false, false, priorityFor(definition, options, true))
                 return { key: key, promise: invalid }
             end if
         end if
@@ -443,8 +448,41 @@ function runQuery(definition as object, args as object, options as object) as ob
 
     m.stats.misses++
     ' force asks the server: a disk copy is not an answer to it
-    return { key: key, promise: startFetch(definition, key, args, now, false, false, force) }
+    return { key: key, promise: startFetch(definition, key, args, now, false, false, force, priorityFor(definition, options, false)) }
 end function
+
+' The priority a request is queued at: the call's own option when it gives one, else low
+' for a background request (a refresh or a precache, which nothing waits on), else the
+' definition's
+function priorityFor(definition as object, options as object, background as boolean) as string
+    if type(options) = "roAssociativeArray" and isNonEmptyString(options.priority) then return priorityLevel(options.priority, definition.priority)
+    if background then return "low"
+    return definition.priority
+end function
+
+' A priority as the transport takes it: "high", "normal" or "low", else fallback
+function priorityLevel(value as dynamic, fallback as string) as string
+    if isNonEmptyString(value) and (value = "high" or value = "normal" or value = "low") then return value
+    return fallback
+end function
+
+function priorityRank(level as dynamic) as integer
+    if level = "high" then return 2
+    if level = "low" then return 0
+    return 1
+end function
+
+' A caller that will wait on a request has joined it: if it is queued lower than the caller,
+' it moves up. Before the request is sent (a disk read first), the fetch just remembers the
+' level; a transport without a promote field keeps its order.
+sub promote(context as dynamic, priority as string)
+    if type(context) <> "roAssociativeArray" then return
+    if priorityRank(priority) <= priorityRank(context.priority) then return
+    context.priority = priority
+    if not isNode(context.requestPromise) then return
+    client = clientOf(context.definition)
+    if client <> invalid and client.transport.hasField("promote") then client.transport.promote = { id: context.requestPromise.id, priority: priority }
+end sub
 
 function _peek(name as string, args = {} as object) as dynamic
     definition = m.definitions[name]
@@ -761,9 +799,13 @@ end function
 ' When background is true an existing value stays served until the refresh lands.
 ' fallback: a failed request resolves with the kept value instead of rejecting (expired entries).
 ' skipDisk: go straight to the network even when memory has nothing (force).
-function startFetch(definition as object, key as string, args as object, now as integer, background as boolean, fallback = false as boolean, skipDisk = false as boolean) as object
+function startFetch(definition as object, key as string, args as object, now as integer, background as boolean, fallback = false as boolean, skipDisk = false as boolean, priority = "" as string) as object
+    if priority = "" then priority = background ? "low" : definition.priority
     entry = m.cache[key]
-    if entry <> invalid and entry.promise <> invalid then return entry.promise
+    if entry <> invalid and entry.promise <> invalid then
+        if not background then promote(entry.fetch, priority)
+        return entry.promise
+    end if
 
     if entry = invalid then
         entry = newEntry(definition, now, args)
@@ -776,7 +818,7 @@ function startFetch(definition as object, key as string, args as object, now as 
 
     ' pending travels with the request: the entry may be dropped or expired before it answers,
     ' and its callers are owed an answer either way
-    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan"), link: invalid }
+    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan"), link: invalid, priority: priority, requestPromise: invalid }
     ' nextPage finds the fetch it joins through the entry, to hand it the head to link to
     entry.fetch = context
 
@@ -848,7 +890,9 @@ sub startNetwork(context as object)
         if entry.lastModified <> "" then spec.headers["If-Modified-Since"] = entry.lastModified
         spec.allowNotModified = spec.headers.count() > 0
     end if
+    spec.priority = context.priority
     requestPromise = client.transport.callFunc("makeRequest", spec)
+    context.requestPromise = requestPromise
 
     promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
         context.response = response
@@ -1163,6 +1207,7 @@ function buildRequestSpec(definition as object, args as object) as object
         timeoutSeconds: definition.timeout
         includeSharedHeaders: definition.auth
         useProxy: definition.proxy
+        priority: definition.priority
     }
     if type(spec.headers) <> "roAssociativeArray" then spec.headers = {}
     ' An unfilled path placeholder still reaches some other route on the server, with a

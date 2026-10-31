@@ -59,7 +59,7 @@ sghttp.fetch(spec as dynamic, args = {} as object) as object
 
 Sends one request and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted.
 
-`spec` is a url; the name of a defined query, whose request, client, parser and settings are used with `{name}` placeholders filled from `args` and the current scopes, and whose cache is neither read nor written; or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), which also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser` and a `name` for events.
+`spec` is a url; the name of a defined query, whose request, client, parser and settings are used with `{name}` placeholders filled from `args` and the current scopes, and whose cache is neither read nor written; or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), which also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser`, `priority` and a `name` for events.
 
 Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, or the string is neither a url (starting with `/` or `http`) nor a defined query. See [Requests](../guides/requests.md).
 
@@ -87,6 +87,7 @@ Returns a promise that resolves with the query's value (the parser's result, or 
 |---|---|
 | `revalidate: true` | Resolve with the cached value at once (fresh, stale or expired) and check the server in the background. With nothing cached, a normal query. |
 | `force: true` | Skip the memory and disk copies and wait for a request. Shares a request already in flight. |
+| `priority` | `"high"`, `"normal"` or `"low"` for this call's request, over the definition's. A request already queued lower that this call joins is raised to it. See [Priorities](../guides/transport.md#priorities). |
 
 Rejects with an [error](events-and-stats.md#errors) when the request or parse fails, or with `{ message }` when no query has that name. For a `cache: false` query, runs it like [`mutate`](#mutate), without the cached-query check.
 
@@ -96,7 +97,7 @@ Rejects with an [error](events-and-stats.md#errors) when the request or parse fa
 sghttp.precache(name as string, args = {} as object) as boolean
 ```
 
-Starts the query without waiting for its result, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight. Otherwise it does what a plain `query` would, reading the disk first for a `persist` query. For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
+Starts the query without waiting for its result, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight. Otherwise it does what a plain `query` would, reading the disk first for a `persist` query, with its request queued at `"low"` [priority](../guides/transport.md#priorities). For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
 
 ## nextPage
 

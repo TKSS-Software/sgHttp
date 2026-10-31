@@ -69,6 +69,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 - JSON decoding off the render thread, and the whole response back: status, headers and body
 - An event for every request, so one observer can send the app to sign-in on a 401
 - A debugging proxy switch for Charles or mitmproxy
+- Three request priorities, with background refreshes and precaches queued behind the requests a screen is waiting on
 
 **The query cache**
 

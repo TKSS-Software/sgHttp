@@ -12,7 +12,7 @@ Everything in these guides works without defining any queries.
 
 - [Requests](guides/requests.md): urls, methods, bodies, headers, auth, failures and the response
 - [More than one server](guides/multiple-servers.md): clients, their headers and their transports
-- [The transport](guides/transport.md): the built-in HTTP task, retries, timeouts, and replacing it
+- [The transport](guides/transport.md): the built-in HTTP task, retries, timeouts, priorities, and replacing it
 - [Debugging](guides/debugging.md): events, stats, console warnings and routing traffic through Charles
 
 ## The query cache

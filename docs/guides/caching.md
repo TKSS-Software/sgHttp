@@ -52,7 +52,7 @@ sub init()
 end sub
 ```
 
-It does nothing when memory already holds a fresh value or a request is already in flight. Otherwise it takes the steps above, disk first. It returns whether it started anything. Use it for data a screen is about to need, for example at launch, or when an item gets focus and is likely to be selected.
+Its request queues at low [priority](transport.md#priorities), behind the requests screens are waiting on, and is raised when a query joins it. It does nothing when memory already holds a fresh value or a request is already in flight. Otherwise it takes the steps above, disk first. It returns whether it started anything. Use it for data a screen is about to need, for example at launch, or when an item gets focus and is likely to be selected.
 
 ## Failures
 

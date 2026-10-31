@@ -198,6 +198,7 @@ See [More than one server](multiple-servers.md).
 | `retries` | Attempts after the first. Default: the transport's. |
 | `successCodes` | Statuses treated as success. Default: 200–299. |
 | `parser` | A parser name to run the body through on the parser task. |
+| `priority` | `"high"`, `"normal"` or `"low"`: where the request waits when the pool is busy. Default `"normal"`. See [Priorities](transport.md#priorities). |
 | `name` | A name for the [events](../reference/events-and-stats.md#events) this request emits. Default: `"fetch"`. |
 
 ## What fetch doesn't do

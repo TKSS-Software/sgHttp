@@ -14,6 +14,13 @@ function makeRequest(spec as object) as object
     return pending
 end function
 
+' The id of the promise returned for request index, which a promotion names
+function promiseIdAt(index as integer) as dynamic
+    request = m.requests[index]
+    if request = invalid then return invalid
+    return request.promise.id
+end function
+
 ' Answers the next request not yet made with this body, for requests that start later
 ' (after a disk read)
 function answerNext(body as string) as boolean

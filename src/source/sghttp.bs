@@ -52,6 +52,8 @@ interface FetchSpec extends Request
     optional parser as string
     ' A name for the events this request emits. Default "fetch"
     optional name as string
+    ' "high", "normal" or "low": where the request waits when the transport's pool is busy
+    optional priority as string
 end interface
 
 ' The pages of a query loaded a page at a time (see define's pages)
@@ -87,6 +89,9 @@ interface Definition
     optional conditional as boolean
     optional compare as string
     optional pages as Pages
+    ' "high", "normal" or "low": where this query's requests wait when the transport's pool is
+    ' busy. Default "normal". Background refreshes and precaches queue low whatever this says.
+    optional priority as string
 end interface
 
 ' A server's settings: initialize's top level for the default client, or one of clients
@@ -145,6 +150,9 @@ interface QueryOptions
     optional force as boolean
     ' Resolve with the cached value at once and check the server in the background
     optional revalidate as boolean
+    ' "high", "normal" or "low" for this call's request, over the definition's priority. A
+    ' request already queued lower that this call joins is raised to it.
+    optional priority as string
 end interface
 
 ' A value written before a mutation's request, and put back if it fails

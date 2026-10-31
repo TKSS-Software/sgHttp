@@ -65,3 +65,4 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 | `proxy` | `true` | `false` sends this query's requests directly, even when a debugging proxy is set |
 | `timeout` | the client's (30) | Seconds before a request with no response is given up, and retried if it has retries left |
 | `successCodes` | 200 to 299 | Array of HTTP statuses that count as success |
+| `priority` | `"normal"` | `"high"`, `"normal"` or `"low"`: where this query's requests wait when the transport's pool is busy. Background refreshes and precaches queue `"low"` whatever this says. See [Priorities](../guides/transport.md#priorities). |

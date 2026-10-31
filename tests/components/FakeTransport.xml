@@ -7,11 +7,14 @@
         <field id="requestCount" type="integer" value="0" />
         <!-- The client's shared headers, as the store sets them -->
         <field id="headers" type="assocarray" />
+        <!-- The last promotion the store asked for, { id, priority } -->
+        <field id="promote" type="assocarray" />
         <function name="makeRequest" />
         <function name="answer" />
         <function name="answerBody" />
         <function name="answerNext" />
         <function name="fail" />
         <function name="requestAt" />
+        <function name="promiseIdAt" />
     </interface>
 </component>

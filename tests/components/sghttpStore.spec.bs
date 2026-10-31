@@ -1459,6 +1459,54 @@ namespace tests
             end function)
         end function
 
+        @describe("priorities")
+
+        @async
+        @it("queues a query at its definition's priority, and refreshes and precaches low")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "items.urgent", { request: { url: "/urgent/{id}" }, ttl: 0, priority: "high" })
+            m.query("1")
+            m.assertEqual(m.fake.callFunc("requestAt", 0).priority, "normal")
+            m.store.callFunc("_query", "items.urgent", { id: "1" }, {})
+            m.assertEqual(m.fake.callFunc("requestAt", 1).priority, "high")
+            m.store.callFunc("_query", "items", { id: "2" }, { priority: "low" })
+            m.assertEqual(m.fake.callFunc("requestAt", 2).priority, "low")
+            m.store.callFunc("_precache", "items", { id: "3" })
+            m.assertEqual(m.fake.callFunc("requestAt", 3).priority, "low")
+            m.fake.callFunc("answer", 1, "a")
+            promises.chain(m.store.callFunc("_query", "items.urgent", { id: "1" }, {}), m).then(function(value as dynamic, suite as object) as dynamic
+                ' ttl 0: the second query is a stale hit whose background check queues low
+                suite.store.callFunc("_query", "items.urgent", { id: "1" }, {})
+                suite.assertEqual(suite.fake.requestCount, 5)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 4).priority, "low")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @it("raises a waiting request when a query that will wait on it joins it")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_precache", "items", { id: "1" })
+            m.assertEqual(m.fake.callFunc("requestAt", 0).priority, "low")
+            m.assertInvalid(m.fake.promote)
+            m.query("1")
+            m.assertEqual(m.fake.requestCount, 1)
+            m.assertEqual(m.fake.promote.priority, "normal")
+            m.assertEqual(m.fake.promote.id, m.fake.callFunc("promiseIdAt", 0))
+            ' A higher caller raises it again; a lower or equal one leaves it
+            m.query("1", { priority: "high" })
+            m.assertEqual(m.fake.promote.priority, "high")
+            m.fake.promote = invalid
+            m.query("1", { priority: "normal" })
+            m.assertInvalid(m.fake.promote)
+        end function
+
         @describe("precache")
 
         @async

@@ -2,15 +2,19 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 
 ' Default HTTP transport: a single task with a bounded pool of roUrlTransfer
-' objects, a FIFO queue, retries with backoff (or the wait a Retry-After asks for), gzip,
-' JSON decoding, and promise settlement from the task thread. Any node with the same
+' objects, a queue per priority (high, normal, low: a request waits only behind higher and
+' earlier ones), retries with backoff (or the wait a Retry-After asks for), gzip, JSON
+' decoding, and promise settlement from the task thread. Any node with the same
 ' makeRequest(spec) contract can replace it via initialize({ transport: node }) or a client's
 ' transport.
 ' The store starts it (control RUN) once its fields are set: the task reads its pool size
 ' and base headers when it starts.
 '
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
-'         allowNotModified, timeoutSeconds, keepRawBody }
+'         allowNotModified, timeoutSeconds, keepRawBody, priority }
+'   priority    - "high", "normal" (the default) or "low": which queue the request waits in.
+'                 The store raises a queued request through the promote field, { id, priority },
+'                 when a caller that waits on it joins it.
 ' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody }
 '   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
 '   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
@@ -24,6 +28,7 @@ const MAX_RETRY_AFTER_SECONDS = 60
 sub init()
     m.port = createObject("roMessagePort")
     m.top.observeField("request", m.port)
+    m.top.observeField("promote", m.port)
     m.top.observeField("shutdown", m.port)
     m.top.observeField("headers", m.port)
     m.top.functionName = "runTransport"
@@ -46,7 +51,8 @@ end function
 '*************************************************************************
 
 sub runTransport()
-    m.queue = []
+    m.levels = ["high", "normal", "low"]
+    m.queues = { high: [], normal: [], low: [] }
     m.jobs = {}
     m.pool = []
     m.retryQueue = []
@@ -68,6 +74,8 @@ sub runTransport()
                 field = message.getField()
                 if field = "request" then
                     enqueue(message.getData())
+                else if field = "promote" then
+                    promoteJob(message.getData())
                 else if field = "headers" then
                     m.sharedHeaders = message.getData()
                     if m.sharedHeaders = invalid then m.sharedHeaders = {}
@@ -115,9 +123,42 @@ sub enqueue(request as object)
         timespan: createObject("roTimespan")
         retryTimer: createObject("roTimespan")
         retryAfterMs: 0
+        priority: priorityLevel(request.spec.priority)
     }
-    m.queue.push(job)
+    m.queues[job.priority].push(job)
 end sub
+
+function priorityLevel(value as dynamic) as string
+    if value = "high" or value = "low" then return value
+    return "normal"
+end function
+
+' Moves a waiting request to a higher queue; one already in flight is left alone
+sub promoteJob(data as object)
+    if type(data) <> "roAssociativeArray" or not isNonEmptyString(data.id) then return
+    level = priorityLevel(data.priority)
+    for each current in m.levels
+        queue = m.queues[current]
+        for i = 0 to queue.count() - 1
+            if queue[i].promise.id = data.id then
+                if current = level then return
+                job = queue[i]
+                queue.delete(i)
+                job.priority = level
+                m.queues[level].push(job)
+                return
+            end if
+        end for
+    end for
+end sub
+
+' The next request to send: the first in the highest queue that has one, or invalid
+function nextJob() as dynamic
+    for each level in m.levels
+        if m.queues[level].count() > 0 then return m.queues[level].shift()
+    end for
+    return invalid
+end function
 
 ' Network failures, 429 and 5xx responses are retried, except a POST answered with 502: the
 ' gateway may have passed it on, and repeating it could apply the change twice. A 429 was
@@ -136,8 +177,9 @@ function retriesFor(spec as object) as integer
 end function
 
 sub pumpQueue()
-    while m.queue.count() > 0 and m.pool.count() > 0
-        job = m.queue.shift()
+    while m.pool.count() > 0
+        job = nextJob()
+        if job = invalid then return
         transfer = m.pool.pop()
         if not startJob(transfer, job) then
             m.pool.push(transfer)
@@ -150,7 +192,7 @@ sub pumpRetries()
     remaining = []
     for each job in m.retryQueue
         if job.retryTimer.totalMilliseconds() >= job.retryAfterMs then
-            m.queue.push(job)
+            m.queues[job.priority].push(job)
         else
             remaining.push(job)
         end if
