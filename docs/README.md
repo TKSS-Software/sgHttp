@@ -35,7 +35,7 @@ A **query** is a request defined with `define` and called with `query`, so that 
 
 ## API reference
 
-- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
+- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `cancel`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
 - [Events, stats and errors](reference/events-and-stats.md): the shapes sgHttp reports
 

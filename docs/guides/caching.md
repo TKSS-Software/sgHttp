@@ -79,6 +79,22 @@ end sub
 
 Its request queues at low [priority](transport.md#priorities), behind the requests screens are waiting on, and is raised when a query joins it. It does nothing when memory already holds a fresh value or a request is already in flight. Otherwise it takes the steps above, disk first. It returns whether it started anything. Use it for data a screen is about to need, for example at launch, or when an item gets focus and is likely to be selected.
 
+## Giving up a query
+
+A query's request can be shared by several callers, and the cache keeps its answer for the next one, so `sghttp.cancel(promise)` doesn't stop it. Instead the caller gives up its claim: when no other caller is waiting on the request, it moves to low [priority](transport.md#priorities), behind the requests that are still wanted. A screen that closes before its data arrives can do that, so the next screen's requests go first:
+
+```brightscript
+sub init()
+    m.loading = sghttp.query("details", { slug: m.top.slug })
+end sub
+
+sub onClose()
+    sghttp.cancel(m.loading)
+end sub
+```
+
+The answer still fills the cache, so reopening the same screen is answered from memory. A caller that joins the request later raises it again, and a precache never counts as a claim. The cancelling caller's own promise still settles.
+
 ## Failures
 
 - When a request fails and its entry has no value yet, the entry is dropped and the promise rejects, so the next query tries again.

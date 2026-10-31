@@ -24,6 +24,8 @@
         <field id="request" type="assocarray" alwaysNotify="true" />
         <!-- Internal: { id, priority } raises a waiting request to that queue -->
         <field id="promote" type="assocarray" alwaysNotify="true" />
+        <!-- Internal: { id, queuedOnly } cancels a request (see cancelJob) -->
+        <field id="cancel" type="assocarray" alwaysNotify="true" />
         <field id="shutdown" type="boolean" alwaysNotify="true" />
         <field id="activeRequests" type="integer" value="0" />
 

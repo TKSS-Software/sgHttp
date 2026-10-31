@@ -334,6 +334,20 @@ function precache(name as string, args = {} as object) as boolean
     return getStore().callFunc("_precache", name, args)
 end function
 
+' Gives up a promise that fetch, query, mutate or nextPage returned. Returns whether it was
+' still pending.
+' - fetch and mutate: the request is dropped if it is still queued, or aborted if it is in
+'   flight and its method is GET or HEAD. A request with any other method that has already been
+'   sent is left to finish, since the server may have acted on it. A cancelled call's promise
+'   rejects with { cancelled: true, code: 0, message } and emits a "cancel" event, not "error";
+'   a mutation's optimistic writes are put back.
+' - query and nextPage: the request is shared with other callers, and the cache keeps its
+'   answer, so it isn't stopped. If no other caller is waiting on it, it moves to low priority.
+'   The caller's own promise still settles.
+function cancel(promise as object) as boolean
+    return getStore().callFunc("_cancel", promise)
+end function
+
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
 ' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.

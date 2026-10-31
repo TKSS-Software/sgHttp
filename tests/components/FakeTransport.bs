@@ -3,12 +3,34 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 sub init()
     m.requests = []
     m.queued = []
+    m.top.observeField("cancel", "onCancel")
+end sub
+
+' Marks request index as sent, so a cancel that only drops queued requests leaves it
+function markSent(index as integer) as boolean
+    request = m.requests[index]
+    if request = invalid then return false
+    request.sent = true
+    return true
+end function
+
+sub onCancel()
+    data = m.top.cancel
+    if type(data) <> "roAssociativeArray" then return
+    for each request in m.requests
+        if request.promise.id = data.id then
+            if request.settled = true or (data.queuedOnly = true and request.sent = true) then return
+            request.settled = true
+            promises.reject({ code: 0, cancelled: true, message: "sghttp: cancelled" }, request.promise)
+            return
+        end if
+    end for
 end sub
 
 ' The store's request: kept, unanswered, until answer or fail, unless answerNext queued a body
 function makeRequest(spec as object) as object
     pending = promises.create()
-    m.requests.push({ spec: spec, promise: pending })
+    m.requests.push({ spec: spec, promise: pending, sent: false, settled: false })
     m.top.requestCount = m.requests.count()
     if m.queued.count() > 0 then
         queued = m.queued.shift()
@@ -27,6 +49,7 @@ end function
 function answerWith(index as integer, body as string, headers as object) as boolean
     request = m.requests[index]
     if request = invalid then return false
+    request.settled = true
     promises.resolve({ code: 200, body: body, bodyHash: body, headers: headers, url: "", ms: 0 }, request.promise)
     return true
 end function
@@ -57,6 +80,7 @@ end function
 function answerBody(index as integer, body as object) as boolean
     request = m.requests[index]
     if request = invalid then return false
+    request.settled = true
     promises.resolve({ code: 200, body: body, bodyHash: formatJson(body), headers: {}, url: "", ms: 0 }, request.promise)
     return true
 end function
@@ -64,6 +88,7 @@ end function
 function fail(index as integer, code = 0 as integer) as boolean
     request = m.requests[index]
     if request = invalid then return false
+    request.settled = true
     promises.reject({ message: "fake failure", code: code }, request.promise)
     return true
 end function

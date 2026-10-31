@@ -13,6 +13,7 @@
         <function name="_query" />
         <function name="_nextPage" />
         <function name="_precache" />
+        <function name="_cancel" />
         <function name="_set" />
         <function name="_refresh" />
         <function name="_peek" />

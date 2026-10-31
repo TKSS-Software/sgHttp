@@ -28,6 +28,8 @@ end function)
 
 When a mutation succeeds, sgHttp applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
 
+A mutation can be [cancelled](requests.md#cancelling-a-request) only while it's still queued. Once it has been sent, `cancel` leaves it to finish, since the server may already have applied it. A mutation cancelled in time rejects with `{ cancelled: true }` and puts back its optimistic writes.
+
 ## Showing the change at once
 
 A mutation takes a round trip to the server, and the queries it expires are only refetched after it completes. When the user made the change and is looking at the data it affects, that round trip is a visible delay. sgHttp has two ways to show the change before the server confirms it.

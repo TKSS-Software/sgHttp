@@ -9,6 +9,9 @@
         <field id="headers" type="assocarray" />
         <!-- The last promotion the store asked for, { id, priority } -->
         <field id="promote" type="assocarray" />
+        <!-- The store's cancels, { id, queuedOnly }: a request not yet answered (and, with
+             queuedOnly, not marked sent) rejects as cancelled -->
+        <field id="cancel" type="assocarray" alwaysNotify="true" />
         <function name="makeRequest" />
         <function name="answer" />
         <function name="answerBody" />
@@ -18,5 +21,6 @@
         <function name="fail" />
         <function name="requestAt" />
         <function name="promiseIdAt" />
+        <function name="markSent" />
     </interface>
 </component>

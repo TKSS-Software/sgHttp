@@ -13,8 +13,10 @@ import "pkg:/source/keys.bs"
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
 '         allowNotModified, timeoutSeconds, keepRawBody, priority }
 '   priority    - "high", "normal" (the default) or "low": which queue the request waits in.
-'                 The store raises a queued request through the promote field, { id, priority },
-'                 when a caller that waits on it joins it.
+'                 The store moves a queued request through the promote field, { id, priority }:
+'                 up when a caller that waits on it joins it, down when its callers give up.
+' cancel: { id, queuedOnly } drops the request whose promise has that id if it is still waiting,
+'   or aborts it in flight unless queuedOnly; its promise rejects with { cancelled: true }.
 ' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody }
 '   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
 '   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
@@ -29,6 +31,7 @@ sub init()
     m.port = createObject("roMessagePort")
     m.top.observeField("request", m.port)
     m.top.observeField("promote", m.port)
+    m.top.observeField("cancel", m.port)
     m.top.observeField("shutdown", m.port)
     m.top.observeField("headers", m.port)
     m.top.functionName = "runTransport"
@@ -76,6 +79,8 @@ sub runTransport()
                     enqueue(message.getData())
                 else if field = "promote" then
                     promoteJob(message.getData())
+                else if field = "cancel" then
+                    cancelJob(message.getData())
                 else if field = "headers" then
                     m.sharedHeaders = message.getData()
                     if m.sharedHeaders = invalid then m.sharedHeaders = {}
@@ -151,6 +156,46 @@ sub promoteJob(data as object)
         end for
     end for
 end sub
+
+' Drops a waiting request (queued, or waiting to retry), or aborts one in flight unless
+' data.queuedOnly; either way its promise rejects with { cancelled: true }
+sub cancelJob(data as object)
+    if type(data) <> "roAssociativeArray" or not isNonEmptyString(data.id) then return
+    for each level in m.levels
+        if removeJob(m.queues[level], data.id) then return
+    end for
+    if removeJob(m.retryQueue, data.id) then return
+    if data.queuedOnly = true then return
+    for each identity in m.jobs
+        slot = m.jobs[identity]
+        if slot.job.promise.id = data.id then
+            slot.transfer.asyncCancel()
+            m.jobs.delete(identity)
+            ' The aborted transfer may still post an event: a new one can't be mistaken for it
+            m.pool.push(createTransfer())
+            finish(slot.job, cancelledResponse(slot.job), false)
+            return
+        end if
+    end for
+end sub
+
+function removeJob(queue as object, id as string) as boolean
+    for i = 0 to queue.count() - 1
+        if queue[i].promise.id = id then
+            job = queue[i]
+            queue.delete(i)
+            finish(job, cancelledResponse(job), false)
+            return true
+        end if
+    end for
+    return false
+end function
+
+function cancelledResponse(job as object) as object
+    url = ""
+    if isNonEmptyString(job.url) then url = job.url
+    return { code: 0, cancelled: true, message: "sghttp: cancelled", body: invalid, headers: {}, url: url, ms: 0 }
+end function
 
 ' The next request to send: the first in the highest queue that has one, or invalid
 function nextJob() as dynamic

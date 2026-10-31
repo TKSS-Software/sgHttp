@@ -177,6 +177,32 @@ end sub
 
 The name only labels the events. A named `fetch` is still not registered, cached or shared; for that, see [Queries and keys](queries.md).
 
+## Cancelling a request
+
+`sghttp.cancel(promise)` gives up a request the app no longer needs. A search box that sends a request per keystroke can cancel the previous one, so it's never sent, or its connection is freed for the next:
+
+```brightscript
+sub onSearchTextChanged()
+    if m.searching <> invalid then sghttp.cancel(m.searching)
+    m.searching = sghttp.fetch({ url: "/search", query: { q: "{q}" } }, { q: m.keyboard.text })
+    promises.chain(m.searching, m).then(function(response as object, m as object) as dynamic
+        m.results.content = buildResults(response.body)
+        return invalid
+    end function).catch(function(error as object, m as object) as dynamic
+        if error.cancelled = true then return invalid   ' replaced by a newer search
+        showSearchError()
+        return invalid
+    end function)
+end sub
+```
+
+- A request still waiting in the queue, or waiting to retry, is dropped without being sent.
+- A `GET` or `HEAD` in flight is aborted. A request with any other method that has already been sent is left to finish, since the server may have acted on it; only a queued one is dropped.
+- A cancelled promise rejects with `{ cancelled: true, code: 0, message: "sghttp: cancelled" }`. It emits a `cancel` event, not `error`, so an observer watching for 401s doesn't see it, and the `errors` stat doesn't count it.
+- `cancel` returns whether the promise was still pending.
+
+Cancelling a [query](caching.md#giving-up-a-query) works differently, because its request can be shared.
+
 ## More than one server
 
 Each server is a **client** with its own base url, shared headers and transport pool. `initialize` sets up the default client from its top-level settings, and any others from `clients`. A spec picks one by name:

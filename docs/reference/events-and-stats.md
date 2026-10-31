@@ -6,7 +6,7 @@ Delivered to `observeEvents` callbacks as `event.getData()`. The store's `lastEv
 
 | Field | Type | Meaning |
 |---|---|---|
-| `type` | string | `hit`, `stale`, `dedupe`, `resolve`, `unchanged`, `set` or `error` |
+| `type` | string | `hit`, `stale`, `dedupe`, `resolve`, `unchanged`, `set`, `cancel` or `error` |
 | `name` | string | Query name |
 | `key` | string | Cache key; `""` for `cache: false` queries |
 | `source` | string | `memory`, `disk`, `network`, or `local` for a value written with `set` |
@@ -23,6 +23,7 @@ Delivered to `observeEvents` callbacks as `event.getData()`. The store's `lastEv
 | `resolve` | A value arrives from the network or disk (or a `cache: false` query succeeds) |
 | `unchanged` | A response matches the cached value (same body hash, same parsed hash, or `304`) and the entry is renewed |
 | `set` | A value is written with `set` or an optimistic mutation (source `local`) |
+| `cancel` | A `fetch` or mutation is cancelled with [`cancel`](api.md#cancel). Not counted as an error. |
 | `error` | A request or parse fails, including background refreshes and mutations |
 
 A query whose name was never defined rejects without an event.

@@ -48,6 +48,8 @@ sub init()
     m.expiries = {}
     ' query name -> the time bucket its entries were last swept at (see dropOldBuckets)
     m.buckets = {}
+    ' promise id -> the context of a fetch or mutation, until it settles (see _cancel)
+    m.calls = {}
     ' Counts request starts and expiries, ordering them (see currentEntry)
     m.sequence = 0
     m.nextEntryId = 0
@@ -389,8 +391,59 @@ function _precache(name as string, args = {} as object) as boolean
         if entry.hasValue and not entry.expired and now < entry.freshUntil then return false
     end if
     ' Nothing waits on a precache, so it queues behind the requests screens are waiting on
-    runQuery(definition, args, { priority: "low" })
+    lookup = runQuery(definition, args, { priority: "low" })
+    ' ...and it is no caller's claim on the request (see releaseWaiter)
+    started = m.cache[lookup.key]
+    if started <> invalid and started.fetch <> invalid then started.fetch.waiters = 0
     return true
+end function
+
+' Gives up a promise fetch, query, mutate or nextPage returned. A fetch or mutation is
+' cancelled: dropped if it is still queued, aborted if it is in flight and its method is GET or
+' HEAD (any other method may already have changed something on the server, so it is left to
+' finish), and its promise rejects with { cancelled: true }. A cached query's request is shared,
+' and the cache still wants its answer, so the caller only gives up its claim: a request no one
+' else is waiting on drops to low priority. Returns whether the promise was still pending.
+function _cancel(promise as dynamic) as boolean
+    if not isNode(promise) then return false
+    context = m.calls[promise.id]
+    if context <> invalid then
+        cancelCall(context)
+        return true
+    end if
+    for each key in m.cache
+        entry = m.cache[key]
+        if isNode(entry.promise) and entry.promise.isSameNode(promise) then return releaseWaiter(entry.fetch)
+    end for
+    return false
+end function
+
+sub cancelCall(context as object)
+    ' A safe request's answer is dropped however it arrives: aborted, already parsing, or from
+    ' a transport that can't cancel
+    if context.safeToAbort then context.cancelled = true
+    client = clientOf(context.definition)
+    if client <> invalid and isNode(context.requestPromise) and client.transport.hasField("cancel") then
+        client.transport.cancel = { id: context.requestPromise.id, queuedOnly: not context.safeToAbort }
+    end if
+end sub
+
+' A caller of a cached query gave up: when no caller is left waiting on the request, it moves
+' behind the requests that are still wanted. A later caller raises it again (see promote).
+function releaseWaiter(context as dynamic) as boolean
+    if type(context) <> "roAssociativeArray" then return false
+    if context.waiters > 0 then context.waiters--
+    if context.waiters > 0 or context.priority = "low" then return true
+    context.priority = "low"
+    if isNode(context.requestPromise) then
+        client = clientOf(context.definition)
+        if client <> invalid and client.transport.hasField("promote") then client.transport.promote = { id: context.requestPromise.id, priority: "low" }
+    end if
+    return true
+end function
+
+function cancelledError() as object
+    return { code: 0, cancelled: true, message: "sghttp: cancelled" }
 end function
 
 ' The cached path of _query: { key, promise }, where promise is the request that will answer
@@ -412,6 +465,7 @@ function runQuery(definition as object, args as object, options as object) as ob
         if entry.promise <> invalid and not servable then
             emit("dedupe", name, key, "memory", 0)
             ' This caller waits on the request, so it goes ahead of anything queued lower
+            if entry.fetch <> invalid then entry.fetch.waiters++
             promote(entry.fetch, priorityFor(definition, options, false))
             return { key: key, promise: entry.promise }
         end if
@@ -576,11 +630,16 @@ function runOptimistic(definition as object, args as object, writes as object) a
         end if
     end for
     pending = promises.create()
+    request = runUncached(definition, args)
     context = { undo: undo, pending: pending }
-    promises.chain(runUncached(definition, args), context).then(function(value as dynamic, context as object) as dynamic
+    ' The caller holds this promise, not the request's: cancel finds the request through it
+    if m.calls[request.id] <> invalid then m.calls[pending.id] = m.calls[request.id]
+    promises.chain(request, context).then(function(value as dynamic, context as object) as dynamic
+        m.calls.delete(context.pending.id)
         promises.resolve(value, context.pending)
         return invalid
     end function).catch(function(error as dynamic, context as object) as dynamic
+        m.calls.delete(context.pending.id)
         for each write in context.undo
             rollback(write)
         end for
@@ -805,7 +864,10 @@ function startFetch(definition as object, key as string, args as object, now as 
     if priority = "" then priority = background ? "low" : definition.priority
     entry = m.cache[key]
     if entry <> invalid and entry.promise <> invalid then
-        if not background then promote(entry.fetch, priority)
+        if not background then
+            if entry.fetch <> invalid then entry.fetch.waiters++
+            promote(entry.fetch, priority)
+        end if
         return entry.promise
     end if
 
@@ -820,7 +882,7 @@ function startFetch(definition as object, key as string, args as object, now as 
 
     ' pending travels with the request: the entry may be dropped or expired before it answers,
     ' and its callers are owed an answer either way
-    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan"), link: invalid, priority: priority, requestPromise: invalid }
+    context = { key: key, definition: definition, args: args, pending: pending, entryId: entry.id, sequence: m.sequence, fallback: fallback, startedAt: createObject("roTimespan"), link: invalid, priority: priority, requestPromise: invalid, waiters: background ? 0 : 1 }
     ' nextPage finds the fetch it joins through the entry, to hand it the head to link to
     entry.fetch = context
 
@@ -947,9 +1009,16 @@ function runUncached(definition as object, args as object, raw = false as boolea
     ' A parser's body crosses to its task as text and is decoded there (see parseOnTask)
     context.decode = spec.parseJson
     if isNonEmptyString(definition.parser) then spec.parseJson = false
+    ' Only a request that changes nothing can be abandoned once it is sent (see _cancel)
+    method = ucase(spec.method)
+    context.safeToAbort = method = "GET" or method = "HEAD"
+    context.cancelled = false
     requestPromise = client.transport.callFunc("makeRequest", spec)
+    context.requestPromise = requestPromise
+    m.calls[pending.id] = context
 
     promises.chain(requestPromise, context).then(function(response as object, context as object) as dynamic
+        if context.cancelled then return promises.reject(cancelledError())
         definition = context.definition
         context.response = response
         if isNonEmptyString(definition.parser) then
@@ -960,6 +1029,8 @@ function runUncached(definition as object, args as object, raw = false as boolea
         end if
         return response.body
     end function).then(function(value as dynamic, context as object) as dynamic
+        if context.cancelled then return promises.reject(cancelledError())
+        m.calls.delete(context.pending.id)
         applyInvalidations(context.definition)
         emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), { client: context.definition.client })
         if context.raw then
@@ -969,6 +1040,13 @@ function runUncached(definition as object, args as object, raw = false as boolea
         promises.resolve(value, context.pending)
         return invalid
     end function).catch(function(error as dynamic, context as object) as dynamic
+        m.calls.delete(context.pending.id)
+        ' A cancel is the caller's choice, not a failure: no error event or count
+        if context.cancelled or (type(error) = "roAssociativeArray" and error.cancelled = true) then
+            emit("cancel", context.definition.name, "", "network", context.startedAt.totalMilliseconds())
+            promises.reject(cancelledError(), context.pending)
+            return invalid
+        end if
         m.stats.errors++
         emit("error", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), errorDetails(context.definition, error))
         promises.reject(error, context.pending)
@@ -1830,6 +1908,7 @@ sub _destroy()
     m.watchers = {}
     m.expiries = {}
     m.buckets = {}
+    m.calls = {}
     for each clientName in m.clients
         transport = m.clients[clientName].transport
         if transport.hasField("shutdown") then transport.shutdown = true

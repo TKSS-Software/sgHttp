@@ -99,6 +99,17 @@ sghttp.precache(name as string, args = {} as object) as boolean
 
 Starts the query without waiting for its result, so a later `query` with the same args joins the request or finds the value in memory. Does nothing when memory holds a fresh value or a request is already in flight. Otherwise it does what a plain `query` would, reading the disk first for a `persist` query, with its request queued at `"low"` [priority](../guides/transport.md#priorities). For a query with pages, loads the first page. Returns whether a disk read or request started. Prints a warning and returns `false` for an unknown or `cache: false` query. See [Asking ahead](../guides/caching.md#asking-ahead).
 
+## cancel
+
+```brightscript
+sghttp.cancel(promise as object) as boolean
+```
+
+Gives up a promise that `fetch`, `query`, `mutate` or `nextPage` returned. Returns whether it was still pending. See [Cancelling a request](../guides/requests.md#cancelling-a-request).
+
+- **`fetch` and `mutate`:** the request is dropped if it is still queued, or aborted if it is in flight and its method is `GET` or `HEAD`. A request with any other method that has already been sent is left to finish, since the server may have acted on it. A cancelled call's promise rejects with `{ cancelled: true, code: 0, message }` and emits a `cancel` [event](events-and-stats.md#events), not `error`. A mutation's optimistic writes are put back.
+- **`query` and `nextPage`:** the request may be shared with other callers, and the cache keeps its answer, so it isn't stopped. If no other caller is waiting on it, it moves to low [priority](../guides/transport.md#priorities). The caller's own promise still settles.
+
 ## nextPage
 
 ```brightscript

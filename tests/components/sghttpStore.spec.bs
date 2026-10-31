@@ -1459,6 +1459,114 @@ namespace tests
             end function)
         end function
 
+        @describe("cancel")
+
+        @async
+        @it("cancels a fetch: its promise rejects as cancelled, with a cancel event and no error")
+        function _()
+            m.makeStore()
+            m.slow = m.store.callFunc("_fetch", "/slow", {})
+            m.assertTrue(m.store.callFunc("_cancel", m.slow))
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.fail("a cancelled fetch resolved")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                suite.assertEqual(suite.store.lastEvent.type, "cancel")
+                suite.assertEqual(suite.store.callFunc("_getStats").errors, 0)
+                ' Settled: nothing left to cancel
+                suite.assertFalse(suite.store.callFunc("_cancel", suite.slow))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("drops a cancelled fetch's answer when the transport can't abort it")
+        function _()
+            m.makeStore()
+            m.slow = m.store.callFunc("_fetch", "/slow", {})
+            ' Sent and answered as far as the transport is concerned; the store still drops it
+            m.fake.callFunc("answer", 0, "late")
+            m.store.callFunc("_cancel", m.slow)
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.fail("a cancelled fetch resolved")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("cancels a mutation only before it is sent, and puts back its optimistic write")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: "saved" }] })
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "saved")
+                suite.assertTrue(suite.store.callFunc("_cancel", saving))
+                return promises.chain(saving).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise()
+            end function).then(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                ' Once sent, a POST is left to finish: the server may already have acted on it
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true })
+                suite.fake.callFunc("markSent", 2)
+                suite.store.callFunc("_cancel", saving)
+                suite.fake.callFunc("answer", 2, "ok")
+                return saving
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "ok")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("gives up a query's claim: a request no one else waits on drops to low priority")
+        function _()
+            m.makeStore()
+            m.slow = m.query("1")
+            m.assertTrue(m.store.callFunc("_cancel", m.slow))
+            m.assertEqual(m.fake.promote.priority, "low")
+            ' Another caller raises it again; with two waiting, one cancel leaves it there
+            m.query("1")
+            m.assertEqual(m.fake.promote.priority, "normal")
+            m.query("1")
+            m.fake.promote = invalid
+            m.store.callFunc("_cancel", m.slow)
+            m.assertInvalid(m.fake.promote)
+            ' A precache is no caller's claim: a query that joins it and gives up demotes it
+            m.store.callFunc("_precache", "items", { id: "2" })
+            joined = m.query("2")
+            m.store.callFunc("_cancel", joined)
+            m.assertEqual(m.fake.promote.priority, "low")
+            ' The answer still fills the cache, and the caller's own promise still settles
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(m.slow, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("Cache-Control")
 
         @async

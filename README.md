@@ -70,6 +70,7 @@ Each feature is one more key on the definition. Requests can be converted from `
 - An event for every request, so one observer can send the app to sign-in on a 401
 - A debugging proxy switch for Charles or mitmproxy
 - Three request priorities, with background refreshes and precaches queued behind the requests a screen is waiting on
+- Cancellation: `cancel(promise)` drops a queued request or aborts one in flight
 
 **The query cache**
 
