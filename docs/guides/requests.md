@@ -142,9 +142,9 @@ end sub
 ```
 
 - `reauthorize(headers)` merges the headers into the client's shared headers, as `setHeaders` does, and sends each held request again with them, once. If it's answered `401` again, it fails.
-- `reauthorize(invalid)` makes the held requests fail with their `401`, and their callers see the error as usual.
-- The app must call `reauthorize` after every call to its function. Until it does, the held requests wait.
-- A request sent while the token is being renewed isn't held: its `401` fails it at once, since it may be the renewal itself. A request with `auth: false` is never held.
+- `reauthorize(invalid)` makes the held requests fail with their `401`, and their callers see the error as usual. A request that was already in flight when the function was called, and is answered `401` after that, fails too: the function is called once per renewal, not once per request.
+- The app must call `reauthorize` after every call to its function. Until it does, the held requests wait. A `setHeaders` call during a renewal counts as `reauthorize(headers)`.
+- A request sent while the token is being renewed, say by a screen that opens meanwhile, is held too. A request with `auth: false` is never held, so the renewal request itself must set it, as above; otherwise its `401` would wait on its own answer.
 - A request that went out before `setHeaders` changed the shared headers, and is then answered `401`, is sent again with the new headers without calling the function.
 - A held request can be [cancelled](#cancelling-a-request) whatever its method, since the server didn't act on it.
 - `event.getData()` is `{ client, url }`. Each client is renewed separately: `onUnauthorized` and `reauthorize` take the client's name as a second argument, and use the default client without one.

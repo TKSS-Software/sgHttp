@@ -230,11 +230,6 @@ function neverConnected(code as integer) as boolean
     return code = -5 or code = -6 or code = -7 or code = -35
 end function
 
-function isWholeNumber(value as dynamic) as boolean
-    valueType = type(value)
-    return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
-end function
-
 function retriesFor(spec as object) as integer
     if isWholeNumber(spec.retries) then return spec.retries
     return m.top.retries

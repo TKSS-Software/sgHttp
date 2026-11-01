@@ -99,6 +99,12 @@ function isNonEmptyString(value as dynamic) as boolean
     return (type(value) = "roString" or type(value) = "String") and value <> ""
 end function
 
+' Returns true if the value is an integer (a count, a code, a number of seconds).
+function isWholeNumber(value as dynamic) as boolean
+    valueType = type(value)
+    return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
+end function
+
 ' The wait a Retry-After header asks for, in seconds: delta-seconds ("120") or an HTTP date
 ' ("Wed, 21 Oct 2015 07:28:00 GMT"), counted from now. A date already past is 0. -1 when
 ' the header is missing or neither form.

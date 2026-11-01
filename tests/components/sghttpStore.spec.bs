@@ -1641,8 +1641,8 @@ namespace tests
             m.slow = m.store.callFunc("_fetch", "/me", {})
             m.fake.callFunc("fail", 0, 401)
             promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
-                ' Sent while the headers are being renewed: its 401 fails it at once
-                renewal = suite.store.callFunc("_fetch", "/token", {})
+                ' The renewal sends no shared headers: its 401 fails it at once
+                renewal = suite.store.callFunc("_fetch", { url: "/token", auth: false }, {})
                 suite.fake.callFunc("fail", 1, 401)
                 return promises.chain(renewal).catch(function(error as dynamic) as dynamic
                     return error
@@ -1657,6 +1657,102 @@ namespace tests
                 suite.assertEqual(error.code, 401)
                 suite.assertEqual(suite.store.lastEvent.code, 401)
                 suite.assertEqual(suite.fake.requestCount, 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("holds a request sent during the renewal too, and sends both again with the renewed headers")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.slow = m.store.callFunc("_fetch", "/me", {})
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                ' A screen opened while the app renews: its request goes out with the old token
+                suite.other = suite.store.callFunc("_fetch", "/other", {})
+                suite.fake.callFunc("fail", 1, 401)
+                ' A request answered after it shows the 401 has been handled by the time it resolves
+                probe = suite.store.callFunc("_fetch", "/probe", {})
+                suite.fake.callFunc("answer", 2, "p")
+                return probe
+            end function).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(suite.other.promiseState, "pending")
+                suite.store.callFunc("_reauthorize", { Authorization: "Bearer new" }, "")
+                suite.assertEqual(suite.fake.requestCount, 5)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 3).headers.Authorization, "Bearer new")
+                suite.assertEqual(suite.fake.callFunc("requestAt", 4).headers.Authorization, "Bearer new")
+                suite.fake.callFunc("answer", 3, "me")
+                suite.fake.callFunc("answer", 4, "other")
+                return promises.all([suite.slow, suite.other])
+            end function).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(responses[0].body, "me")
+                suite.assertEqual(responses[1].body, "other")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("asks the app once per renewal: after a failed one, a 401 to another request in flight fails at once")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.store.callFunc("_fetch", "/a", {})
+            m.slow = m.store.callFunc("_fetch", "/b", {})
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_reauthorize", invalid, "")
+                ' The app could not renew: /b, sent before it was asked, is not worth asking about
+                suite.authWatcher.arrived = promises.create()
+                suite.fake.callFunc("fail", 1, 401)
+                return promises.chain(suite.slow).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise()
+            end function).then(function(error as dynamic, suite as object) as dynamic
+                suite.assertEqual(error.code, 401)
+                suite.assertEqual(suite.authWatcher.arrived.promiseState, "pending")
+                suite.assertEqual(suite.fake.requestCount, 2)
+                ' A request sent after the failed renewal asks again
+                suite.slow = suite.store.callFunc("_fetch", "/c", {})
+                suite.fake.callFunc("fail", 2, 401)
+                return suite.authWatcher.arrived
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value.client, "default")
+                suite.store.callFunc("_reauthorize", invalid, "")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("takes setHeaders during a renewal as the renewed headers")
+        function _()
+            m.makeStore()
+            arrived = m.watchUnauthorized()
+            m.slow = m.store.callFunc("_fetch", "/me", {})
+            m.fake.callFunc("fail", 0, 401)
+            promises.chain(arrived, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_setHeaders", { Authorization: "Bearer new" }, "")
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).headers.Authorization, "Bearer new")
+                suite.fake.callFunc("answer", 1, "me")
+                return suite.slow
+            end function).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(response.body, "me")
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
@@ -1704,6 +1800,8 @@ namespace tests
             m.store.callFunc("_initialize", { transport: m.fake, persistence: m.spy })
             m.slow = m.store.callFunc("_fetch", "/me", {})
             m.store.callFunc("_define", "items", { request: { url: "/items/{id}" } })
+            ' Dropping a query's entries has nothing to delete on disk either
+            m.store.callFunc("_invalidate", "items", invalid)
             m.fake.callFunc("answer", 0, "me")
             promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
                 suite.assertEqual(suite.spy.operations, 0)
@@ -1776,6 +1874,31 @@ namespace tests
         end function
 
         @async
+        @it("reads the operation operationName picks when the document has more than one")
+        function _()
+            m.makeStore()
+            document = "query Shows { shows { slug } } mutation Add($id: ID!) { add(id: $id) { ok } }"
+            m.store.callFunc("_define", "shows", { request: { url: "/graphql", graphql: { query: document, operationName: "Shows" } } })
+            m.store.callFunc("_define", "favorite.add", { request: { url: "/graphql", graphql: { query: document, operationName: "Add", variables: { id: "{id}" } } } })
+            m.slow = m.store.callFunc("_query", "shows", {}, {})
+            m.store.callFunc("_query", "favorite.add", { id: "1" }, { mutation: true })
+            m.assertEqual(m.fake.callFunc("requestAt", 0).body.operationName, "Shows")
+            m.assertTrue(m.fake.callFunc("requestAt", 0).safeToRepeat)
+            m.assertFalse(m.fake.callFunc("requestAt", 1).safeToRepeat)
+            m.fake.callFunc("answerBody", 0, { data: { shows: [{ slug: "a" }] } })
+            promises.chain(m.slow, m).then(function(value as dynamic, suite as object) as dynamic
+                ' A read: cached
+                suite.assertEqual(suite.store.callFunc("_peek", "shows", {}).shows[0].slug, "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
         @it("loads a Relay listing a page at a time, ending where hasNextPage is false")
         function _()
             m.makeStore()
@@ -1817,6 +1940,27 @@ namespace tests
             m.fake.callFunc("answerBody", 0, { data: { show: { title: "Pilot", rating: invalid } }, errors: [{ message: "rating unavailable" }] })
             promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
                 suite.assertEqual(response.body.show.title, "Pilot")
+                suite.assertEqual(response.errors[0].message, "rating unavailable")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("hands fetch the errors that come with partial data when a parser takes the data")
+        function _()
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false, parserTask: "SpecParserTask" })
+            m.slow = m.store.callFunc("_fetch", { url: "/graphql", graphql: { query: "{ word rating }" }, parser: "Field" }, {})
+            m.fake.callFunc("answerBody", 0, { data: { word: "Pilot", rating: invalid }, errors: [{ message: "rating unavailable" }] })
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(response.body, "Pilot")
                 suite.assertEqual(response.errors[0].message, "rating unavailable")
                 suite.done()
                 return invalid

@@ -230,7 +230,7 @@ sghttp.setHeaders({ Authorization: invalid })              ' sign out
 sghttp.onUnauthorized(functionName as string, client = "" as string)
 ```
 
-Calls `functionName(event)` in the calling component when a request of the client (the default client when `client` is omitted) that sent its shared headers is answered `401`. The event's data is `{ client, url }`. The request is held, not failed, along with every other request of the client answered `401` until the app calls [`reauthorize`](#reauthorize). A request sent while the headers are being renewed, and a request with `auth: false`, are not held. A request answered `401` after `setHeaders` changed the headers it was sent with is sent again with the new ones, without a call. See [When the token expires](../guides/requests.md#when-the-token-expires).
+Calls `functionName(event)` in the calling component when a request of the client (the default client when `client` is omitted) that sent its shared headers is answered `401`. The event's data is `{ client, url }`. The request is held, not failed, along with every other request of the client answered `401` until the app calls [`reauthorize`](#reauthorize) (or [`setHeaders`](#setheaders), which counts as `reauthorize(headers)` during a renewal). A request sent while the headers are being renewed is held too. A request with `auth: false` is never held, so the request that renews the token must set it. A request answered `401` after `setHeaders` changed the headers it was sent with is sent again with the new ones, without a call. See [When the token expires](../guides/requests.md#when-the-token-expires).
 
 ## reauthorize
 
@@ -238,7 +238,7 @@ Calls `functionName(event)` in the calling component when a request of the clien
 sghttp.reauthorize(headers as dynamic, client = "" as string)
 ```
 
-The app's answer to an `onUnauthorized` call. With an associative array, merges it into the client's shared headers as `setHeaders` does and sends each held request again with them, once. With `invalid`, the held requests reject with their `401`. Prints a warning for an unknown client.
+The app's answer to an `onUnauthorized` call. With an associative array, merges it into the client's shared headers as `setHeaders` does and sends each held request again with them, once. With `invalid`, the held requests reject with their `401`, as does any request that was in flight when the function was called and is answered `401` afterwards; the function is not called again for them. Prints a warning for an unknown client.
 
 ## watch
 

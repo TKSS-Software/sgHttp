@@ -158,19 +158,14 @@ sub addClient(name as string, settings as object)
     setTransportField(transport, "headers", headers)
     ' Started only now that its settings are in (it reads some of them as it starts)
     if ownTransport then transport.control = "RUN"
-    ' authWatcher, held, renewing, renewingFrom and renewedAt: see holdUnauthorized
-    m.clients[name] = { name: name, transport: transport, headers: headers, baseUrl: asString(settings.baseUrl), requests: 0, errors: 0, authWatcher: invalid, held: [], renewing: false, renewingFrom: 0, renewedAt: 0 }
+    ' authWatcher, held, renewing, renewedAt and deniedAt: see holdUnauthorized
+    m.clients[name] = { name: name, transport: transport, headers: headers, baseUrl: asString(settings.baseUrl), requests: 0, errors: 0, authWatcher: invalid, held: [], renewing: false, renewedAt: 0, deniedAt: 0 }
 end sub
 
 ' A replacement transport (tests, an app's own) need not have every field
 sub setTransportField(transport as object, field as string, value as dynamic)
     if transport.hasField(field) then transport[field] = value
 end sub
-
-function isWholeNumber(value as dynamic) as boolean
-    valueType = type(value)
-    return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
-end function
 
 ' The client a definition sends through, or invalid when it names one that does not exist
 function clientOf(definition as object) as dynamic
@@ -212,9 +207,10 @@ end sub
 ' A definition with every key present and defaulted, as the fetch path reads it
 function normalize(name as string, definition as object) as object
     clientName = isNonEmptyString(definition.client) ? definition.client : DEFAULT_CLIENT
-    ' A GraphQL mutation is a write: never cached, retried or aborted as a read would be
-    graphql = type(definition.request) = "roAssociativeArray" and type(definition.request.graphql) = "roAssociativeArray"
-    graphqlMutation = graphql and isGraphqlMutation(definition.request.graphql.query)
+    ' A GraphQL mutation is a write: never cached, retried or aborted as a read would be. Later
+    ' pages may be fetched with pages.request (see buildRequestSpec): GraphQL there unwraps too
+    graphql = hasGraphql(definition.request) or (type(definition.pages) = "roAssociativeArray" and hasGraphql(definition.pages.request))
+    graphqlMutation = hasGraphql(definition.request) and isGraphqlMutation(definition.request.graphql.query, asString(definition.request.graphql.operationName))
     if m.clients[clientName] = invalid then
         print `[sghttp] "${name}" names client "${clientName}", which initialize did not set up; its requests will fail`
     end if
@@ -332,6 +328,8 @@ sub _setHeaders(headers as object, clientName = "" as string)
         end for
         setTransportField(client.transport, "headers", client.headers)
         client.renewedAt = m.sendCount
+        ' An app that answers onUnauthorized with setHeaders, not reauthorize, renews all the same
+        if client.renewing then settleHeld(client, true)
     end if
 end sub
 
@@ -356,8 +354,19 @@ sub _reauthorize(headers as dynamic, clientName = "" as string)
         print `[sghttp] reauthorize: no client "${clientName}"`
         return
     end if
-    renewed = type(headers) = "roAssociativeArray"
-    if renewed then _setHeaders(headers, clientName)
+    if type(headers) = "roAssociativeArray" then
+        _setHeaders(headers, clientName)   ' sends the held requests again with them
+    else
+        ' The app was asked once for every request sent so far: a 401 to another of them fails
+        ' at once, instead of asking again (see holdUnauthorized)
+        client.deniedAt = m.sendCount
+        settleHeld(client, false)
+    end if
+end sub
+
+' Ends a client's renewal: its held requests go again with the renewed headers, or fail with
+' their 401
+sub settleHeld(client as object, renewed as boolean)
     client.renewing = false
     held = client.held
     client.held = []
@@ -1079,14 +1088,14 @@ function runUncached(definition as object, args as object, raw = false as boolea
         if context.cancelled then return promises.reject(cancelledError())
         definition = context.definition
         context.response = response
+        ' Partial data comes with the errors of the fields that failed: fetch hands them back
+        if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
         if isNonEmptyString(definition.parser) then
             if m.parsers.count() = 0 then
                 return promises.reject({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
             end if
             return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql })
         end if
-        ' Partial data comes with the errors of the fields that failed: fetch hands them back
-        if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
         return graphqlData(definition, response.body)
     end function).then(function(value as dynamic, context as object) as dynamic
         if context.cancelled then return promises.reject(cancelledError())
@@ -1143,12 +1152,14 @@ end sub
 
 ' A 401 to a request that sent the shared headers of a client the app renews (onUnauthorized).
 ' Sent before the headers were last renewed, it goes again at once. Otherwise it waits while the
-' app renews them: the first such 401 sets the client's authWatcher, and every request sent
-' before it that is answered 401 joins it in held until _reauthorize. A request sent while the
-' app is renewing fails as it is: it may be the renewing request itself, which must not wait on
-' its own answer. A request is held once at most, and sent again at once once at most, so a
-' header that changed for another reason (setHeaders renews them all) still leads to a renewal.
-' Returns whether the 401 was taken.
+' app renews them: the first such 401 sets the client's authWatcher, and every other request
+' answered 401 meanwhile, sent before or during the renewal, joins it in held until _reauthorize.
+' The renewing request itself must not wait on its own answer: it sends no shared headers
+' (auth: false), so its 401 is never held. A request is held once at most, and sent again at
+' once once at most, so a header that changed for another reason (setHeaders renews them all)
+' still leads to a renewal. When the app could not renew (reauthorize(invalid)), a request sent
+' before it answered fails as it is: the app is asked once per renewal, not once per request in
+' flight. Returns whether the 401 was taken.
 function holdUnauthorized(context as object, error as dynamic) as boolean
     if type(error) <> "roAssociativeArray" or error.code <> 401 then return false
     if context.wasHeld = true or context.definition.auth = false then return false
@@ -1156,7 +1167,6 @@ function holdUnauthorized(context as object, error as dynamic) as boolean
     if client = invalid or not isNode(client.authWatcher) then return false
     context.authError = error
     if client.renewing then
-        if context.sendNumber > client.renewingFrom then return false
         hold(client, context)
         return true
     end if
@@ -1165,8 +1175,8 @@ function holdUnauthorized(context as object, error as dynamic) as boolean
         resend(client, context)
         return true
     end if
+    if context.sendNumber <= client.deniedAt then return false
     client.renewing = true
-    client.renewingFrom = m.sendCount
     hold(client, context)
     client.authWatcher.unauthorized = { client: client.name, url: asString(error.url) }
     return true
@@ -1553,21 +1563,39 @@ end function
 
 ' Whether a GraphQL document's operation is a mutation: its keyword is read at the top level
 ' only (outside braces, strings and comments), so a field named mutation never counts
-function isGraphqlMutation(document as dynamic) as boolean
+function hasGraphql(request as dynamic) as boolean
+    return type(request) = "roAssociativeArray" and type(request.graphql) = "roAssociativeArray"
+end function
+
+' Whether a GraphQL document's operation is a mutation: the operation operationName names, when
+' it is given and found in the document, else any top-level mutation in it. Only the top level
+' is read, outside strings and comments, so a field or argument called mutation is not one.
+function isGraphqlMutation(document as dynamic, operationName = "" as string) as boolean
     if not isNonEmptyString(document) then return false
     nameChars = createObject("roRegex", "[A-Za-z0-9_$]", "")
+    operations = []
+    naming = false   ' the last word was an operation keyword: a name may follow
     depth = 0
     word = ""
     inString = false
     inComment = false
     escaped = false
+    document = document + " "   ' so the last word is handled in the loop
     for i = 0 to document.len() - 1
         c = document.mid(i, 1)
         if depth = 0 and not inString and not inComment and nameChars.isMatch(c) then
             word = word + c
         else
-            if word = "mutation" then return true
-            word = ""
+            if word <> "" then
+                if word = "query" or word = "mutation" or word = "subscription" then
+                    operations.push({ type: word, name: "" })
+                    naming = true
+                else if naming then
+                    operations.peek().name = word
+                    naming = false
+                end if
+                word = ""
+            end if
             if inComment then
                 if c = chr(10) or c = chr(13) then inComment = false
             else if inString then
@@ -1578,18 +1606,30 @@ function isGraphqlMutation(document as dynamic) as boolean
                 else if c = chr(34) then
                     inString = false
                 end if
-            else if c = "#" then
-                inComment = true
-            else if c = chr(34) then
-                inString = true
-            else if c = "{" then
-                depth++
-            else if c = "}" then
-                depth--
+            else
+                if c = "#" then
+                    inComment = true
+                else if c = chr(34) then
+                    inString = true
+                else if c = "{" then
+                    depth++
+                else if c = "}" then
+                    depth--
+                end if
+                ' Anything but whitespace after the keyword: the operation has no name
+                if naming and c <> " " and c <> "," and c <> chr(9) and c <> chr(10) and c <> chr(13) then naming = false
             end if
         end if
     end for
-    return word = "mutation"
+    if operationName <> "" then
+        for each operation in operations
+            if operation.name = operationName then return operation.type = "mutation"
+        end for
+    end if
+    for each operation in operations
+        if operation.type = "mutation" then return true
+    end for
+    return false
 end function
 
 ' What a GraphQL query resolves with: the response's data. A response with errors and no data
@@ -2050,8 +2090,11 @@ function parseEnvelope(text as dynamic, key as string) as dynamic
 end function
 
 ' The persistence task, started now if this is the first call that needs the disk; invalid when
-' persistence is off. A single key's copy is deleted only through a running task (deletePersisted):
-' a query that persists starts it when it is defined.
+' persistence is off. Deleting a key's or a query's copies (deletePersisted, clearPersistedQuery)
+' goes through a running task only: a query that persists starts it when it is defined, so a
+' task that is not running has nothing on disk to delete from this run, and a copy from an
+' earlier run is checked when its query next reads the disk. Clearing everything (clearPersisted,
+' for a sign-out) starts it if need be, so copies of queries that no longer persist go too.
 function diskTask() as dynamic
     if isNode(m.persistence) or not m.persistEnabled then return m.persistence
     if isNode(m.givenPersistence) then
@@ -2075,7 +2118,7 @@ end sub
 
 ' Deletes every stored body of a query, and of its dotted descendants when descendants is true
 sub clearPersistedQuery(name as string, descendants as boolean)
-    if isNode(diskTask()) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
+    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
 end sub
 
 '#endregion

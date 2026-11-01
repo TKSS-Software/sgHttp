@@ -66,7 +66,7 @@ This check is done by the built-in transport. A [replacement transport](transpor
 
 ## Mutations
 
-sgHttp reads the operation's type from its text. A `mutation` is a write, without `cache: false`:
+sgHttp reads the operation's type from its text. When the document has more than one operation, `operationName` decides which is read; without it, a document with any `mutation` counts as one. A `mutation` is a write, without `cache: false`:
 
 ```brightscript
 const ADD_FAVORITE = "mutation AddFavorite($id: ID!) { addFavorite(id: $id) { ok } }"
