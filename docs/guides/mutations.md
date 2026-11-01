@@ -1,4 +1,4 @@
-# Mutations, expiry and invalidation
+# Mutations, expiry and removal
 
 ## Mutations
 
@@ -26,7 +26,7 @@ end function)
 
 `mutate` resolves with the parsed response (or the decoded body when there's no parser). It rejects if the query is a cached one, so a call written as a mutation can never cache a result by mistake. `query` runs `cache: false` queries too. Use it for things that are fetched fresh on every call but aren't writes, such as a stream url. For a one-off call that isn't worth a definition, or where you need the status and headers, see [Requests](requests.md).
 
-When a mutation succeeds, sgHttp applies the definition's `expires` and `invalidates` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
+When a mutation succeeds, sgHttp applies the definition's `expires` and `removes` lists, and refreshes the expired entries that have a watcher (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)). Nothing is applied when it fails.
 
 A mutation can be [cancelled](requests.md#cancelling-a-request) only while it's still queued. Once it has been sent, `cancel` leaves it to finish, since the server may already have applied it. A mutation cancelled in time rejects with `{ cancelled: true }` and puts back its optimistic writes.
 
@@ -70,14 +70,14 @@ After a write, some cached data is out of date. sgHttp has two ways to handle th
 
 This is what a mutation's `expires` list does, and it's usually the right choice. A screen that is already open, for example behind a dialog, keeps showing its data, while the next screen that queries the data gets a fresh copy.
 
-### Invalidate
+### Remove
 
-`sghttp.invalidate(name, args)` drops the value from memory **and** disk. Use it when the old value must never be shown again, for example data that belonged to another account.
+`sghttp.remove(name, args)` drops the value from memory **and** disk. Use it when the old value must never be shown again, for example data that belonged to another account.
 
 ```brightscript
-sghttp.invalidate("homePage", { slug: "main" })   ' one entry
-sghttp.invalidate("homePage")                     ' every homePage entry, and homePage.* queries
-sghttp.invalidate()                               ' everything, memory and disk
+sghttp.remove("homePage", { slug: "main" })       ' one entry
+sghttp.remove("homePage")                         ' every homePage entry, and homePage.* queries
+sghttp.remove()                                   ' everything, memory and disk
 ```
 
 ### Matching
@@ -96,7 +96,7 @@ sghttp.define("profile.update", {
     request: { url: "/profile", method: "PATCH", body: "{changes}" }
     cache: false
     expires: ["profile", "homePage"]   ' refetch these when next asked
-    invalidates: ["recommendations"]   ' never show these again
+    removes: ["recommendations"]       ' never show these again
 })
 ```
 
@@ -105,14 +105,14 @@ sghttp.define("profile.update", {
 | You want | Use |
 |---|---|
 | The next screen to get fresh data, but what's on screen now can stay | `expire`, or `expires: [...]` on the mutation |
-| The old data gone everywhere, including disk | `invalidate`, or `invalidates: [...]` |
+| The old data gone everywhere, including disk | `remove`, or `removes: [...]` |
 | Everything refreshed after a long time in the background, with cached data shown meanwhile | `expireAll()` then `refresh()` |
 | One screen to check for new data as it opens | `query(name, args, { revalidate: true })` |
 | The change shown everywhere now, confirmed by the server later | `optimistic` on `mutate`, or `set` |
 | The screens showing a query to get the server's latest now | `refresh(name)`, which a mutation's `expires` does for you |
 | A profile or account switch | `setScope`, which drops that scope's entries for you (see [Scopes](scopes-and-buckets.md#scopes)) |
 
-Neither expiry nor invalidation notifies watchers by itself. Watchers hear about a value when a later request replaces it with different content, or when `set` writes one (see [Keeping data fresh](keeping-data-fresh.md)). A mutation's `expires` and `refresh` both start that request for the entries being watched.
+Neither expiry nor removal notifies watchers by itself. Watchers hear about a value when a later request replaces it with different content, or when `set` writes one (see [Keeping data fresh](keeping-data-fresh.md)). A mutation's `expires` and `refresh` both start that request for the entries being watched.
 
 ## Next
 

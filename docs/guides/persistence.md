@@ -66,9 +66,9 @@ sghttp.initialize({ version: "2" })
 
 ## Deleting stored bodies
 
-- `invalidate(name, args)` deletes that key's file.
-- `invalidate(name)` deletes the folder of the query and of its dotted descendants, including files for entries no longer in memory.
-- `invalidate()` deletes everything in this app's folder. Other apps' folders are never touched.
+- `remove(name, args)` deletes that key's file.
+- `remove(name)` deletes the folder of the query and of its dotted descendants, including files for entries no longer in memory.
+- `remove()` deletes everything in this app's folder. Other apps' folders are never touched.
 - Changing a [scope](scopes-and-buckets.md#changing-a-scope) deletes the files of every query that lists it.
 
 ### The start-up sweep
@@ -79,7 +79,7 @@ The folders of queries not defined by then are left alone, so a query defined la
 
 ## Turning it off
 
-`initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`. The Persistence task starts, and creates the app's folder on `cachefs:/`, when the first such query is defined, or when `invalidate()` is called with no arguments, since a sign-out should clear copies stored by an earlier launch too. An app with no such query never starts it otherwise: `invalidate(name)` and `invalidateScope` touch memory only until it's running.
+`initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`. The Persistence task starts, and creates the app's folder on `cachefs:/`, when the first such query is defined, or when `remove()` is called with no arguments, since a sign-out should clear copies stored by an earlier launch too. An app with no such query never starts it otherwise: `remove(name)` and `removeScope` touch memory only until it's running.
 
 ## Things to know
 

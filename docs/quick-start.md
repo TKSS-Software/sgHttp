@@ -269,5 +269,5 @@ end function
 
 - [Requests](guides/requests.md): everything `fetch` can do
 - [Queries and keys](guides/queries.md): urls, query strings, headers and bodies filled from args
-- [Mutations, expiry and invalidation](guides/mutations.md): writing data
+- [Mutations, expiry and removal](guides/mutations.md): writing data
 - [Query definitions](reference/definition.md): every option `define` takes

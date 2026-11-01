@@ -18,7 +18,7 @@ sghttp.query("episodes", { showId: "abc", season: 2, page: 1 })
 
 ## Naming queries
 
-Query names are plain strings. A dot in a name makes the query a descendant of the name before the dot. Every function that matches by name (`invalidate`, `expire`, a mutation's `expires` and `invalidates`) covers the name **and its dotted descendants**. `"favorites"` also covers `"favorites.check"` and `"favorites.add"`.
+Query names are plain strings. A dot in a name makes the query a descendant of the name before the dot. Every function that matches by name (`remove`, `expire`, a mutation's `expires` and `removes`) covers the name **and its dotted descendants**. `"favorites"` also covers `"favorites.check"` and `"favorites.add"`.
 
 Use that to group related queries:
 

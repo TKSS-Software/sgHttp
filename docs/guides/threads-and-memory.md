@@ -35,7 +35,7 @@ Nodes are cached by reference. Every query of a key whose value is a ContentNode
 | Expiry records (to skip old disk copies) | About one per expired query, plus one per expired persisted key not yet fetched again |
 | Watchers | Until you call `unwatch` |
 | Observers from `observeEvents` / `observeChanges` | Until you call `unobserveEvents` / `unobserveChanges` |
-| Files on `cachefs:/` | Managed by the OS; removed by `invalidate`, scope changes, the next app version's start-up, and the start-up [sweep](persistence.md#the-start-up-sweep) of files the store can no longer read |
+| Files on `cachefs:/` | Managed by the OS; removed by `remove`, scope changes, the next app version's start-up, and the start-up [sweep](persistence.md#the-start-up-sweep) of files the store can no longer read |
 
 The `maxEntries` cap counts entries, not bytes. A hundred small objects and a hundred trees of a thousand nodes each are both at the cap. For queries with large results:
 
@@ -53,7 +53,7 @@ sub onClose()
 end sub
 ```
 
-`sghttp.destroy()` clears the cache, stops every task and removes the store from the scene. Use it, for example, when the user signs out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `invalidate()` first to clear that too.
+`sghttp.destroy()` clears the cache, stops every task and removes the store from the scene. Use it, for example, when the user signs out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `remove()` first to clear that too.
 
 ## Next
 

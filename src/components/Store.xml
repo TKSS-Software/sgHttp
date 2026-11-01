@@ -17,8 +17,8 @@
         <function name="_set" />
         <function name="_refresh" />
         <function name="_peek" />
-        <function name="_invalidate" />
-        <function name="_invalidateScope" />
+        <function name="_remove" />
+        <function name="_removeScope" />
         <function name="_expireAll" />
         <function name="_expire" />
         <function name="_watch" />

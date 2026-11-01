@@ -60,7 +60,7 @@ end sub
 
 - **With args**, a watcher hears only the entry those args key to at the moment of the change, using the current scopes and time bucket.
 - **Without args**, it hears every entry of the query.
-- A **first** value from a request or disk never notifies watchers; the query that asked for it receives it. Neither do expiries, invalidations or unchanged refreshes.
+- A **first** value from a request or disk never notifies watchers; the query that asked for it receives it. Neither do expiries, removals or unchanged refreshes.
 - The callback runs in the component that called `watch`. Call `unwatch` when that component goes away, because the store holds on to every watcher until you do.
 
 ### Every change, from one place

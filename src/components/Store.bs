@@ -190,6 +190,9 @@ sub _define(name as string, definition as object)
     if type(definition.request) = "roAssociativeArray" and definition.request.toFile <> invalid then
         print `[sghttp] "${name}": toFile is for fetch, ignoring it; a query's value is kept in the cache, not a file`
     end if
+    if definition.invalidates <> invalid then
+        print `[sghttp] "${name}": invalidates was renamed to removes, ignoring it`
+    end if
     clientName = normalized.client
     ' Names the persisted file: a body stored under another request (url, query, method),
     ' parser or server is never read again, since the key alone does not say where a value came
@@ -203,7 +206,7 @@ sub _define(name as string, definition as object)
     if client <> invalid and client.baseUrl <> "" and url.left(4) <> "http" then requestText = requestText + "|" + client.baseUrl
     normalized.requestHash = hashString(requestText)
     m.definitions[name] = normalized
-    ' A copy stored by an earlier launch may be deleted (set, invalidate) before it is ever read
+    ' A copy stored by an earlier launch may be deleted (set, remove) before it is ever read
     if normalized.persist then diskTask()
 end sub
 
@@ -230,7 +233,7 @@ function normalize(name as string, definition as object) as object
         cache: definition.cache <> false and not graphqlMutation
         graphql: graphql
         graphqlMutation: graphqlMutation
-        invalidates: type(definition.invalidates) = "roArray" ? definition.invalidates : []
+        removes: type(definition.removes) = "roArray" ? definition.removes : []
         expires: type(definition.expires) = "roArray" ? definition.expires : []
         auth: definition.auth <> false
         timeout: definition.timeout
@@ -243,7 +246,7 @@ function normalize(name as string, definition as object) as object
         ' Without a ttl of its own, a response's Cache-Control sets the freshness (see ttlFor)
         ttlGiven: definition.ttl <> invalid
     }
-    ' ttl: invalid -> store default; negative -> fresh until invalidated
+    ' ttl: invalid -> store default; negative -> fresh until removed
     if normalized.ttl = invalid then normalized.ttl = m.defaultTtl
     return normalized
 end function
@@ -323,7 +326,7 @@ sub _setScope(scopeName as string, value as dynamic, options = {} as object)
     previous = m.scopes[scopeName]
     m.scopes[scopeName] = value
     if options.keep <> true and previous <> invalid and previous <> value then
-        _invalidateScope(scopeName)
+        _removeScope(scopeName)
     end if
 end sub
 
@@ -661,7 +664,7 @@ function _set(name as string, args = {} as object, value = invalid as dynamic) a
     previous = invalid
     if entry <> invalid and entry.hasValue then previous = entry.value
     if value = invalid then
-        _invalidate(name, args)
+        _remove(name, args)
         return previous
     end if
 
@@ -1078,7 +1081,7 @@ sub startNetwork(context as object)
 end sub
 
 ' Executes a cache: false definition. Parses if a parser is set, applies the
-' definition's invalidations on success, and never touches the cache.
+' definition's removals on success, and never touches the cache.
 ' raw: resolve with the whole response (its body parsed) rather than the value alone
 function runUncached(definition as object, args as object, raw = false as boolean) as object
     pending = promises.create()
@@ -1119,7 +1122,7 @@ function runUncached(definition as object, args as object, raw = false as boolea
     end function).then(function(value as dynamic, context as object) as dynamic
         if context.cancelled then return promises.reject(cancelledError())
         m.calls.delete(context.pending.id)
-        applyInvalidations(context.definition)
+        applyRemovals(context.definition)
         emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), { client: context.definition.client })
         if context.raw then
             context.response.body = value
@@ -1231,9 +1234,9 @@ function releaseHeld(client as object, context as object) as boolean
     return false
 end function
 
-sub applyInvalidations(definition as object)
-    for each target in definition.invalidates
-        if isNonEmptyString(target) then _invalidate(target)
+sub applyRemovals(definition as object)
+    for each target in definition.removes
+        if isNonEmptyString(target) then _remove(target)
     end for
     for each target in definition.expires
         if isNonEmptyString(target) then
@@ -1552,7 +1555,7 @@ end function
 '#endregion
 
 '*************************************************************************
-'#region Invalidation and eviction
+'#region Removal and eviction
 '*************************************************************************
 
 ' GraphQL variables with values of exactly "{name}" taken from args, then scopes, as they are:
@@ -1663,7 +1666,7 @@ function graphqlData(definition as object, body as dynamic) as dynamic
     return body
 end function
 
-sub _invalidate(name = invalid as dynamic, args = invalid as dynamic)
+sub _remove(name = invalid as dynamic, args = invalid as dynamic)
     if name = invalid then
         for each key in m.cache.keys()
             removeEntry(key)
@@ -1710,7 +1713,7 @@ end sub
 ' The app knows this data changed (it just wrote it): every matching entry keeps its value
 ' (peek and revalidate fetches still get it) but a plain fetch waits for the server, and a
 ' disk copy stored before now is not served. Name only: the query and its dotted
-' descendants, like invalidate. A request already in flight may hold the old answer: it
+' descendants, like remove. A request already in flight may hold the old answer: it
 ' still answers its callers but is no longer shared or stored.
 sub _expire(name as string, args = invalid as dynamic)
     if not isNonEmptyString(name) then return
@@ -1890,7 +1893,7 @@ end function
 
 '#endregion
 
-sub _invalidateScope(scopeName as string)
+sub _removeScope(scopeName as string)
     ' Disk copies not in memory go too: every stored body of a query that lists the scope
     for each name in m.definitions
         for each definitionScope in m.definitions[name].scopes
@@ -1933,7 +1936,7 @@ sub insertEntry(key as string, entry as object)
     ' Evict the least recently used first, skipping in-flight entries. Scan at most one pass
     ' so a cache made entirely of in-flight entries can temporarily exceed the cap. Only the
     ' memory copy goes: a persisted body stays on cachefs for the next cold start (the OS
-    ' manages cachefs space; invalidation still deletes it).
+    ' manages cachefs space; remove still deletes it).
     scanned = 0
     limit = m.order.count()
     while m.order.count() > m.maxEntries and scanned < limit
@@ -1971,7 +1974,7 @@ end sub
 '#region Persistence (cachefs:/)
 '*************************************************************************
 
-' The file for a key: in its query's directory (so invalidate can find bodies that are not in
+' The file for a key: in its query's directory (so remove can find bodies that are not in
 ' memory), named <prefix>-<digest of the key>.json. The prefix stands for the cache version and
 ' the query's request digest, so a changed url or parser retires the old bodies on its own, and
 ' the sweep can tell them by name.

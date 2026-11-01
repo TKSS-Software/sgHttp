@@ -35,7 +35,7 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 | Key | Default | Meaning |
 |---|---|---|
 | `cache` | `true` | `false` for mutations and per-call resources: the request is sent and parsed, but its result is never stored or shared. A GraphQL `mutation` is never cached, without it. |
-| `ttl` | the response's `Cache-Control`, else `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, invalidated or marked stale by `expireAll`. See [Freshness from the server](../guides/caching.md#freshness-from-the-server). |
+| `ttl` | the response's `Cache-Control`, else `initialize`'s `defaultTtl` (300) | Seconds a value stays fresh. Negative: fresh until expired, removed or marked stale by `expireAll`. See [Freshness from the server](../guides/caching.md#freshness-from-the-server). |
 | `staleWhileRevalidate` | `true` | Return a stale value at once and refresh in the background. `false`: a query of a stale value waits for the server. |
 | `scopes` | `[]` | Scope names that join the cache key. See [Scopes](../guides/scopes-and-buckets.md#scopes). |
 | `pages` | none | `{ next, arg, request, hasNext, byPosition }`: makes this a query with pages. See [Pages](../guides/pagination.md#defining-the-pages). |
@@ -55,7 +55,7 @@ See [Filling the request](../guides/requests.md#filling-the-request) for the exa
 | Key | Default | Meaning |
 |---|---|---|
 | `expires` | `[]` | Query names [expired](../guides/mutations.md#expire) after a `cache: false` request succeeds, and [refreshed](../guides/keeping-data-fresh.md#refreshing-whats-on-screen) where watched. Each covers its dotted descendants. |
-| `invalidates` | `[]` | Query names [invalidated](../guides/mutations.md#invalidate) (memory and disk) after a `cache: false` request succeeds |
+| `removes` | `[]` | Query names [removed](../guides/mutations.md#remove) (memory and disk) after a `cache: false` request succeeds |
 
 ## Transport
 

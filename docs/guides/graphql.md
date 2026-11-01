@@ -79,7 +79,7 @@ sghttp.define("favorites.add", {
 sghttp.mutate("favorites.add", { id: "pilot" })
 ```
 
-- It's never cached, so `mutate` accepts it, with `expires`, `invalidates` and optimistic updates as in [Mutations](mutations.md).
+- It's never cached, so `mutate` accepts it, with `expires`, `removes` and optimistic updates as in [Mutations](mutations.md).
 - It's retried only when it can't have been applied (a `429`, or a connection that never opened), like any other write. See [the transport](transport.md#the-built-in-transport).
 - Once sent, it isn't aborted by [`cancel`](requests.md#cancelling-a-request).
 

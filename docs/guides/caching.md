@@ -11,7 +11,7 @@ Each cached value is either **fresh** or **stale**. A fresh value is returned fr
 | omitted | what the response's `Cache-Control` asks for (see below), else the store default, `initialize({ defaultTtl })`, which is 300 seconds |
 | `0` | no time at all: every query after the first sends a request to check the server |
 | positive | that many seconds |
-| negative | until it is expired, invalidated, or marked stale by `expireAll` |
+| negative | until it is expired, removed, or marked stale by `expireAll` |
 
 A value loaded from disk counts as fetched when it was first saved, not when it was loaded. So a body saved an hour ago is already stale with a `ttl` of 300.
 
@@ -133,4 +133,4 @@ The memory cache holds a limited number of entries, set with `initialize({ maxEn
 
 ## Next
 
-[Mutations, expiry and invalidation](mutations.md)
+[Mutations, expiry and removal](mutations.md)

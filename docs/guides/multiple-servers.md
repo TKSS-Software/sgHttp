@@ -34,7 +34,7 @@ sghttp.define("homePage", { request: { url: "/home/{slug}" } })                 
 sghttp.define("partner.homePage", { client: "partner", request: { url: "/home/{slug}" } })
 ```
 
-All clients share one set of query names, so prefix another server's queries with its name. Each call then shows which server it reaches, and `invalidate("partner")` or `expire("partner")` covers that whole server.
+All clients share one set of query names, so prefix another server's queries with its name. Each call then shows which server it reaches, and `remove("partner")` or `expire("partner")` covers that whole server.
 
 If a definition names a client that `initialize` didn't set up, sgHttp prints a warning, and queries of it reject without sending anything: `sghttp: query "..." names client "...", which initialize did not set up`.
 
@@ -49,7 +49,7 @@ Shared headers, `auth: false` and `baseHeaders` work per client as described in 
 
 ## What stays shared
 
-The cache, scopes, watchers, `expireAll` and `invalidate()` cover every client. Two clients can't hold separate copies of the same query name.
+The cache, scopes, watchers, `expireAll` and `remove()` cover every client. Two clients can't hold separate copies of the same query name.
 
 ## Telling clients apart
 

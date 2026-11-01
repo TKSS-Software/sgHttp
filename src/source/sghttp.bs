@@ -96,7 +96,7 @@ interface Definition
     optional bucket as integer
     optional successCodes as object
     optional cache as boolean
-    optional invalidates as object
+    optional removes as object
     optional expires as object
     optional client as string
     optional auth as boolean
@@ -269,14 +269,14 @@ end function
 '              or { url, graphql: { query, variables, operationName } } for a GraphQL operation (see GraphQL)
 '   parser   - parser name resolved by the parser task's getParser(name); runs off the render thread. Optional.
 '   ttl      - seconds a resolved value is fresh. Omitted: initialize's defaultTtl (300).
-'              Negative: fresh until expired or invalidated.
+'              Negative: fresh until expired or removed.
 '   staleWhileRevalidate - when true, a stale value is returned immediately and refetched in the background. Default true.
 '   persist  - write the raw response to cachefs:/ and serve it on cold start. Default false.
 '   scopes   - array of scope names (see setScope) that become part of the key, e.g. ["profile"].
 '   bucket   - seconds; floor(now / bucket) joins the key so time-sensitive data rolls over. Optional.
 '   successCodes - array of HTTP codes treated as success. Default 200-299.
 '   cache    - false for mutations and per-call resources (stream urls): runs the request, never stores. Default true.
-'   invalidates - array of query names (prefix match) dropped after a cache: false request succeeds.
+'   removes  - array of query names (prefix match) removed after a cache: false request succeeds.
 '   expires  - array of query names (prefix match) expired (see expire) after a cache: false request
 '              succeeds, and refreshed where watched (see refresh): the usual choice for a mutation,
 '              since the old value stays available and the screens showing it get the server's word.
@@ -367,7 +367,7 @@ function cancel(promise as object) as boolean
 end function
 
 ' Runs a cache: false definition (a write, or a per-call resource such as a stream url) and
-' applies its invalidates and expires. Same as query, but rejects for a cached one, so a
+' applies its removes and expires. Same as query, but rejects for a cached one, so a
 ' call site reads as a write and cannot quietly cache one.
 ' @param {Object} options
 '   optimistic - [{ name, args, value }]: values set (see set) before the request goes out, so
@@ -394,17 +394,17 @@ function peek(name as string, args = {} as object) as dynamic
     return getStore().callFunc("_peek", name, args)
 end function
 
-' Drops cached entries. No arguments: everything. Name only: every entry for that
-' query. Name and args: that one entry.
-sub invalidate(name = invalid as dynamic, args = invalid as dynamic)
-    getStore().callFunc("_invalidate", name, args)
+' Removes cached entries from memory and disk. No arguments: everything. Name only: every
+' entry for that query. Name and args: that one entry. Compare expire, which keeps the value.
+sub remove(name = invalid as dynamic, args = invalid as dynamic)
+    getStore().callFunc("_remove", name, args)
 end sub
 
 ' Marks data the app knows has changed (it just wrote it) as out of date without dropping it.
 ' peek and revalidate queries still get the kept value; a plain query waits for the server and
 ' falls back to the kept value if the request fails; a disk copy stored before now is not
 ' served. Name only: every entry of the query and its dotted descendants. Name and args: that
-' one entry. Compare invalidate, which drops the value and its disk copy.
+' one entry. Compare remove, which drops the value and its disk copy.
 sub expire(name as string, args = invalid as dynamic)
     getStore().callFunc("_expire", name, args)
 end sub
@@ -416,9 +416,9 @@ sub setScope(scopeName as string, value as dynamic, options = {} as ScopeOptions
     getStore().callFunc("_setScope", scopeName, value, options)
 end sub
 
-' Drops every entry whose definition lists this scope.
-sub invalidateScope(scopeName as string)
-    getStore().callFunc("_invalidateScope", scopeName)
+' Removes every entry whose definition lists this scope, from memory and disk.
+sub removeScope(scopeName as string)
+    getStore().callFunc("_removeScope", scopeName)
 end sub
 
 ' Asks the server again, now, for every entry of the query (and its dotted descendants) that

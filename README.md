@@ -115,7 +115,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 - Persistence to `cachefs:/`, so the last response is returned on a cold start before the network responds
 - Background refreshes that skip parsing and redraws when the server's data hasn't changed
 - Paged listings: load the next page by name and get every page back, cached, expired and watched as one
-- Mutations that expire or invalidate the queries they affect and refresh the screens showing them, with optimistic updates that show at once and roll back on failure
+- Mutations that expire or remove the queries they affect and refresh the screens showing them, with optimistic updates that show at once and roll back on failure
 - Scopes for per-profile data, time buckets for schedules
 - Change watchers and stats
 

@@ -5,6 +5,7 @@
 - [Overview](overview.md): the HTTP client, and what the query cache adds
 - [Installation](installation.md): requirements, installing with ropm, and calling `initialize`
 - [Quick start](quick-start.md): the HTTP client in five minutes, then a cached, parsed and persisted home page
+- [Coming from web, tvOS or Fire TV](coming-from.md): sgHttp's names for what TanStack Query, SWR, Apollo, URLSession and OkHttp do
 
 ## The HTTP client
 
@@ -22,7 +23,7 @@ A **query** is a request defined with `define` and called with `query`, so that 
 
 - [Queries and keys](guides/queries.md): defining a request and querying it by name, filling urls from args, and how cache keys are made
 - [Caching and freshness](guides/caching.md): what happens on each query, `ttl`, stale-while-revalidate, precaching and eviction
-- [Mutations, expiry and invalidation](guides/mutations.md): writing data, showing the change at once, and telling the cache what it changed
+- [Mutations, expiry and removal](guides/mutations.md): writing data, showing the change at once, and telling the cache what it changed
 - [Keeping data fresh](guides/keeping-data-fresh.md): background refreshes, unchanged-payload detection and watchers
 - [Pages](guides/pagination.md): loading a listing a page at a time, and keeping, expiring and watching it as one
 - [Scopes and time buckets](guides/scopes-and-buckets.md): per-profile data and data that rolls over with the clock
@@ -37,7 +38,7 @@ A **query** is a request defined with `define` and called with `query`, so that 
 
 ## API reference
 
-- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `cancel`, `nextPage`, `mutate`, `peek`, `expire`, `invalidate`, and the rest
+- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `cancel`, `nextPage`, `mutate`, `peek`, `expire`, `remove`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
 - [Events, stats and errors](reference/events-and-stats.md): the shapes sgHttp reports
 

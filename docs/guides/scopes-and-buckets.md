@@ -28,7 +28,7 @@ end sub
 - Setting it to the value it already has drops nothing.
 - `setScope(name, value, { keep: true })` changes the value without dropping anything. Entries for the old value stay cached and are used again if you switch back.
 - Setting a scope to `invalid` clears it, and drops its entries like any other change of value. A query parameter filled only by that scope is then left out of the url, which suits values that only some users send.
-- `sghttp.invalidateScope(name)` drops a scope's entries without changing its value.
+- `sghttp.removeScope(name)` drops a scope's entries without changing its value.
 
 Use strings for scope values. sgHttp compares the old value with the new one, and the comparison expects both to be the same type.
 

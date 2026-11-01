@@ -11,7 +11,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize)
 - Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
-- Cache control: [`expire`](#expire), [`invalidate`](#invalidate), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`invalidateScope`](#invalidatescope), [`setHeaders`](#setheaders)
+- Cache control: [`expire`](#expire), [`remove`](#remove), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`removeScope`](#removescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
 
@@ -134,7 +134,7 @@ Returns the value cached in memory for those args (fresh, stale or expired), or 
 sghttp.mutate(name as string, args = {} as object, options = {} as object) as object
 ```
 
-Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `invalidates`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
+Runs a `cache: false` query and returns a promise for its parsed response. On success, applies the definition's `expires` and `removes`. Rejects without sending anything if the query is a cached one. See [Mutations](../guides/mutations.md).
 
 | Option | Meaning |
 |---|---|
@@ -161,10 +161,10 @@ Marks values out of date without dropping them. `peek` and `revalidate` queries 
 
 Doesn't notify watchers.
 
-## invalidate
+## remove
 
 ```brightscript
-sghttp.invalidate(name = invalid as dynamic, args = invalid as dynamic)
+sghttp.remove(name = invalid as dynamic, args = invalid as dynamic)
 ```
 
 Drops values from memory and disk.
@@ -174,6 +174,8 @@ Drops values from memory and disk.
 - Name and args: the one entry those args key to now, and the pages loaded after it, with their files.
 
 A request in flight for a dropped entry still resolves for its callers, but its result isn't stored. Doesn't notify watchers.
+
+To mark data out of date and keep showing it, use [`expire`](#expire) instead. TanStack Query's `invalidateQueries` is `expire`; `remove` is its `removeQueries`.
 
 ## expireAll
 
@@ -205,10 +207,10 @@ sghttp.setScope(scopeName as string, value as dynamic, options = {} as object)
 
 Sets a scope value. When it changes from one value to another, sgHttp drops every entry of every query that lists the scope, in memory and on disk, unless `options.keep` is `true`. `invalid` clears the scope. See [Scopes](../guides/scopes-and-buckets.md#scopes).
 
-## invalidateScope
+## removeScope
 
 ```brightscript
-sghttp.invalidateScope(scopeName as string)
+sghttp.removeScope(scopeName as string)
 ```
 
 Drops every entry, and every stored body, of every query that lists the scope. The scope's value is unchanged.
@@ -253,7 +255,7 @@ Calls `functionName(event)` in the calling component when a value of the query i
 - With `args`: only the entry those args key to at the time of the change.
 - Without: every entry of the query.
 
-Not called for a first value from a request or disk, an unchanged refresh, an expiry or an invalidation. A `set` always notifies, even with the same value. Returns a watcher node; keep it for `unwatch`. See [Watching a query](../guides/keeping-data-fresh.md#watching-a-query).
+Not called for a first value from a request or disk, an unchanged refresh, an expiry or a removal. A `set` always notifies, even with the same value. Returns a watcher node; keep it for `unwatch`. See [Watching a query](../guides/keeping-data-fresh.md#watching-a-query).
 
 ## unwatch
 
@@ -325,4 +327,4 @@ Returns the store node, or `invalid` before `initialize`.
 sghttp.destroy()
 ```
 
-Clears the in-memory cache, watchers and expiry records, stops the parser and persistence tasks and every transport (a replacement transport only if it has a `shutdown` field), and removes the store from the scene. Files on `cachefs:/` stay; call `invalidate()` first to remove them. A later `initialize` creates a fresh store.
+Clears the in-memory cache, watchers and expiry records, stops the parser and persistence tasks and every transport (a replacement transport only if it has a `shutdown` field), and removes the store from the scene. Files on `cachefs:/` stay; call `remove()` first to remove them. A later `initialize` creates a fresh store.

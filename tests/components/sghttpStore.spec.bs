@@ -212,7 +212,7 @@ namespace tests
         function _()
             m.makeStore()
             waiting = m.query("1")
-            m.store.callFunc("_invalidate", "items", invalid)
+            m.store.callFunc("_remove", "items", invalid)
             m.fake.callFunc("answer", 0, "a")
             promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "a")
@@ -250,14 +250,36 @@ namespace tests
             end function)
         end function
 
-        @describe("invalidate")
+        @describe("remove")
+
+        @async
+        @it("is what a mutation's removes does: the entry is gone and peek finds nothing")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "items.drop", { request: { url: "/items/{id}/drop", method: "POST" }, cache: false, removes: ["items"] })
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                dropped = suite.store.callFunc("_query", "items.drop", { id: "1" }, { mutation: true })
+                suite.fake.callFunc("answer", 1, "ok")
+                return dropped
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
 
         ' A store that persists to cachefs, holding one entry in memory, so a second key evicts
-        ' the first to disk only. Starts with an empty disk cache: invalidate() clears only this
+        ' the first to disk only. Starts with an empty disk cache: remove() clears only this
         ' app's folder, never another sideloaded app's.
         function makePersistingStore()
             m.makeAppStore("spec app", "1.0.0")
-            m.store.callFunc("_invalidate", invalid, invalid)
+            m.store.callFunc("_remove", invalid, invalid)
         end function
 
         ' A persisting store as the app with this title and version would make it (its disk folder
@@ -288,7 +310,7 @@ namespace tests
         function _()
             m.makePersistingStore()
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
-                suite.store.callFunc("_invalidate", "items", { id: "1" })
+                suite.store.callFunc("_remove", "items", { id: "1" })
                 suite.fake.callFunc("answerNext", "fresh")
                 return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -308,7 +330,7 @@ namespace tests
         function _()
             m.makePersistingStore()
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
-                suite.store.callFunc("_invalidate", "items", invalid)
+                suite.store.callFunc("_remove", "items", invalid)
                 suite.fake.callFunc("answerNext", "fresh")
                 return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -359,7 +381,7 @@ namespace tests
                 ' Another sideloaded app with the same query clears its cache and fetches. Its
                 ' title differs only in punctuation, which folder names cannot carry.
                 suite.makeAppStore("spec-app", "1.0.0")
-                suite.store.callFunc("_invalidate", invalid, invalid)
+                suite.store.callFunc("_remove", invalid, invalid)
                 suite.fake.callFunc("answerNext", "other")
                 return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -417,7 +439,7 @@ namespace tests
         @it("does not read bodies from another server (QA and production), and sweeps them out")
         function _()
             m.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
-            m.store.callFunc("_invalidate", invalid, invalid)
+            m.store.callFunc("_remove", invalid, invalid)
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 ' The same build pointed at production does not read QA's copy
                 suite.makeAppStore("spec app", "1.0.0", "https://api.example.com")
@@ -503,6 +525,7 @@ namespace tests
             ' A file where the old layout put a query's bodies, written through the shared
             ' persistence task; a read after it tells when it is on disk
             m.legacyPath = "cachefs:/sgquery/items/legacy.json"
+            m.disk().callFunc("execute", { type: "ensureDir", dir: "cachefs:/sgquery" })
             m.disk().callFunc("execute", { type: "write", path: m.legacyPath, text: "{}" })
             promises.chain(m.disk().callFunc("execute", { type: "read", path: m.legacyPath }), m).then(function(text as dynamic, suite as object) as dynamic
                 suite.assertEqual(text, "{}")
@@ -1168,7 +1191,7 @@ namespace tests
         @it("keeps a parsed body on disk as its text and parses it again after a restart")
         function _()
             m.makeParsingStore(true)
-            m.store.callFunc("_invalidate", invalid, invalid)
+            m.store.callFunc("_remove", invalid, invalid)
             m.fake.callFunc("answerNext", `{"word":"abc"}`)
             promises.chain(m.store.callFunc("_query", "words", { id: "1" }, {}), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "abc")
@@ -1345,7 +1368,7 @@ namespace tests
             end function).then(function(result as object, suite as object) as dynamic
                 ' Unchanged first page: the pages after it are kept
                 suite.assertEqual(result.pages.count(), 2)
-                suite.store.callFunc("_invalidate", "list", {})
+                suite.store.callFunc("_remove", "list", {})
                 suite.assertEqual(suite.store.callFunc("_getStats").entries, 0)
                 suite.assertInvalid(suite.store.callFunc("_peek", "list", {}))
                 suite.done()
@@ -1801,7 +1824,7 @@ namespace tests
             m.slow = m.store.callFunc("_fetch", "/me", {})
             m.store.callFunc("_define", "items", { request: { url: "/items/{id}" } })
             ' Dropping a query's entries has nothing to delete on disk either
-            m.store.callFunc("_invalidate", "items", invalid)
+            m.store.callFunc("_remove", "items", invalid)
             m.fake.callFunc("answer", 0, "me")
             promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
                 suite.assertEqual(suite.spy.operations, 0)
