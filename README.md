@@ -131,6 +131,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 - [Overview](docs/overview.md): the HTTP client, and what the query cache adds
 - [Installation](docs/installation.md): add it to your channel with ropm
 - [Quick start](docs/quick-start.md): the HTTP client in five minutes, then a cached, parsed and persisted home page
+- [Coming from web, tvOS or Fire TV](docs/coming-from.md): sgHttp's names for what TanStack Query, SWR, Apollo, URLSession and OkHttp do
 - [API reference](docs/reference/api.md): every function, its parameters and what it returns
 
 sgHttp is a namespace of stateless functions plus one node, attached to the scene, that owns all state. If you know sgRouter, the shape will be familiar, but sgHttp doesn't need it.
