@@ -286,7 +286,10 @@ function startJob(transfer as object, job as object) as boolean
     if type(spec.timeoutSeconds) = "roInt" or type(spec.timeoutSeconds) = "roInteger" or type(spec.timeoutSeconds) = "Integer" then
         if spec.timeoutSeconds > 0 then timeout = spec.timeoutSeconds
     end if
-    transfer.setMinimumTransferRate(2147483647, timeout)
+    ' A rate no connection can sustain makes the timeout a hard limit for a request; a download
+    ' instead fails only when it stalls (under a byte a second for that long), whatever its size
+    minimumRate = isNonEmptyString(spec.toFile) ? 1 : 2147483647
+    transfer.setMinimumTransferRate(minimumRate, timeout)
 
     method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
     body = spec.body

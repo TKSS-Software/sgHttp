@@ -66,6 +66,8 @@ sub init()
     m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
     m.parsers = []
     m.initialized = false
+    ' Set by _destroy: an optimistic write failing after it puts nothing back
+    m.destroyed = false
 end sub
 
 function _initialize(params = {} as object) as object
@@ -159,7 +161,7 @@ sub addClient(name as string, settings as object)
     ' Started only now that its settings are in (it reads some of them as it starts)
     if ownTransport then transport.control = "RUN"
     ' authWatcher, held, renewing, renewedAt and deniedAt: see holdUnauthorized
-    m.clients[name] = { name: name, transport: transport, headers: headers, baseUrl: asString(settings.baseUrl), requests: 0, errors: 0, authWatcher: invalid, held: [], renewing: false, renewedAt: 0, deniedAt: 0 }
+    m.clients[name] = { name: name, transport: transport, ownsTransport: ownTransport, headers: headers, baseUrl: asString(settings.baseUrl), requests: 0, errors: 0, authWatcher: invalid, held: [], renewing: false, renewedAt: 0, deniedAt: 0 }
 end sub
 
 ' A replacement transport (tests, an app's own) need not have every field
@@ -712,7 +714,7 @@ function runOptimistic(definition as object, args as object, writes as object) a
     for each write in writes
         if type(write) = "roAssociativeArray" and isNonEmptyString(write.name) then
             previous = _set(write.name, write.args, write.value)
-            undo.push({ name: write.name, args: write.args, previous: previous, setId: m.lastSetId })
+            undo.push({ name: write.name, args: write.args, previous: previous, setId: m.lastSetId, removed: write.value = invalid })
         end if
     end for
     pending = promises.create()
@@ -737,11 +739,17 @@ end function
 
 ' Puts the value from before an optimistic write back, if the write's value is still there
 sub rollback(write as object)
+    if m.destroyed then return
     definition = m.definitions[write.name]
     if definition = invalid then return
     args = type(write.args) = "roAssociativeArray" ? write.args : {}
     entry = m.cache[buildKey(write.name, definition, args, m.scopes, nowSeconds())]
-    if entry = invalid or entry.setId <> write.setId then return
+    ' A removal leaves no entry; one that is there now came from a later query or set
+    if entry = invalid then
+        if write.removed = true and write.previous <> invalid then _set(write.name, args, write.previous)
+        return
+    end if
+    if entry.setId <> write.setId then return
     _set(write.name, args, write.previous)
 end sub
 
@@ -2227,6 +2235,16 @@ function errorDetails(definition as object, error as dynamic) as object
 end function
 
 sub _destroy()
+    m.destroyed = true
+    ' Nothing answers after this: callers waiting on a request hear it was cancelled
+    for each id in m.calls
+        promises.reject(cancelledError(), m.calls[id].pending)
+    end for
+    for each key in m.cache
+        entry = m.cache[key]
+        if isNode(entry.promise) then promises.reject(cancelledError(), entry.promise)
+        if isNode(entry.nextPending) then promises.reject(cancelledError(), entry.nextPending)
+    end for
     for each key in m.cache.keys()
         m.cache.delete(key)
     end for
@@ -2236,8 +2254,10 @@ sub _destroy()
     m.buckets = {}
     m.calls = {}
     for each clientName in m.clients
-        transport = m.clients[clientName].transport
-        if transport.hasField("shutdown") then transport.shutdown = true
+        client = m.clients[clientName]
+        transport = client.transport
+        ' A transport the app passed in is the app's to stop
+        if client.ownsTransport and transport.hasField("shutdown") then transport.shutdown = true
     end for
     m.clients = {}
     for each worker in m.parsers

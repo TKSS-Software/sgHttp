@@ -64,7 +64,13 @@ sub runJob(job as object)
     ' to back, so the last id is all that needs remembering.
     if job.promise.id = m.lastJobId then print `[sghttp] parser: job ${job.promise.id} delivered twice (field events coalesced)`
     m.lastJobId = job.promise.id
-    parser = getParser(job.parser)
+    parser = invalid
+    try
+        parser = getParser(job.parser)
+    catch e
+        promises.reject({ message: `sghttp parser: getParser("${job.parser}") threw: ${e.message}`, error: e }, job.promise)
+        return
+    end try
     if parser = invalid then
         promises.reject({ message: `sghttp parser: unknown parser "${job.parser}"` }, job.promise)
         return

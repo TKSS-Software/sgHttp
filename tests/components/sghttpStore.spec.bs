@@ -804,6 +804,31 @@ namespace tests
         end function
 
         @async
+        @it("puts back a value an optimistic write removed when the request fails")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                saving = suite.store.callFunc("_query", "items.save", { id: "1" }, { mutation: true, optimistic: [{ name: "items", args: { id: "1" }, value: invalid }] })
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.fake.callFunc("fail", 1, 500)
+                return promises.chain(saving).catch(function(error as dynamic) as dynamic
+                    return "failed"
+                end function).toPromise()
+            end function).then(function(outcome as dynamic, suite as object) as dynamic
+                suite.assertEqual(outcome, "failed")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
         @it("keeps a newer write when the request fails, and the write itself when it succeeds")
         function _()
             m.makeStore()
@@ -2281,6 +2306,27 @@ namespace tests
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("destroy")
+
+        @async
+        @it("cancels a query still waiting, and leaves a transport the app passed in running")
+        function _()
+            m.makeStore()
+            waiting = m.query("1")
+            m.store.callFunc("_destroy")
+            m.assertFalse(m.fake.shutdown)
+            promises.chain(waiting, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fail("resolved after destroy")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.assertTrue(error.cancelled = true)
+                suite.store = invalid
                 suite.done()
                 return invalid
             end function)

@@ -12,6 +12,8 @@
         <!-- The store's cancels, { id, queuedOnly }: a request not yet answered (and, with
              queuedOnly, not marked sent) rejects as cancelled -->
         <field id="cancel" type="assocarray" alwaysNotify="true" />
+        <!-- Set by a store's destroy when it owns the transport; a passed-in one stays false -->
+        <field id="shutdown" type="boolean" value="false" />
         <function name="makeRequest" />
         <function name="answer" />
         <function name="answerBody" />
