@@ -105,6 +105,43 @@ function isWholeNumber(value as dynamic) as boolean
     return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
 end function
 
+' key=value pairs joined with &, for a query string or a form body: an array value repeats its
+' key (key=a&key=b), and invalid values are left out. escaper.escape encodes each part: a
+' roUrlTransfer on a task, which exists only there.
+function encodeParams(params as object, escaper as object) as string
+    parts = []
+    for each key in params
+        value = params[key]
+        if type(value) = "roArray" then
+            for each item in value
+                if item <> invalid then parts.push(escaper.escape(key) + "=" + escaper.escape(item.toStr()))
+            end for
+        else if value <> invalid then
+            parts.push(escaper.escape(key) + "=" + escaper.escape(value.toStr()))
+        end if
+    end for
+    return parts.join("&")
+end function
+
+' Whether a Content-Type asks for a form body: application/x-www-form-urlencoded, in any case,
+' with or without parameters such as charset
+function isFormType(contentType as dynamic) as boolean
+    if not isNonEmptyString(contentType) then return false
+    return lcase(contentType.trim()).left(33) = "application/x-www-form-urlencoded"
+end function
+
+' What went wrong with a request that got no HTTP answer, from roUrlTransfer's code (curl's,
+' negated) and whether the device has a network connection, so an app can pick a message
+' without a table of curl codes: "offline", "timeout", "dns", "tls", "connection" or "network"
+function failureKind(code as integer, linkUp as boolean) as string
+    if not linkUp then return "offline"
+    if code = -28 then return "timeout"
+    if code = -5 or code = -6 then return "dns"
+    if code = -35 or code = -51 or code = -53 or code = -54 or code = -58 or code = -59 or code = -60 or code = -77 or code = -80 or code = -83 then return "tls"
+    if code = -7 or code = -18 or code = -52 or code = -55 or code = -56 then return "connection"
+    return "network"
+end function
+
 ' The wait a Retry-After header asks for, in seconds: delta-seconds ("120") or an HTTP date
 ' ("Wed, 21 Oct 2015 07:28:00 GMT"), counted from now. A date already past is 0. -1 when
 ' the header is missing or neither form.

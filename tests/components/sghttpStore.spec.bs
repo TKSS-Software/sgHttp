@@ -1971,6 +1971,103 @@ namespace tests
             end function)
         end function
 
+        @describe("downloads")
+
+        @async
+        @it("sends a fetch with toFile as a GET with its path filled and nothing to decode")
+        function _()
+            m.makeStore()
+            m.slow = m.store.callFunc("_fetch", { url: "/fonts/{brand}.ttf", toFile: "cachefs:/{brand}.ttf" }, { brand: "acme" })
+            spec = m.fake.callFunc("requestAt", 0)
+            m.assertEqual(spec.method, "GET")
+            m.assertEqual(spec.toFile, "cachefs:/acme.ttf")
+            m.assertFalse(spec.parseJson)
+            m.fake.callFunc("answer", 0, "")
+            promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("refuses toFile with another method, a parser or GraphQL, and in a definition")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "font", { request: { url: "/font.ttf", toFile: "tmp:/font.ttf" } })
+            m.store.callFunc("_query", "font", {}, {})
+            m.assertInvalid(m.fake.callFunc("requestAt", 0).toFile)
+            refusals = [
+                m.store.callFunc("_fetch", { url: "/upload", method: "POST", toFile: "tmp:/x" }, {})
+                m.store.callFunc("_fetch", { url: "/x", parser: "Field", toFile: "tmp:/x" }, {})
+                m.store.callFunc("_fetch", { url: "/graphql", graphql: { query: "{ x }" }, toFile: "tmp:/x" }, {})
+                m.store.callFunc("_fetch", { url: "/x", toFile: "" }, {})
+            ]
+            caught = []
+            for each refusal in refusals
+                caught.push(promises.chain(refusal).catch(function(error as dynamic) as dynamic
+                    return error
+                end function).toPromise())
+            end for
+            promises.chain(promises.all(caught), m).then(function(errors as object, suite as object) as dynamic
+                for each error in errors
+                    suite.assertEqual(error.code, 0)
+                    suite.assertTrue(error.message.instr("toFile") >= 0)
+                end for
+                ' Only the definition's query was sent
+                suite.assertEqual(suite.fake.requestCount, 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("request helpers")
+
+        ' Stands in for a roUrlTransfer, which exists only on a task: escapes as its escape does
+        ' for the characters these specs use
+        function escaper() as object
+            return {
+                escape: function(text as string) as string
+                    return text.encodeUriComponent()
+                end function
+            }
+        end function
+
+        @it("encodes params for a query string or a form body")
+        function _()
+            encoded = encodeParams({ code: "a b&c", genre: ["drama", "crime"], skipped: invalid, count: 2 }, m.escaper())
+            parts = encoded.split("&")
+            parts.sort()
+            m.assertEqual(parts.join("&"), "code=a%20b%26c&count=2&genre=crime&genre=drama")
+            m.assertEqual(encodeParams({}, m.escaper()), "")
+        end function
+
+        @it("reads a form Content-Type with parameters and in any case")
+        function _()
+            m.assertTrue(isFormType("application/x-www-form-urlencoded"))
+            m.assertTrue(isFormType("Application/X-WWW-Form-Urlencoded; charset=UTF-8"))
+            m.assertFalse(isFormType("application/json"))
+            m.assertFalse(isFormType(invalid))
+        end function
+
+        @it("names what went wrong with a request that got no answer")
+        function _()
+            m.assertEqual(failureKind(-28, false), "offline")
+            m.assertEqual(failureKind(-28, true), "timeout")
+            m.assertEqual(failureKind(-6, true), "dns")
+            m.assertEqual(failureKind(-60, true), "tls")
+            m.assertEqual(failureKind(-7, true), "connection")
+            m.assertEqual(failureKind(-1, true), "network")
+        end function
+
         @describe("Cache-Control")
 
         @async

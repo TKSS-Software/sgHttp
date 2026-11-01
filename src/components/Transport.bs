@@ -11,7 +11,9 @@ import "pkg:/source/keys.bs"
 ' and base headers when it starts.
 '
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
-'         allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat, graphql }
+'         allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat, graphql, toFile }
+'   toFile      - a path (tmp:/, cachefs:/) a GET's body is written to instead of returned: the
+'                 response has path and no body (see finishDownload)
 '   graphql     - true for a GraphQL request: a response with errors and no data fails, and a
 '                 failure carries the errors (see graphqlFailure)
 '   safeToRepeat - true when the request only reads, whatever its method (a cached query sent
@@ -21,7 +23,9 @@ import "pkg:/source/keys.bs"
 '                 up when a caller that waits on it joins it, down when its callers give up.
 ' cancel: { id, queuedOnly } drops the request whose promise has that id if it is still waiting,
 '   or aborts it in flight unless queuedOnly; its promise rejects with { cancelled: true }.
-' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody }
+' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody, kind, path }
+'   kind        - for a request with no HTTP answer (a negative code, or cancelled): see
+'                 failureKind, or "cancelled"
 '   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
 '   bodyHash    - MD5 of the raw body when spec.hashBody is true (computed here, off the
 '                 render thread), so the store can tell an unchanged payload without parsing
@@ -64,6 +68,10 @@ sub runTransport()
     m.pool = []
     m.retryQueue = []
     m.lastRequestId = ""
+    ' Encodes query strings and form bodies (see encodeParams); never sends anything itself
+    m.escaper = createObject("roUrlTransfer")
+    m.deviceInfo = createObject("roDeviceInfo")
+    m.files = createObject("roFileSystem")
     m.sharedHeaders = m.top.headers
     if m.sharedHeaders = invalid then m.sharedHeaders = {}
     m.baseHeaders = m.top.baseHeaders
@@ -175,6 +183,7 @@ sub cancelJob(data as object)
         if slot.job.promise.id = data.id then
             slot.transfer.asyncCancel()
             m.jobs.delete(identity)
+            if isNonEmptyString(slot.job.spec.toFile) then m.files.delete(partPath(slot.job.spec.toFile))
             ' The aborted transfer may still post an event: a new one can't be mistaken for it
             m.pool.push(createTransfer())
             finish(slot.job, cancelledResponse(slot.job), false)
@@ -198,7 +207,7 @@ end function
 function cancelledResponse(job as object) as object
     url = ""
     if isNonEmptyString(job.url) then url = job.url
-    return { code: 0, cancelled: true, message: "sghttp: cancelled", body: invalid, headers: {}, url: url, ms: 0 }
+    return { code: 0, kind: "cancelled", cancelled: true, message: "sghttp: cancelled", body: invalid, headers: {}, url: url, ms: 0 }
 end function
 
 ' The next request to send: the first in the highest queue that has one, or invalid
@@ -281,7 +290,9 @@ function startJob(transfer as object, job as object) as boolean
 
     method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
     body = spec.body
-    if type(body) = "roAssociativeArray" or type(body) = "roArray" then
+    if type(body) = "roAssociativeArray" and isFormType(headers["Content-Type"]) then
+        body = encodeParams(body, m.escaper)
+    else if type(body) = "roAssociativeArray" or type(body) = "roArray" then
         body = formatJson(body)
         if headers["Content-Type"] = invalid then headers["Content-Type"] = "application/json"
     end if
@@ -296,7 +307,12 @@ function startJob(transfer as object, job as object) as boolean
     m.jobs[transfer.getIdentity().toStr()] = { job: job, transfer: transfer }
 
     started = false
-    if method = "GET" then
+    if isNonEmptyString(spec.toFile) then
+        ' Written beside the file and moved over it once complete (see finishDownload), so a
+        ' failed or cancelled download never replaces a good copy
+        m.files.delete(partPath(spec.toFile))
+        started = method = "GET" and transfer.asyncGetToFile(partPath(spec.toFile))
+    else if method = "GET" then
         started = transfer.asyncGetToString()
     else if method = "HEAD" then
         started = transfer.asyncHead()
@@ -307,7 +323,7 @@ function startJob(transfer as object, job as object) as boolean
 
     if not started then
         m.jobs.delete(transfer.getIdentity().toStr())
-        finish(job, { code: -1, body: invalid, headers: {}, url: url, ms: 0, message: "could not start request" }, false)
+        finish(job, { code: -1, kind: "network", body: invalid, headers: {}, url: url, ms: 0, message: "could not start request" }, false)
     end if
     return started
 end function
@@ -331,6 +347,12 @@ sub onUrlEvent(event as object)
         ms: job.timespan.totalMilliseconds()
         message: event.getFailureReason()
     }
+    if code < 0 then response.kind = failureKind(code, m.deviceInfo.getLinkStatus())
+
+    if isNonEmptyString(job.spec.toFile) then
+        finishDownload(job, response)
+        return
+    end if
 
     ' A 304 answers a conditional request: no body, the cached value still holds
     if code = 304 and job.spec.allowNotModified = true then
@@ -364,25 +386,63 @@ sub onUrlEvent(event as object)
 
     retryable = isRetryable(job.spec, code) and job.attempts < job.maxAttempts
     if not success and retryable then
-        ' The wait the server asks for (429, 503), else exponential backoff: 1s, 2s, 4s...
-        retryAfter = -1
-        if type(response.headers) = "roAssociativeArray" then retryAfter = retryAfterSeconds(response.headers["retry-after"], nowSeconds())
-        if retryAfter > MAX_RETRY_AFTER_SECONDS then
-            finish(job, response, false)
-            return
-        end if
-        if retryAfter >= 0 then
-            job.retryAfterMs = 1000 * retryAfter
-        else
-            job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
-        end if
-        job.retryTimer.mark()
-        m.retryQueue.push(job)
+        scheduleRetry(job, response)
         return
     end if
 
     finish(job, response, success)
 end sub
+
+' Sends a failed request again after the wait the server asks for (429, 503), else exponential
+' backoff: 1s, 2s, 4s... A wait longer than MAX_RETRY_AFTER_SECONDS fails it now instead.
+sub scheduleRetry(job as object, response as object)
+    retryAfter = -1
+    if type(response.headers) = "roAssociativeArray" then retryAfter = retryAfterSeconds(response.headers["retry-after"], nowSeconds())
+    if retryAfter > MAX_RETRY_AFTER_SECONDS then
+        finish(job, response, false)
+        return
+    end if
+    if retryAfter >= 0 then
+        job.retryAfterMs = 1000 * retryAfter
+    else
+        job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
+    end if
+    job.retryTimer.mark()
+    m.retryQueue.push(job)
+end sub
+
+' A request with toFile: its body was written to the file's .part. A success moves it over the
+' file and resolves with path; a failure reads the (small) error body into body, as for any
+' failure, and deletes the .part, leaving any earlier copy of the file as it was. Retried as any
+' GET.
+sub finishDownload(job as object, response as object)
+    part = partPath(job.spec.toFile)
+    response.body = invalid
+    if isSuccess(response.code, job.spec) then
+        m.files.delete(job.spec.toFile)
+        if m.files.rename(part, job.spec.toFile) then
+            response.path = job.spec.toFile
+            finish(job, response, true)
+            return
+        end if
+        m.files.delete(part)
+        response.message = "could not move the download to " + job.spec.toFile
+        response.kind = "network"
+        finish(job, response, false)
+        return
+    end if
+    if response.code > 0 and m.files.exists(part) then response.body = readAsciiFile(part)
+    m.files.delete(part)
+    if isRetryable(job.spec, response.code) and job.attempts < job.maxAttempts then
+        scheduleRetry(job, response)
+        return
+    end if
+    finish(job, response, false)
+end sub
+
+function partPath(path as string) as string
+    return path + ".part"
+end function
 
 sub finish(job as object, response as object, success as boolean)
     m.top.activeRequests = m.top.activeRequests - 1
@@ -475,21 +535,10 @@ end function
 ' became sghttp_query (the function) there and every query string was dropped
 function appendQuery(url as string, params as dynamic) as string
     if type(params) <> "roAssociativeArray" or params.count() = 0 then return url
-    transfer = createObject("roUrlTransfer")
-    parts = []
-    for each key in params
-        value = params[key]
-        if type(value) = "roArray" then
-            for each item in value
-                if item <> invalid then parts.push(transfer.escape(key) + "=" + transfer.escape(item.toStr()))
-            end for
-        else if value <> invalid then
-            parts.push(transfer.escape(key) + "=" + transfer.escape(value.toStr()))
-        end if
-    end for
-    if parts.count() = 0 then return url
+    encoded = encodeParams(params, m.escaper)
+    if encoded = "" then return url
     separator = url.instr("?") >= 0 ? "&" : "?"
-    return url + separator + parts.join("&")
+    return url + separator + encoded
 end function
 
 '#endregion

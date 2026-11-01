@@ -187,6 +187,9 @@ sub _define(name as string, definition as object)
         print `[sghttp] "${name}" is defined again: the new definition replaces the first`
     end if
     normalized = normalize(name, definition)
+    if type(definition.request) = "roAssociativeArray" and definition.request.toFile <> invalid then
+        print `[sghttp] "${name}": toFile is for fetch, ignoring it; a query's value is kept in the cache, not a file`
+    end if
     clientName = normalized.client
     ' Names the persisted file: a body stored under another request (url, query, method),
     ' parser or server is never read again, since the key alone does not say where a value came
@@ -285,6 +288,10 @@ function _fetch(spec as dynamic, args = {} as object) as object
         return promises.reject({ message: "sghttp: fetch needs a url", code: 0 })
     end if
     if type(args) <> "roAssociativeArray" then args = {}
+    if spec.toFile <> invalid then
+        problem = downloadProblem(spec)
+        if problem <> "" then return promises.reject({ message: `sghttp: fetch with toFile ${problem}`, code: 0 })
+    end if
     name = isNonEmptyString(spec.name) ? spec.name : "fetch"
     definition = normalize(name, {
         request: spec
@@ -297,7 +304,19 @@ function _fetch(spec as dynamic, args = {} as object) as object
         priority: spec.priority
         cache: false
     })
+    ' Set here, not by normalize: only a fetch downloads to a file (see _define)
+    if spec.toFile <> invalid then definition.toFile = spec.toFile
     return runUncached(definition, args, true)
+end function
+
+' Why a fetch can't download to a file as asked, or "": the body goes to the file, so there is
+' nothing to decode or parse, and only a GET is sent that way
+function downloadProblem(spec as object) as string
+    if not isNonEmptyString(spec.toFile) then return "needs a path"
+    if isNonEmptyString(spec.method) and ucase(spec.method) <> "GET" then return "is a GET; it can't be sent as " + ucase(spec.method)
+    if isNonEmptyString(spec.parser) then return "has no body to parse; it can't name a parser"
+    if type(spec.graphql) = "roAssociativeArray" then return "can't be a GraphQL request"
+    return ""
 end function
 
 sub _setScope(scopeName as string, value as dynamic, options = {} as object)
@@ -507,7 +526,7 @@ function releaseWaiter(context as dynamic) as boolean
 end function
 
 function cancelledError() as object
-    return { code: 0, cancelled: true, message: "sghttp: cancelled" }
+    return { code: 0, kind: "cancelled", cancelled: true, message: "sghttp: cancelled" }
 end function
 
 ' The cached path of _query: { key, promise }, where promise is the request that will answer
@@ -1452,6 +1471,11 @@ function buildRequestSpec(definition as object, args as object) as object
         safeToRepeat: definition.cache or (definition.graphql = true and not definition.graphqlMutation)
     }
     if type(spec.headers) <> "roAssociativeArray" then spec.headers = {}
+    ' A fetch that downloads: the body goes to the file, not to the caller
+    if isNonEmptyString(definition.toFile) then
+        spec.toFile = fillTemplate(definition.toFile, args, m.scopes)
+        spec.parseJson = false
+    end if
     ' An unfilled path placeholder still reaches some other route on the server, with a
     ' body that parses as nothing; say so instead of failing quietly.
     if createObject("roRegex", "\{[A-Za-z0-9_]+\}", "").isMatch(spec.url) then

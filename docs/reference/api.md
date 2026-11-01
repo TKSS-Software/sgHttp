@@ -59,9 +59,11 @@ sghttp.fetch(spec as dynamic, args = {} as object) as object
 
 Sends one request and returns a promise for the whole response, `{ code, headers, body, url, ms }`. Nothing is cached, de-duplicated or persisted.
 
-`spec` is a url; the name of a defined query, whose request, client, parser and settings are used with `{name}` placeholders filled from `args` and the current scopes, and whose cache is neither read nor written; or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), which also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser`, `priority` and a `name` for events.
+`spec` is a url; the name of a defined query, whose request, client, parser and settings are used with `{name}` placeholders filled from `args` and the current scopes, and whose cache is neither read nor written; or a definition's `request` (`url`, `method`, `headers`, `body`, `query`, `parseJson`, `retries`), which also takes `client`, `auth`, `proxy`, `timeout`, `successCodes`, `parser`, `priority`, `toFile` and a `name` for events.
 
-Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, or the string is neither a url (starting with `/` or `http`) nor a defined query. See [Requests](../guides/requests.md).
+`toFile` is a path the body is written to instead of returned, filled from `args` like the url: the response has `path` and no `body`. See [Downloading to a file](../guides/requests.md#downloading-to-a-file).
+
+Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, the string is neither a url (starting with `/` or `http`) nor a defined query, or `toFile` comes with a method other than `GET`, a `parser` or `graphql`. See [Requests](../guides/requests.md).
 
 ## define
 

@@ -64,7 +64,18 @@ A rejected `fetch`, `query` or `mutate` promise carries one of these:
 
 **A GraphQL failure**: a [GraphQL](../guides/graphql.md#errors) response with `errors` and no `data`, with any status. It's an HTTP failure as above, with the server's `errors` added and the first error's message as `message`.
 
-**A network failure**, also from the transport. `code` is negative. It's the error `roUrlTransfer` reports, such as `-28` for a timeout, or `-1` when the request couldn't be started.
+**A network failure**, also from the transport. `code` is negative. It's the error `roUrlTransfer` reports, such as `-28` for a timeout, or `-1` when the request couldn't be started. `kind` says what went wrong, so an app can pick a message without knowing the codes:
+
+| `kind` | Meaning |
+|---|---|
+| `offline` | The device has no network connection |
+| `timeout` | The server didn't answer within the timeout (`-28`) |
+| `dns` | The host name, or the proxy's, didn't resolve (`-5`, `-6`) |
+| `tls` | The secure connection failed: a handshake or certificate problem |
+| `connection` | The connection was refused, dropped, or answered with nothing |
+| `network` | Anything else, including a request that couldn't be started |
+
+A cancelled request's error has `kind: "cancelled"` too. An HTTP failure has no `kind`: its `code` is the status.
 
 **A parse failure:**
 

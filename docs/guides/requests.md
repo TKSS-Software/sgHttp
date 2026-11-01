@@ -97,6 +97,12 @@ request: { url: "/search", method: "POST", body: "q={term}" }
 
 An associative array or array body is sent as JSON, with `Content-Type: application/json` unless the request sets its own. Only the top-level string values of an associative array body are filled; nested objects are sent as they are.
 
+An associative array body is form-encoded instead (`grant_type=device_code&code=...`) when the request's `Content-Type` is `application/x-www-form-urlencoded`, as many OAuth servers require. An array value repeats its key, and an invalid value is left out, as in a [query string](#query-string):
+
+```brightscript
+request: { url: "/oauth/token", method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: { grant_type: "device_code", code: "{code}" } }
+```
+
 ### Method and decoding
 
 `method` defaults to `GET` (`POST` for a [GraphQL](graphql.md) request). `GET` and `HEAD` are sent without a body. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or with an empty body if there is none.
@@ -231,6 +237,32 @@ end sub
 - `cancel` returns whether the promise was still pending.
 
 Cancelling a [query](caching.md#giving-up-a-query) works differently, because its request can be shared.
+
+## Downloading to a file
+
+`toFile` writes the body to a file instead of returning it. The response has `path` and no `body`. A brand's font, for example, downloaded once and kept for later launches:
+
+```brightscript
+fontPath = "cachefs:/brand-font.ttf"
+promises.chain(sghttp.fetch({ url: "{fontUrl}", toFile: fontPath, auth: false }, { fontUrl: branding.fontUrl }), m).then(function(response as object, m as object) as dynamic
+    font = createObject("roSGNode", "Font")
+    font.uri = response.path
+    font.size = 48
+    m.title.font = font
+    return invalid
+end function).catch(function(error as object, m as object) as dynamic
+    return invalid   ' keep the system font
+end function)
+```
+
+- Only a `GET` is downloaded this way, and a download has no `parser` and no `graphql`. `fetch` rejects those without sending anything.
+- The body is written beside the file, as `<path>.part`, and moved over the file only when the whole body has arrived with a successful status. A failed or cancelled download leaves an earlier copy of the file as it was, and deletes the `.part`.
+- A failed download rejects as any request does, with the server's error body in `body`.
+- Retries, timeouts, priorities, the proxy and [cancelling](#cancelling-a-request) work as for any `GET`.
+- The folder must exist. The roots of `tmp:/`, which is cleared when the app exits, and `cachefs:/`, which the system may evict, always do.
+- `toFile` is for `fetch` only. A defined query's value is kept in the cache, so `define` ignores it, with a console warning.
+
+> **Fonts:** Roku's [Font node docs](https://developer.roku.com/docs/references/scenegraph/typographic-nodes/font.md) say only fonts included in the app can be used. A TrueType font downloaded to `tmp:/` or `cachefs:/` did render on a Roku Express 4K running OS 16.0.4, but that's undocumented and could change. Fall back to a system font if it fails, and download the `.ttf` itself: Google Fonts' stylesheet links serve WOFF2, which Roku doesn't list.
 
 ## More than one server
 
