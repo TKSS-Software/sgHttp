@@ -105,6 +105,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 - Three request priorities, with background refreshes and precaches queued behind the requests a screen is waiting on
 - Cancellation: `cancel(promise)` drops a queued request or aborts one in flight
 - **GraphQL support:** queries and mutations with variables filled from args, resolving with `data`, and `errors` treated as failures. Queries are cached like any other ([GraphQL](docs/guides/graphql.md))
+- Already have a Task of your own? `createHttpClient` runs the same engine inside it, so that task can send requests without crossing to the render thread ([Requests from a task](docs/guides/tasks.md))
 
 **The query cache**
 
