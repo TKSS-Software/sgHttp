@@ -84,10 +84,8 @@ The folders of queries not defined by then are left alone, so a query defined la
 ## Things to know
 
 - `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
-- Bodies stored while sgHttp was called sgQuery, under `cachefs:/sgquery/`, are never read again. Once the first disk read has completed at start-up, the store deletes this app's folders there, along with any files left from the layout before per-app folders (`cachefs:/sgquery/<query name>/`). It also deletes the same app's folders for other versions. All of this happens before the [sweep](#the-start-up-sweep). None of it delays the first disk read, but later reads on the same launch queue behind it on the persistence task.
 - `persist` has no effect on `cache: false` queries.
-- Files named before the prefix was added are swept like any other file the store can't read, so the first start with this version of sgHttp downloads everything once.
 
 ## Next
 
-[Parsers](parsers.md)
+[From an OpenAPI spec](openapi.md)

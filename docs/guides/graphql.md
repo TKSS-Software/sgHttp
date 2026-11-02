@@ -1,19 +1,15 @@
 # GraphQL
 
-sgHttp supports GraphQL. Put the operation in a request's `graphql` key, and sgHttp sends it as JSON in a `POST`, fills its variables from args, resolves with the response's `data`, and treats a response with `errors` and no `data` as a failure. Everything else works as it does for any request: `fetch` sends one, and `define` and `query` cache it, with persistence, parsers, scopes, watchers and the rest.
+sgHttp supports GraphQL. Put the operation in a request's `graphql` key, and sgHttp sends it as JSON in a `POST`, fills its variables from args, resolves with the response's `data`, and treats a response with `errors` and no `data` as a failure. Everything else works as it does for any request. `fetch` sends one, and once you use the [query cache](queries.md), `define` and `query` cache it like any other query.
 
-## A query
+## A request
 
 ```brightscript
 const SHOW_QUERY = "query Show($id: ID!) { show(id: $id) { title description } }"
 
-sghttp.define("show", {
-    request: { url: "/graphql", graphql: { query: SHOW_QUERY, variables: { id: "{id}" } } }
-    ttl: 300
-})
-
-promises.chain(sghttp.query("show", { id: "pilot" }), m).then(function(data as object, m as object) as dynamic
-    m.titleLabel.text = data.show.title
+request = { url: "/graphql", graphql: { query: SHOW_QUERY, variables: { id: "{id}" } } }
+promises.chain(sghttp.fetch(request, { id: "pilot" }), m).then(function(response as object, m as object) as dynamic
+    m.titleLabel.text = response.body.show.title   ' body is the data
     return invalid
 end function)
 ```
@@ -44,11 +40,9 @@ variables: {
 
 A `"{name}"` with no arg or scope is left out, so the server sees the variable as null. The operation's text is never filled: `{ show { slug } }` contains `{slug}`, but it's part of the query, not a placeholder.
 
-Args are part of the cache key as usual, so `query("show", { id: "pilot" })` and `query("show", { id: "finale" })` are cached separately.
-
 ## The value
 
-A query resolves with the response's `data`, not the whole `{ data, errors }` response. A [parser](parsers.md) receives `data` too, and so does `fetch`'s `response.body`.
+`response.body` is the response's `data`, not the whole `{ data, errors }` response. A [parser](parsers.md) receives `data` too, and so does a cached query.
 
 ## Errors
 
@@ -60,11 +54,31 @@ A GraphQL server reports a failed operation in the body as `{ errors: [...] }` w
 
 `message` is the first error's message. A `4xx` or `5xx` whose body has GraphQL errors carries them the same way.
 
-A response with `data` and `errors` succeeds: some fields failed, and the rest of the data is usable. A query resolves with the `data`. A `fetch` also has the errors, in `response.errors`.
+A response with `data` and `errors` succeeds: some fields failed, and the rest of the data is usable. `response.body` is the `data`, and `response.errors` has the errors. A cached query resolves with the `data`.
 
 This check is done by the built-in transport. A [replacement transport](transport.md#replacing-the-transport) would have to do it itself.
 
-## Mutations
+## With the query cache
+
+The rest of this page uses the [query cache](queries.md): read it after [Queries and keys](queries.md) if you haven't defined a query yet.
+
+### A cached query
+
+```brightscript
+sghttp.define("show", {
+    request: { url: "/graphql", graphql: { query: SHOW_QUERY, variables: { id: "{id}" } } }
+    ttl: 300
+})
+
+promises.chain(sghttp.query("show", { id: "pilot" }), m).then(function(data as object, m as object) as dynamic
+    m.titleLabel.text = data.show.title
+    return invalid
+end function)
+```
+
+A query resolves with the `data`. Args are part of the cache key as usual, so `query("show", { id: "pilot" })` and `query("show", { id: "finale" })` are cached separately.
+
+### Mutations
 
 sgHttp reads the operation's type from its text. When the document has more than one operation, `operationName` decides which is read; without it, a document with any `mutation` counts as one. A `mutation` is a write, without `cache: false`:
 
@@ -80,24 +94,12 @@ sghttp.mutate("favorites.add", { id: "pilot" })
 ```
 
 - It's never cached, so `mutate` accepts it, with `expires`, `removes` and optimistic updates as in [Mutations](mutations.md).
-- It's retried only when it can't have been applied (a `429`, or a connection that never opened), like any other write. See [the transport](transport.md#the-built-in-transport).
+- It's retried only when it can't have been applied, like any `POST`. See [the transport](transport.md#the-built-in-transport).
 - Once sent, it isn't aborted by [`cancel`](requests.md#cancelling-a-request).
 
 A GraphQL query, by contrast, is a read even though it's sent as a `POST`. It's retried like a `GET`, and a cancelled `fetch` of one is aborted in flight.
 
-## Sending one without defining it
-
-`fetch` takes the same `graphql` key:
-
-```brightscript
-request = { url: "/graphql", graphql: { query: SHOW_QUERY, variables: { id: "{id}" } } }
-promises.chain(sghttp.fetch(request, { id: "pilot" }), m).then(function(response as object, m as object) as dynamic
-    m.titleLabel.text = response.body.show.title   ' body is the data
-    return invalid
-end function)
-```
-
-## Pages
+### Pages
 
 A query with [pages](pagination.md) passes the cursor as a variable. For a Relay connection:
 
@@ -114,3 +116,7 @@ sghttp.nextPage("shows")   ' the next page, with after set to the last page's en
 ```
 
 The paths are into the `data`. Relay's `endCursor` is usually still set on the last page, so `hasNext` points at `hasNextPage`, and a page whose `hasNextPage` is `false` is the last. Each page in `pages` is that page's `data`.
+
+## Next
+
+[More than one server](multiple-servers.md)

@@ -126,9 +126,24 @@ sghttp.fetch({ url: "/auth/refresh", method: "POST", body: { refreshToken: "{tok
 
 Headers in `initialize({ baseHeaders })`, such as device ids and platform tags, are sent with every request, even one with `auth: false`.
 
+### Signing out on a 401
+
+Every request emits an event, so one observer in the main scene can send the app to sign-in when a token expires, whichever screen made the request:
+
+```brightscript
+sghttp.observeEvents("onRequestEvent")
+
+sub onRequestEvent(event as object)
+    e = event.getData()
+    if e.type = "error" and e.code = 401 and e.auth then showSignIn()
+end sub
+```
+
+`e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. With [more than one server](multiple-servers.md), `e.client` says which one answered. Every event field is in [Events](../reference/events-and-stats.md#events).
+
 ### When the token expires
 
-An app with short-lived access tokens can renew them in one place. `onUnauthorized` names a function in the calling component that's called when a request that sent the shared headers is answered `401`. The request doesn't fail. It's held, along with any other request of the client answered `401` meanwhile, until the app calls `reauthorize`:
+If your API issues refresh tokens, renew the token instead of signing the user out. An app with short-lived access tokens can do that in one place. `onUnauthorized` names a function in the calling component that's called when a request that sent the shared headers is answered `401`. The request doesn't fail. It's held, along with any other request of the client answered `401` meanwhile, until the app calls `reauthorize`:
 
 ```brightscript
 ' in the main scene
@@ -153,6 +168,7 @@ end sub
 - A request sent while the token is being renewed, say by a screen that opens meanwhile, is held too. A request with `auth: false` is never held, so the renewal request itself must set it, as above; otherwise its `401` would wait on its own answer.
 - A request that went out before `setHeaders` changed the shared headers, and is then answered `401`, is sent again with the new headers without calling the function.
 - A held request can be [cancelled](#cancelling-a-request) whatever its method, since the server didn't act on it.
+- A held request emits its `error` event only if it finally fails, so the observer above still signs the user out when the renewal fails.
 - `event.getData()` is `{ client, url }`. Each client is renewed separately: `onUnauthorized` and `reauthorize` take the client's name as a second argument, and use the default client without one.
 
 ## The response
@@ -182,24 +198,11 @@ Writing the parser and the task it runs on is covered in [Parsers](parsers.md).
 
 The promise rejects when the status is outside `successCodes` (200–299 by default) or the request couldn't complete. It rejects with the same shape as a response, plus a `message`. `code` is the HTTP status or, for a network failure, the negative error `roUrlTransfer` reports, such as `-28` for a timeout. The body of a failed request is left as raw text. See [Errors](../reference/events-and-stats.md#errors).
 
-Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers (for a `POST` or `PATCH`, only those it can't have applied, unless it's a defined query sent with `fetch(name)`). [The transport](transport.md) covers when it retries and how to change that.
+Before a promise rejects, the transport has already retried network failures and `429` and `5xx` answers, a `POST` or `PATCH` only when it can't have been applied. [The transport](transport.md#the-built-in-transport) covers when it retries and how to change that.
 
-### Reacting to a 401 everywhere
+### Naming a request's events
 
-Every request emits an event, so one observer in the main scene can send the app to sign-in when a token expires, whichever screen made the request:
-
-```brightscript
-sghttp.observeEvents("onRequestEvent")
-
-sub onRequestEvent(event as object)
-    e = event.getData()
-    if e.type = "error" and e.code = 401 and e.auth then showSignIn()
-end sub
-```
-
-`e.auth` tells you whether the request carried the shared headers, so a 401 from a public endpoint isn't mistaken for an expired token. A request held by [`onUnauthorized`](#when-the-token-expires) emits its error event only if it finally fails. Every event field is in [Events](../reference/events-and-stats.md#events).
-
-A `fetch` can give its events a `name`, so one observer can tell calls apart. Without one, the events say `"fetch"`:
+Every request emits [events](../reference/events-and-stats.md#events), the same ones an app [observes for a 401](#signing-out-on-a-401). A `fetch` can give its events a `name`, so one observer can tell calls apart. Without one, the events say `"fetch"`:
 
 ```brightscript
 sghttp.fetch({ url: "/streams/{id}/start", method: "POST", name: "stream.start" }, { id: streamId })
@@ -282,7 +285,7 @@ See [More than one server](multiple-servers.md).
 | `auth: false` | Leave out the client's shared headers. |
 | `proxy: false` | Send directly, even when a debugging proxy is set (see [Debugging](debugging.md#routing-traffic-through-a-proxy)). |
 | `timeout` | Seconds before the request is given up and retried. Default: the transport's (30). |
-| `retries` | Attempts after the first. Default: the transport's. Set on a `POST` or `PATCH`, it also retries timeouts and 5xx, which by default it doesn't. |
+| `retries` | Attempts after the first. Default: the transport's. Set on a `POST` or `PATCH`, it also retries what one isn't by default (see [Retries](transport.md#the-built-in-transport)). |
 | `successCodes` | Statuses treated as success. Default: 200–299. |
 | `parser` | A parser name to run the body through on the parser task. |
 | `priority` | `"high"`, `"normal"` or `"low"`: where the request waits when the pool is busy. Default `"normal"`. See [Priorities](transport.md#priorities). |
@@ -294,4 +297,4 @@ sgHttp never caches, de-duplicates or persists a `fetch`. Two identical calls se
 
 ## Next
 
-[More than one server](multiple-servers.md)
+[GraphQL](graphql.md)

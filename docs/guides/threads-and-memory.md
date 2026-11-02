@@ -53,7 +53,7 @@ sub onClose()
 end sub
 ```
 
-`sghttp.destroy()` clears the cache, stops every task and removes the store from the scene. Use it, for example, when the user signs out of an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `removeAll()` first to clear that too.
+[`sghttp.destroy()`](../reference/api.md#destroy) takes the store down, for an app that rebuilds everything on sign-in. It doesn't touch `cachefs:/`; call `removeAll()` first to clear that too.
 
 ## Next
 

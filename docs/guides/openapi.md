@@ -76,3 +76,7 @@ Some APIs search or filter with a `post`. If the operation only reads, define it
 - **Response schemas** aren't used: a query resolves with the decoded JSON, or a [parser](parsers.md)'s result.
 - **Cookie parameters** have no equivalent. Send the cookie in `request.headers`.
 - **Security schemes** beyond on and off: the token itself goes in the shared headers with [`setHeaders`](requests.md#auth-headers-on-every-request).
+
+## Next
+
+[Parsers](parsers.md)

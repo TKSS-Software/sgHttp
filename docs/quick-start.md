@@ -29,11 +29,13 @@ sub init()
 end sub
 ```
 
-This starts the transport, the Task that sends every request, and nothing else: no disk or parser task runs until a query or setting asks for one. It keeps a pool of `roUrlTransfer` objects and a queue, retries network failures and server errors, applies a timeout, and adds the headers every request shares. To begin with, `baseUrl` is the only setting you need; see [`initialize`](reference/api.md#initialize) for the rest.
+This creates one node on the scene that owns the transport, the shared headers and the cache, and starts the transport, the Task that sends every request. Nothing else starts: no disk or parser task runs until a query or setting asks for one. The transport keeps a pool of `roUrlTransfer` objects and a queue, retries network failures and server errors, applies a timeout, and adds the headers every request shares.
+
+To begin with, `baseUrl` is the only setting you need, and every setting is optional, `baseUrl` included. The ones you're most likely to add later are `headers` (sent with every request), `timeout`, `retries` and `maxConcurrent` (for the transport), `clients` (for more servers) and `parserTask` (for parsers); see [`initialize`](reference/api.md#initialize) for the full list. Calling `initialize` again does nothing: it returns the existing store and ignores the new settings.
 
 ### 2. Send a request
 
-From any component that imports `sghttp.brs`:
+Import the same file into any component that sends requests. Every component that imports it talks to the same store: one transport pool, one set of shared headers, one cache.
 
 ```brightscript
 ' components/HomeScreen.bs

@@ -110,19 +110,6 @@ cached = sghttp.peek("homePage", { slug: "main" })
 if cached <> invalid then m.rowList.content = cached
 ```
 
-## Marking everything stale
-
-`sghttp.expireAll()` marks every cached value stale without dropping any. The next query of each one is returned from the cache and, with `staleWhileRevalidate`, a background refresh is started. Call it when the app comes back after a long time in the background, and follow it with `refresh()` so the screens already open update too (see [Refreshing what's on screen](keeping-data-fresh.md#refreshing-whats-on-screen)):
-
-```brightscript
-sub onResume()
-    sghttp.expireAll()
-    sghttp.refresh()
-end sub
-```
-
-`expireAll` doesn't affect disk copies. Each disk copy records its own save time, and that decides whether it is fresh.
-
 ## Eviction
 
 The memory cache holds a limited number of entries, set with `initialize({ maxEntries })` (100 by default). When a new entry takes the cache over that number, the **least recently used** entries are dropped first. A value returned from memory counts as a use; a `peek` does not.

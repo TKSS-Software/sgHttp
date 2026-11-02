@@ -82,12 +82,7 @@ sghttp.removeAll()                                ' everything, memory and disk
 
 ### Matching
 
-Both match by name the same way:
-
-| Call | Covers |
-|---|---|
-| `expire("favorites")` | every entry of `favorites`, `favorites.check`, `favorites.anything` |
-| `expire("favorites", { slug: "abc" })` | the one `favorites` entry those args key to now (current scopes and time bucket) |
+Both match a name as described in [Naming queries](queries.md#naming-queries): `expire("favorites")` covers `favorites`, `favorites.check` and every other `favorites.*` query. With args, they cover the one entry those args key to now (current scopes and time bucket).
 
 A mutation's lists take names only, so they cover whole queries and their descendants:
 

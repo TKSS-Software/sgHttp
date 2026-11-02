@@ -304,7 +304,7 @@ Returns whether a change event's data is for this query, and for these args when
 sghttp.observeEvents(functionName as string)
 ```
 
-Calls `functionName(event)` in the calling component for every event; the types are listed under [Cache events](events-and-stats.md#events). `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. See [Cache events](events-and-stats.md#events).
+Calls `functionName(event)` in the calling component for every event. `event.getData()` is `{ type, name, key, source, ms, client }`, plus `code` and `auth` on errors. The types are listed under [Events](events-and-stats.md#events).
 
 ## unobserveEvents
 

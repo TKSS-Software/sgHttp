@@ -53,15 +53,8 @@ The cache, scopes, watchers, `expireAll` and `removeAll` cover every client. Two
 
 ## Telling clients apart
 
-- Every [event](../reference/events-and-stats.md#events) carries `client`, so an app can react to one server's `401` without guessing from query names.
+- Every [event](../reference/events-and-stats.md#events) carries `client`, so the [401 observer](requests.md#signing-out-on-a-401) can check `e.client = "default"` and react to one server's `401` without guessing from query names.
 - `getStats().clients.<name>` counts each client's `requests`, `errors` and `active` (requests in flight).
-
-```brightscript
-sub onCacheEvent(event as object)
-    e = event.getData()
-    if e.type = "error" and e.code = 401 and e.auth and e.client = "default" then signOut()
-end sub
-```
 
 ## Next
 

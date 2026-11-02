@@ -38,7 +38,7 @@ Set these at the top level of `initialize` for the default client, or per client
 | `baseHeaders` | `{}` | Headers sent with every request, even one with `auth: false`. Read when the transport starts. |
 | `maxConcurrent` | 4 | How many requests can be in flight at once |
 | `timeout` | 30 | Seconds before a request is given up |
-| `retries` | 1 | Retries for network failures, 429 and 5xx responses (a `POST` or `PATCH` that isn't a cached query, only on a 429 or a connection that never opened) |
+| `retries` | 1 | Retries for network failures, 429 and 5xx responses; a `POST` or `PATCH` as described under Retries above |
 | `httpVersion` | `""` | `"http2"` to request HTTP/2 |
 | `proxy` | `""` | A debugging proxy as `host:port`; see [Debugging](debugging.md#routing-traffic-through-a-proxy) |
 

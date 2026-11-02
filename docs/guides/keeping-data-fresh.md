@@ -106,6 +106,19 @@ It sends a new request right away for every matching entry that has a watcher. E
 
 A mutation's `expires` list calls `refresh` for the queries it expires, so the screens watching them receive the new data without querying again.
 
+## Coming back from the background
+
+After a long time in the background, anything may have changed. `sghttp.expireAll()` marks every cached value stale without dropping any: the next query of each one is returned from the cache and, with `staleWhileRevalidate`, a background refresh is started. Follow it with `refresh()` so the screens already open update too:
+
+```brightscript
+sub onResume()
+    sghttp.expireAll()
+    sghttp.refresh()
+end sub
+```
+
+`expireAll` doesn't affect disk copies. Each disk copy records its own save time, and that decides whether it is fresh.
+
 ## Next
 
 [Pages](pagination.md)

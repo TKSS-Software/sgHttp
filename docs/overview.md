@@ -28,35 +28,6 @@ Much of an app's data is requested by more than one screen, and more than once. 
 
 Each query's definition says which of these it uses. A request you never define is never cached, and `fetch` behaves the same whether or not the app uses queries anywhere else.
 
-## Name a request
+## Next
 
-With `sghttp.initialize({ baseUrl })` in the main scene, `fetch` works from any component (the [quick start](quick-start.md) walks through it). If several screens need the home page, define it:
-
-```brightscript
-sghttp.define("homePage", { request: { url: "/home/{slug}" }, ttl: 300 })
-```
-
-and query it instead of fetching it:
-
-```brightscript
-promises.chain(sghttp.query("homePage", { slug: "main" }), m).then(function(page as object, m as object) as dynamic
-    m.titleLabel.text = page.rows[0].title
-    return invalid
-end function)
-```
-
-The first call sends the request, exactly as `fetch` would, and keeps the body in memory under the query's name and args. From then on:
-
-- **For the next five minutes** (the `ttl`), a query with the same args, from any component, is returned from memory. No request is sent.
-- **After that**, the value is stale. A query is still returned from memory at once, and sgHttp sends a request in the background to check. If the server's answer is different, the cache is updated and any watcher of the query hears about it. If it's byte-for-byte the same, the value is kept, its `ttl` restarts, and nothing is parsed or redrawn.
-- **At any moment**, if a request for this query is already in flight, a second query joins it instead of sending another.
-
-From here, each feature is one more key on the definition. `parser: "HomePageParser"` builds a ContentNode tree on a task thread, and the cache stores the tree. `persist: true` keeps the body on `cachefs:/`, so on the next launch the query is returned from disk and the screen can draw before the network answers. `scopes: ["profile"]` keeps one profile's data from reaching another. A mutation lists the queries it `expires`. The [quick start](quick-start.md) adds `parser` and `persist` this way, after the HTTP client.
-
-## What next
-
-- Install it: [Installation](installation.md)
-- Use it: [Quick start](quick-start.md)
-- Everything `fetch` can do: [Requests](guides/requests.md)
-- Use the cache: [Queries and keys](guides/queries.md)
-- Look something up: [API reference](reference/api.md)
+[Installation](installation.md)
