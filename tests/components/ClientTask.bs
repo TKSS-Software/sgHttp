@@ -1,0 +1,38 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/client.bs"
+
+sub init()
+    m.top.functionName = "runTask"
+end sub
+
+' The loop the guide shows: the client on the task's port, promises routed to it, every message
+' handed to the client until the scenario settles
+sub runTask()
+    port = createObject("roMessagePort")
+    promises.setMessagePort(port)
+    m.client = createHttpClient({ baseUrl: m.top.baseUrl, headers: { "X-Shared": "s" }, retries: 1 }, port)
+    m.done = false
+    scenario = m.top.scenario
+    work = promises.reject({ message: "ClientTask: unknown scenario " + scenario })
+    if scenario = "fill" then
+        work = m.client.fetch({ url: "/echo", method: "POST", query: { q: "{term}", empty: "{missing}" }, headers: { "X-Id": "{id}" }, body: { slug: "{slug}" }, auth: false }, { term: "drama", id: "7", slug: "pilot" })
+    else if scenario = "graphql" then
+        work = m.client.fetch({ url: "/graphql-partial", graphql: { query: "query { a }" } })
+    else if scenario = "retry" then
+        work = m.client.fetch("/flaky/task-" + createObject("roDeviceInfo").getRandomUUID().left(8) + "/1")
+    else if scenario = "cancel" then
+        work = m.client.fetch("/slow/3000")
+        m.client.cancel(work)
+    else if scenario = "parser" then
+        work = m.client.fetch({ url: "/echo", parser: "SomeParser" })
+    end if
+    promises.chain(promises.allSettled([work]), m).then(function(results as object, m as object) as dynamic
+        m.done = true
+        promises.resolve(results[0], m.top.promise)
+        return invalid
+    end function)
+    while not m.done
+        message = promises.wait2(m.client.nextWait(), port)
+        m.client.handle(message)
+    end while
+end sub

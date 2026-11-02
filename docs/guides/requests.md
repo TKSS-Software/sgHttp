@@ -260,7 +260,7 @@ end function)
 
 - Only a `GET` is downloaded this way, and a download has no `parser` and no `graphql`. `fetch` rejects those without sending anything.
 - The body is written beside the file, as `<path>.part`, and moved over the file only when the whole body has arrived with a successful status. A failed or cancelled download leaves an earlier copy of the file as it was, and deletes the `.part`.
-- A failed download rejects as any request does, with the server's error body in `body`.
+- A failed download rejects as any request does, with its `code` and `message`. `body` is `invalid` unless the device wrote the error body to the file, which current firmware doesn't.
 - Retries, priorities, the proxy and [cancelling](#cancelling-a-request) work as for any `GET`. The `timeout` is different: for a download it is how long the transfer may stall without receiving data, not a limit on the whole transfer, so a large file on a slow connection is not cut off.
 - The folder must exist. The roots of `tmp:/`, which is cleared when the app exits, and `cachefs:/`, which the system may evict, always do.
 - `toFile` is for `fetch` only. A defined query's value is kept in the cache, so `define` ignores it, with a console warning.
@@ -294,6 +294,8 @@ See [More than one server](multiple-servers.md).
 ## What fetch doesn't do
 
 sgHttp never caches, de-duplicates or persists a `fetch`. Two identical calls send two requests, and the second isn't affected by the first. That's the right behaviour for most calls. For data that several components ask for, or that several screens show, use the [query cache](queries.md). If the app uses it, a `fetch` that changes data on the server should expire the queries it affects: `sghttp.expire("favorites")`.
+
+`fetch` is called from components on the render thread. Code that already runs in a Task of its own can send the same requests from there; see [Requests from a task](tasks.md).
 
 ## Next
 

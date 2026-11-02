@@ -1,0 +1,624 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+import "pkg:/source/request.bs"
+
+' The longest Retry-After wait honoured; a longer one fails the request at once rather than
+' hold its callers
+const MAX_RETRY_AFTER_SECONDS = 60
+
+' Sends requests from the thread it was made on, which must be a task: roUrlTransfer cannot run
+' on the render thread. A bounded pool of roUrlTransfer objects, made as requests need them, a
+' queue per priority (a request waits only behind higher and earlier ones), retries with
+' backoff or the wait a Retry-After asks for, timeouts, gzip, JSON decoding and downloads to a
+' file. The Transport task is one of these behind a node; a task of the app's can make its own.
+'
+' Its owner runs the loop: wait on the port for at most nextWait() milliseconds (0: no limit),
+' and hand every message, or invalid when the wait timed out, to handle().
+'
+' settings: { baseUrl, headers, baseHeaders, maxConcurrent, timeout, retries, httpVersion, proxy,
+'             counter }
+'   counter     - a node whose activeRequests field the owner raises for each request it hands
+'                 over; the client lowers it as each settles, before its promise does
+'
+' fetch takes the spec sghttp.fetch does, with {placeholders} filled from args. send takes the
+' spec a transport does, already filled (see fillRequest):
+' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
+'         allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat, graphql, toFile,
+'         includeSharedHeaders, useProxy }
+'   toFile      - a path (tmp:/, cachefs:/) a GET's body is written to instead of returned: the
+'                 response has path and no body (see finishDownload)
+'   graphql     - true for a GraphQL request: a response with errors and no data fails, and a
+'                 failure carries the errors (see graphqlFailure)
+'   graphqlData - true to resolve with the response's data, and its errors in errors (fetch)
+'   safeToRepeat - true when the request only reads, whatever its method (a cached query sent
+'                 as a POST, such as a GraphQL query): it is retried as a GET would be
+'   priority    - "high", "normal" (the default) or "low": which queue the request waits in
+' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody, kind, path }
+'   kind        - for a request with no HTTP answer (a negative code, or cancelled): see
+'                 failureKind, or "cancelled"
+'   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
+'   bodyHash    - MD5 of the raw body when spec.hashBody is true, so the store can tell an
+'                 unchanged payload without parsing
+'   notModified - true for a 304 answering a conditional request (spec.allowNotModified)
+' Makes an HttpClient. port: the port its owner waits on; a new one when none is given (see
+' getPort).
+function createHttpClient(settings = {} as object, port = invalid as dynamic) as object
+    client = {
+        baseUrl: ""
+        headers: {}
+        baseHeaders: {}
+        maxConcurrent: 4
+        timeout: 30
+        retries: 1
+        httpVersion: ""
+        proxy: ""
+        port: invalid
+        levels: ["high", "normal", "low"]
+        queues: { high: [], normal: [], low: [] }
+        jobs: {}
+        idle: []
+        transfers: 0
+        retryQueue: []
+        escaper: invalid
+        deviceInfo: invalid
+        files: invalid
+        proxyWarned: false
+        counter: invalid
+        init: httpClient_init
+        getPort: httpClient_getPort
+        fetch: httpClient_fetch
+        send: httpClient_send
+        handle: httpClient_handle
+        nextWait: httpClient_nextWait
+        promote: httpClient_promote
+        cancel: httpClient_cancel
+        createTransfer: httpClient_createTransfer
+        priorityLevel: httpClient_priorityLevel
+        removeJob: httpClient_removeJob
+        cancelledResponse: httpClient_cancelledResponse
+        nextJob: httpClient_nextJob
+        isRetryable: httpClient_isRetryable
+        neverConnected: httpClient_neverConnected
+        retriesFor: httpClient_retriesFor
+        pumpQueue: httpClient_pumpQueue
+        pumpRetries: httpClient_pumpRetries
+        startJob: httpClient_startJob
+        onUrlEvent: httpClient_onUrlEvent
+        scheduleRetry: httpClient_scheduleRetry
+        finishDownload: httpClient_finishDownload
+        partPath: httpClient_partPath
+        finish: httpClient_finish
+        graphqlFailure: httpClient_graphqlFailure
+        isSuccess: httpClient_isSuccess
+        applyProxy: httpClient_applyProxy
+        isPrivateHost: httpClient_isPrivateHost
+        proxyAddress: httpClient_proxyAddress
+        appendQuery: httpClient_appendQuery
+        getEscaper: httpClient_getEscaper
+    }
+    client.init(settings, port)
+    return client
+end function
+
+sub httpClient_init(settings as object, port as dynamic)
+    if port = invalid then port = createObject("roMessagePort")
+    m.port = port
+    if isNonEmptyString(settings.baseUrl) then m.baseUrl = settings.baseUrl
+    if type(settings.headers) = "roAssociativeArray" then m.headers = settings.headers
+    if type(settings.baseHeaders) = "roAssociativeArray" then m.baseHeaders = settings.baseHeaders
+    if isWholeNumber(settings.maxConcurrent) and settings.maxConcurrent > 0 then m.maxConcurrent = settings.maxConcurrent
+    if isWholeNumber(settings.timeout) and settings.timeout > 0 then m.timeout = settings.timeout
+    if isWholeNumber(settings.retries) and settings.retries >= 0 then m.retries = settings.retries
+    if isNonEmptyString(settings.httpVersion) then m.httpVersion = settings.httpVersion
+    if isNonEmptyString(settings.proxy) then m.proxy = settings.proxy
+    if isNode(settings.counter) then m.counter = settings.counter
+    m.deviceInfo = createObject("roDeviceInfo")
+    m.files = createObject("roFileSystem")
+end sub
+
+' The port this client's transfers post to
+function httpClient_getPort() as object
+    return m.port
+end function
+
+' Sends a request and returns a promise for its response: spec and args as sghttp.fetch takes
+' them (a url, or { url, method, headers, query, body, parseJson, retries, graphql, toFile }
+' plus timeout, auth, proxy, successCodes and priority), without parser or a query name
+function httpClient_fetch(spec as dynamic, args = {} as object) as object
+    promise = promises.create()
+    if type(spec) = "roString" or type(spec) = "String" then
+        ' A query name is the store's: here any other string would quietly become a request to baseUrl/<string>
+        if spec.left(1) <> "/" and spec.left(4) <> "http" then return promises.reject({ message: `sghttp: a task's client takes a url starting with / or http; "${spec}" is not one (a query name works on the render thread only)`, code: 0 }, promise)
+        spec = { url: spec }
+    end if
+    if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then return promises.reject({ message: "sghttp: fetch needs a url", code: 0 }, promise)
+    if isNonEmptyString(spec.parser) then return promises.reject({ message: "sghttp: a task's client has no parser task; parse the body in the task", code: 0 }, promise)
+    if spec.toFile <> invalid then
+        problem = downloadProblem(spec)
+        if problem <> "" then return promises.reject({ message: `sghttp: fetch with toFile ${problem}`, code: 0 }, promise)
+    end if
+    filled = fillRequest(spec, args, {}, { timeout: spec.timeout, auth: spec.auth, proxy: spec.proxy, successCodes: spec.successCodes, priority: spec.priority, toFile: spec.toFile, name: "fetch" })
+    if filled.graphql = true then filled.graphqlData = true
+    return m.send(filled, promise)
+end function
+
+' Sends a request and settles the promise given (made by a caller on another thread)
+function httpClient_send(spec as dynamic, promise as object) as object
+    if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
+        promises.reject({ message: "sghttp transport: request needs a url" }, promise)
+        return promise
+    end if
+    job = {
+        promise: promise
+        spec: spec
+        attempts: 0
+        maxAttempts: 1 + m.retriesFor(spec)
+        timespan: createObject("roTimespan")
+        retryTimer: createObject("roTimespan")
+        retryAfterMs: 0
+        priority: m.priorityLevel(spec.priority)
+    }
+    m.queues[job.priority].push(job)
+    m.pumpQueue()
+    return promise
+end function
+
+' Takes a message from the port, or invalid after a wait of nextWait(). Returns whether the
+' message was one of this client's.
+function httpClient_handle(message as dynamic) as boolean
+    ours = false
+    if type(message) = "roUrlEvent" then ours = m.onUrlEvent(message)
+    m.pumpRetries()
+    m.pumpQueue()
+    return ours
+end function
+
+' How long the owner's wait may last before handle must run again: until the next retry is
+' due, or 0 (no limit) when none is waiting
+function httpClient_nextWait() as integer
+    if m.retryQueue.count() = 0 then return 0
+    soonest = 2147483647
+    for each job in m.retryQueue
+        remaining = job.retryAfterMs - job.retryTimer.totalMilliseconds()
+        if remaining < soonest then soonest = remaining
+    end for
+    if soonest < 1 then return 1
+    return soonest
+end function
+
+' Moves a waiting request to another queue; one already in flight is left alone. request: the
+' promise fetch returned, or its id
+sub httpClient_promote(request as dynamic, priority as dynamic)
+    id = isNode(request) ? request.id : request
+    if not isNonEmptyString(id) then return
+    level = m.priorityLevel(priority)
+    for each current in m.levels
+        queue = m.queues[current]
+        for i = 0 to queue.count() - 1
+            if queue[i].promise.id = id then
+                if current = level then return
+                job = queue[i]
+                queue.delete(i)
+                job.priority = level
+                m.queues[level].push(job)
+                return
+            end if
+        end for
+    end for
+end sub
+
+' Drops a waiting request (queued, or waiting to retry), or aborts one in flight unless
+' queuedOnly; either way its promise rejects with { cancelled: true }. request: the promise fetch
+' returned, or its id
+sub httpClient_cancel(request as dynamic, queuedOnly = false as boolean)
+    id = isNode(request) ? request.id : request
+    if not isNonEmptyString(id) then return
+    for each level in m.levels
+        if m.removeJob(m.queues[level], id) then return
+    end for
+    if m.removeJob(m.retryQueue, id) then return
+    if queuedOnly then return
+    for each identity in m.jobs
+        slot = m.jobs[identity]
+        if slot.job.promise.id = id then
+            slot.transfer.asyncCancel()
+            m.jobs.delete(identity)
+            ' The aborted transfer may still post an event: it is not used again, so a new
+            ' one can never be mistaken for it
+            m.transfers--
+            if isNonEmptyString(slot.job.spec.toFile) then m.files.delete(m.partPath(slot.job.spec.toFile))
+            m.finish(slot.job, m.cancelledResponse(slot.job), false)
+            m.pumpQueue()
+            return
+        end if
+    end for
+end sub
+
+function httpClient_createTransfer() as object
+    transfer = createObject("roUrlTransfer")
+    transfer.setMessagePort(m.port)
+    transfer.setCertificatesFile("common:/certs/ca-bundle.crt")
+    transfer.initClientCertificates()
+    transfer.enableEncodings(true)
+    transfer.retainBodyOnError(true)
+    if isNonEmptyString(m.httpVersion) then
+        try
+            transfer.setHttpVersion(m.httpVersion)
+        catch e
+            ' Older firmware: ignore
+        end try
+    end if
+    m.transfers++
+    return transfer
+end function
+
+function httpClient_priorityLevel(value as dynamic) as string
+    if value = "high" or value = "low" then return value
+    return "normal"
+end function
+
+function httpClient_removeJob(queue as object, id as string) as boolean
+    for i = 0 to queue.count() - 1
+        if queue[i].promise.id = id then
+            job = queue[i]
+            queue.delete(i)
+            m.finish(job, m.cancelledResponse(job), false)
+            return true
+        end if
+    end for
+    return false
+end function
+
+function httpClient_cancelledResponse(job as object) as object
+    url = ""
+    if isNonEmptyString(job.url) then url = job.url
+    return { code: 0, kind: "cancelled", cancelled: true, message: "sghttp: cancelled", body: invalid, headers: {}, url: url, ms: 0 }
+end function
+
+' The next request to send: the first in the highest queue that has one, or invalid
+function httpClient_nextJob() as dynamic
+    for each level in m.levels
+        if m.queues[level].count() > 0 then return m.queues[level].shift()
+    end for
+    return invalid
+end function
+
+' Network failures, 429 and 5xx responses are retried. A POST or PATCH may already have been
+' applied when it fails that way (a timeout, a 500, a gateway's 502), and repeating it could
+' apply the change twice, so it is only retried when it cannot have been: a 429, which was
+' turned away before it was handled, or a connection that never opened. A request that only
+' reads (safeToRepeat), or that sets retries itself, is retried like any other.
+function httpClient_isRetryable(spec as object, code as integer) as boolean
+    if code = 429 then return true
+    if code > 0 and code < 500 then return false
+    method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
+    if method <> "POST" and method <> "PATCH" then return true
+    if spec.safeToRepeat = true then return true
+    if isWholeNumber(spec.retries) then return true
+    return m.neverConnected(code)
+end function
+
+' roUrlTransfer's codes (curl's, negated) for a request that never reached the server: the
+' proxy or host name did not resolve, the connection was refused, or the TLS handshake failed
+function httpClient_neverConnected(code as integer) as boolean
+    return code = -5 or code = -6 or code = -7 or code = -35
+end function
+
+function httpClient_retriesFor(spec as object) as integer
+    if isWholeNumber(spec.retries) then return spec.retries
+    return m.retries
+end function
+
+sub httpClient_pumpQueue()
+    while true
+        if m.idle.count() = 0 and m.transfers >= m.maxConcurrent then return
+        job = m.nextJob()
+        if job = invalid then return
+        if m.idle.count() > 0 then
+            transfer = m.idle.pop()
+        else
+            transfer = m.createTransfer()
+        end if
+        if not m.startJob(transfer, job) then m.idle.push(transfer)
+    end while
+end sub
+
+sub httpClient_pumpRetries()
+    if m.retryQueue.count() = 0 then return
+    remaining = []
+    for each job in m.retryQueue
+        if job.retryTimer.totalMilliseconds() >= job.retryAfterMs then
+            m.queues[job.priority].push(job)
+        else
+            remaining.push(job)
+        end if
+    end for
+    m.retryQueue = remaining
+end sub
+
+function httpClient_startJob(transfer as object, job as object) as boolean
+    spec = job.spec
+    url = spec.url
+    if url.left(4) <> "http" and isNonEmptyString(m.baseUrl) then url = m.baseUrl + url
+    url = m.appendQuery(url, spec.query)
+    if spec.useProxy <> false then url = m.applyProxy(url)
+
+    headers = {}
+    headers.append(m.baseHeaders)
+    ' Shared headers carry auth; requests to third-party or LAN hosts opt out with auth: false
+    if spec.includeSharedHeaders <> false and type(m.headers) = "roAssociativeArray" then headers.append(m.headers)
+    if type(spec.headers) = "roAssociativeArray" then headers.append(spec.headers)
+
+    ' The request's own timeout, else the client's; set per job, since transfers are pooled
+    timeout = m.timeout
+    if type(spec.timeoutSeconds) = "roInt" or type(spec.timeoutSeconds) = "roInteger" or type(spec.timeoutSeconds) = "Integer" then
+        if spec.timeoutSeconds > 0 then timeout = spec.timeoutSeconds
+    end if
+    ' A rate no connection can sustain makes the timeout a hard limit for a request; a download
+    ' instead fails only when it stalls (under a byte a second for that long), whatever its size
+    minimumRate = isNonEmptyString(spec.toFile) ? 1 : 2147483647
+    transfer.setMinimumTransferRate(minimumRate, timeout)
+
+    method = isNonEmptyString(spec.method) ? ucase(spec.method) : "GET"
+    body = spec.body
+    if type(body) = "roAssociativeArray" and isFormType(headers["Content-Type"]) then
+        body = encodeParams(body, m.getEscaper())
+    else if type(body) = "roAssociativeArray" or type(body) = "roArray" then
+        body = formatJson(body)
+        if headers["Content-Type"] = invalid then headers["Content-Type"] = "application/json"
+    end if
+
+    transfer.setUrl(url)
+    transfer.setHeaders(headers)
+    transfer.setRequest(method)
+
+    job.attempts++
+    job.url = url
+    job.timespan.mark()
+    m.jobs[transfer.getIdentity().toStr()] = { job: job, transfer: transfer }
+
+    started = false
+    if isNonEmptyString(spec.toFile) then
+        ' Written beside the file and moved over it once complete (see finishDownload), so a
+        ' failed or cancelled download never replaces a good copy
+        m.files.delete(m.partPath(spec.toFile))
+        started = method = "GET" and transfer.asyncGetToFile(m.partPath(spec.toFile))
+    else if method = "GET" then
+        started = transfer.asyncGetToString()
+    else if method = "HEAD" then
+        started = transfer.asyncHead()
+    else
+        if body = invalid then body = ""
+        started = transfer.asyncPostFromString(body)
+    end if
+
+    if not started then
+        m.jobs.delete(transfer.getIdentity().toStr())
+        m.finish(job, { code: -1, kind: "network", body: invalid, headers: {}, url: url, ms: 0, message: "could not start request" }, false)
+    end if
+    return started
+end function
+
+function httpClient_onUrlEvent(event as object) as boolean
+    identity = event.getSourceIdentity().toStr()
+    slot = m.jobs[identity]
+    if slot = invalid then return false
+    m.jobs.delete(identity)
+    job = slot.job
+    m.idle.push(slot.transfer)
+
+    code = event.getResponseCode()
+    rawBody = event.getString()
+    response = {
+        code: code
+        body: rawBody
+        headers: event.getResponseHeaders()
+        url: job.url
+        ms: job.timespan.totalMilliseconds()
+        message: event.getFailureReason()
+    }
+    if code < 0 then response.kind = failureKind(code, m.deviceInfo.getLinkStatus())
+
+    if isNonEmptyString(job.spec.toFile) then
+        m.finishDownload(job, response)
+        return true
+    end if
+
+    ' A 304 answers a conditional request: no body, the cached value still holds
+    if code = 304 and job.spec.allowNotModified = true then
+        response.notModified = true
+        response.body = invalid
+        m.finish(job, response, true)
+        return true
+    end if
+
+    success = m.isSuccess(code, job.spec)
+    if success and job.spec.hashBody = true and rawBody <> "" then response.bodyHash = hashString(rawBody)
+    if success and job.spec.parseJson <> false and rawBody <> "" then
+        parsed = parseJson(rawBody)
+        if parsed <> invalid then
+            response.body = parsed
+            ' The text too, for a body the store keeps on disk: writing it saves encoding the
+            ' decoded body again on the render thread
+            if job.spec.keepRawBody = true then response.rawBody = rawBody
+        end if
+    end if
+
+    if job.spec.graphql = true then
+        failure = m.graphqlFailure(response.body, rawBody)
+        if failure <> invalid then
+            ' A failed body is left as text, as for any failure
+            if success then response.body = rawBody
+            success = false
+            response.append(failure)
+        end if
+    end if
+
+    ' fetch resolves with the data, as sghttp.fetch does; partial data keeps the errors beside it
+    if success and job.spec.graphqlData = true and type(response.body) = "roAssociativeArray" then
+        if type(response.body.errors) = "roArray" then response.errors = response.body.errors
+        if response.body.doesExist("data") then response.body = response.body.data
+    end if
+
+    if not success and m.isRetryable(job.spec, code) and job.attempts < job.maxAttempts then
+        m.scheduleRetry(job, response)
+        return true
+    end if
+
+    m.finish(job, response, success)
+    return true
+end function
+
+' Sends a failed request again after the wait the server asks for (429, 503), else exponential
+' backoff: 1s, 2s, 4s... A wait longer than MAX_RETRY_AFTER_SECONDS fails it now instead.
+sub httpClient_scheduleRetry(job as object, response as object)
+    retryAfter = -1
+    if type(response.headers) = "roAssociativeArray" then retryAfter = retryAfterSeconds(response.headers["retry-after"], nowSeconds())
+    if retryAfter > MAX_RETRY_AFTER_SECONDS then
+        m.finish(job, response, false)
+        return
+    end if
+    if retryAfter >= 0 then
+        job.retryAfterMs = 1000 * retryAfter
+    else
+        job.retryAfterMs = 1000 * (2 ^ (job.attempts - 1))
+    end if
+    job.retryTimer.mark()
+    m.retryQueue.push(job)
+end sub
+
+' A request with toFile: its body was written to the file's .part. A success moves it over the
+' file and resolves with path; a failure deletes the .part, leaving any earlier copy of the
+' file as it was, and keeps as body whatever error body the device wrote to the .part (nothing,
+' on current firmware). Retried as any GET.
+sub httpClient_finishDownload(job as object, response as object)
+    part = m.partPath(job.spec.toFile)
+    response.body = invalid
+    if m.isSuccess(response.code, job.spec) then
+        m.files.delete(job.spec.toFile)
+        if m.files.rename(part, job.spec.toFile) then
+            response.path = job.spec.toFile
+            m.finish(job, response, true)
+            return
+        end if
+        m.files.delete(part)
+        response.message = "could not move the download to " + job.spec.toFile
+        response.kind = "network"
+        m.finish(job, response, false)
+        return
+    end if
+    if response.code > 0 and m.files.exists(part) then response.body = readAsciiFile(part)
+    m.files.delete(part)
+    if m.isRetryable(job.spec, response.code) and job.attempts < job.maxAttempts then
+        m.scheduleRetry(job, response)
+        return
+    end if
+    m.finish(job, response, false)
+end sub
+
+function httpClient_partPath(path as string) as string
+    return path + ".part"
+end function
+
+sub httpClient_finish(job as object, response as object, success as boolean)
+    if m.counter <> invalid then m.counter.activeRequests = m.counter.activeRequests - 1
+    if success then
+        promises.resolve(response, job.promise)
+    else
+        promises.reject(response, job.promise)
+    end if
+end sub
+
+' A GraphQL server reports a failed operation in the body: with a 200, or with a 4xx, as
+' { errors: [...] } and no data. That is a failure (never cached, nor kept on disk), with the
+' errors and the first one's message. Partial data with errors succeeds; the errors are for the
+' fields that failed. invalid when the body reports nothing.
+function httpClient_graphqlFailure(body as dynamic, rawBody as string) as dynamic
+    if rawBody.instr(chr(34) + "errors" + chr(34)) < 0 then return invalid
+    document = body
+    if type(document) <> "roAssociativeArray" then document = parseJson(rawBody)
+    if type(document) <> "roAssociativeArray" or type(document.errors) <> "roArray" or document.errors.count() = 0 then return invalid
+    if document.data <> invalid then return invalid
+    failure = { errors: document.errors, message: "GraphQL error" }
+    first = document.errors[0]
+    if type(first) = "roAssociativeArray" and isNonEmptyString(first.message) then failure.message = first.message
+    return failure
+end function
+
+function httpClient_isSuccess(code as integer, spec as object) as boolean
+    codes = spec.successCodes
+    if type(codes) = "roArray" and codes.count() > 0 then
+        for each allowed in codes
+            if allowed = code then return true
+        end for
+        return false
+    end if
+    return code >= 200 and code < 300
+end function
+
+' Routes a request through a debugging proxy such as Charles: Roku apps cannot set an HTTP
+' proxy, so the proxy address is prefixed onto the url instead (http://host:port/;https://api...).
+' No-op when no proxy is set, for non-http urls, and for urls that already carry a proxy prefix
+' (only the original url is kept).
+function httpClient_applyProxy(url as string) as string
+    address = m.proxyAddress()
+    if address = "" or url.left(4) <> "http" then return url
+    ' The proxy is for inspecting cloud traffic; a device on the LAN (a tuner) is reached
+    ' directly, since the proxy host may not see that network at all
+    if m.isPrivateHost(url) then return url
+    prefix = "http://" + address + "/;"
+    if url.left(prefix.len()) = prefix then return url
+    alreadyProxied = url.instr("/;http")
+    if alreadyProxied >= 0 then url = url.mid(alreadyProxied + 2)
+    return prefix + url
+end function
+
+' localhost, *.local and the private ranges (10/8, 172.16/12, 192.168/16, 169.254/16)
+function httpClient_isPrivateHost(url as string) as boolean
+    rest = url.mid(url.instr("://") + 3)
+    slash = rest.instr("/")
+    host = slash >= 0 ? rest.left(slash) : rest
+    colon = host.instr(":")
+    if colon >= 0 then host = host.left(colon)
+    host = lcase(host)
+    if host = "localhost" or host.left(4) = "127." or host.right(6) = ".local" then return true
+    if host.left(3) = "10." or host.left(8) = "192.168." or host.left(8) = "169.254." then return true
+    if host.left(4) = "172." then
+        second = val(host.mid(4).split(".")[0])
+        return second >= 16 and second <= 31
+    end if
+    return false
+end function
+
+' The configured proxy as host:port, or "" when unset or not a usable address.
+function httpClient_proxyAddress() as string
+    proxy = m.proxy
+    if not isNonEmptyString(proxy) then return ""
+    if proxy.left(7) = "http://" then proxy = proxy.mid(7)
+    if proxy.left(8) = "https://" then proxy = proxy.mid(8)
+    if proxy.right(1) = "/" then proxy = proxy.left(proxy.len() - 1)
+    parts = proxy.tokenize(":")
+    if parts.count() <> 2 or val(parts[1]) <= 0 then
+        if not m.proxyWarned then print `[sghttp] proxy "${m.proxy}" is not host:port, ignoring it`
+        m.proxyWarned = true
+        return ""
+    end if
+    return proxy
+end function
+
+' params, not query: ropm prefixes any name matching a function in source/sghttp.bs
+' (query(), fetch(), ...) when it copies sghttp into an app, so a local named query
+' became sghttp_query (the function) there and every query string was dropped
+function httpClient_appendQuery(url as string, params as dynamic) as string
+    if type(params) <> "roAssociativeArray" or params.count() = 0 then return url
+    encoded = encodeParams(params, m.getEscaper())
+    if encoded = "" then return url
+    separator = url.instr("?") >= 0 ? "&" : "?"
+    return url + separator + encoded
+end function
+
+' Encodes query strings and form bodies (see encodeParams); never sends anything itself
+function httpClient_getEscaper() as object
+    if m.escaper = invalid then m.escaper = createObject("roUrlTransfer")
+    return m.escaper
+end function

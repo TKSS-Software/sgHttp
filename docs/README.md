@@ -15,6 +15,7 @@ Everything in these guides works without defining any queries.
 - [GraphQL](guides/graphql.md): queries and mutations, variables from args, `data` and `errors`
 - [More than one server](guides/multiple-servers.md): clients, their headers and their transports
 - [The transport](guides/transport.md): the built-in HTTP task, retries, timeouts, priorities, and replacing it
+- [Requests from a task](guides/tasks.md): only when you already have a Task of your own that needs HTTP
 - [Debugging](guides/debugging.md): events, stats, console warnings and routing traffic through Charles
 
 ## The query cache

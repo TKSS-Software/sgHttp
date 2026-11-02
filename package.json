@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build": "node scripts/build.js",
-    "test": "npm run build && bsc --project bsconfig-test.json && node scripts/rooibos.js --project bsconfig-test.json --no-build --host \"${ROKU_HOST:-$(grep ^ROKU_IP= .env | cut -d= -f2)}\""
+    "test": "npm run build && node scripts/test-server.js --write-host && bsc --project bsconfig-test.json && node scripts/rooibos.js --project bsconfig-test.json --no-build --host \"${ROKU_HOST:-$(grep ^ROKU_IP= .env | cut -d= -f2)}\""
   },
   "dependencies": {
     "promises": "npm:@rokucommunity/promises@^0.7.4"

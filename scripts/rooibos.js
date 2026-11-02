@@ -23,5 +23,8 @@ RokuDeploy.prototype.sideload = function (options) {
     return sideload.call(this, { deleteDevChannel: false, ...options });
 };
 
+// The server the transport specs talk to (see scripts/test-server.js), for as long as the run lasts
+require('./test-server').start();
+
 process.argv = [process.argv[0], cliPath, ...process.argv.slice(2)];
 require(cliPath);

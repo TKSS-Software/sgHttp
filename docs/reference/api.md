@@ -9,7 +9,7 @@ The shapes the functions take and return (`sghttp.Definition`, `sghttp.FetchSpec
 Promise-returning functions return a [promises](https://github.com/rokucommunity/promises) node. Consume it with `promises.chain`, `promises.onThen` or `promises.onCatch`.
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
-- Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize)
+- Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize), and, only inside a Task of your own, [`createHttpClient`](#createhttpclient)
 - Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
 - Cache control: [`expire`](#expire), [`remove`](#remove), [`removeAll`](#removeall), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`removeScope`](#removescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
@@ -64,6 +64,24 @@ Sends one request and returns a promise for the whole response, `{ code, headers
 `toFile` is a path the body is written to instead of returned, filled from `args` like the url: the response has `path` and no `body`. See [Downloading to a file](../guides/requests.md#downloading-to-a-file).
 
 Rejects with the response plus `message` on a failing status or a network error. Rejects with `{ message, code: 0 }`, without sending anything, when the spec has no url, the client doesn't exist, the string is neither a url (starting with `/` or `http`) nor a defined query, or `toFile` comes with a method other than `GET`, a `parser` or `graphql`. See [Requests](../guides/requests.md).
+
+## createHttpClient
+
+```brightscript
+sghttp.createHttpClient(settings = {} as object, port = invalid as dynamic) as object
+```
+
+Only for code that already runs in a Task of the app's: everywhere else, use [`fetch`](#fetch). Makes an HTTP client that sends requests from the calling task, on `port`, without crossing to the render thread. `settings` are a client's (`baseUrl`, `headers`, `baseHeaders`, `maxConcurrent`, `timeout`, `retries`, `httpVersion`, `proxy`). Import `pkg:/source/roku_modules/sghttp/client.brs`. See [Requests from a task](../guides/tasks.md).
+
+| Member | Meaning |
+|---|---|
+| `fetch(spec, args = {})` | As [`fetch`](#fetch), without scopes, `parser` or query names. Returns a promise for the response. |
+| `handle(message)` | Takes every message from the port, or `invalid` after a timed-out wait. Returns whether it was the client's. |
+| `nextWait()` | Milliseconds the loop's wait may last, `0` for no limit |
+| `cancel(promise, queuedOnly = false)` | Drops the request if it's waiting, or aborts it in flight unless `queuedOnly` |
+| `promote(promise, priority)` | Moves a waiting request to `"high"`, `"normal"` or `"low"` |
+| `getPort()` | The port the client's transfers post to |
+| `headers` | The shared headers; set it to change them |
 
 ## define
 

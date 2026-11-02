@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A task that sends requests with createHttpClient, as an app's own task would (sghttpTransport.spec.bs) -->
+<component name="ClientTask" extends="Task">
+    <interface>
+        <field id="baseUrl" type="string" />
+        <!-- Which requests to send (see run) -->
+        <field id="scenario" type="string" />
+        <!-- Settled with the outcome: { status, value } or { status, reason }, as allSettled gives it -->
+        <field id="promise" type="node" />
+    </interface>
+</component>

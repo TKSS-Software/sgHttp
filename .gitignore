@@ -4,3 +4,4 @@ src/**/roku_modules/
 .DS_Store
 build/
 .env
+tests/source/testServer.brs

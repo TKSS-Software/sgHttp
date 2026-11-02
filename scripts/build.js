@@ -37,6 +37,18 @@ const walk = (dir) => {
 };
 walk(path.join(pkgDir, 'dist'));
 
+// ropm renames a class's method declarations and the references to them differently when it
+// installs the package (__sghttp_X_method_new vs sghttp___X_method_new), so a class compiles here
+// and fails in the app. Plain functions install correctly.
+for (const sub of ['source', 'components']) {
+    for (const file of fs.readdirSync(path.join(pkgDir, 'dist', sub))) {
+        if (!file.endsWith('.brs')) continue;
+        const text = fs.readFileSync(path.join(pkgDir, 'dist', sub, file), 'utf8');
+        const builder = text.match(/^\s*function (__\w+_builder)\(/m);
+        if (builder) throw new Error(`sghttp: dist/${sub}/${file} has a class (${builder[1]}), which ropm cannot install; use plain functions`);
+    }
+}
+
 // Stamp the build (Store.bs BUILD_STAMP) so the device log says which sghttp a sideload carries:
 // commit, "+changes" when the working tree differs from it, and the build time
 let commit = 'no-git';
@@ -52,3 +64,8 @@ const compiled = fs.readFileSync(storeFile, 'utf8');
 if (!compiled.includes('unstamped (compiled from source)')) throw new Error('sghttp: build stamp placeholder not found in dist/components/Store.brs');
 fs.writeFileSync(storeFile, compiled.split('unstamped (compiled from source)').join(stamp));
 console.log(`sghttp: dist ready, build ${stamp}`);
+
+// tests/source/testServer.brs, which the specs import, names the machine the transport specs
+// talk to (scripts/test-server.js); written here too so a fresh checkout compiles the tests
+// before its first npm test
+require('./test-server').writeHost();

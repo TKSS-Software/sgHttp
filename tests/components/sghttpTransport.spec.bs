@@ -1,0 +1,530 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+import "pkg:/source/testServer.brs"
+
+' The real Transport task against scripts/test-server.js on the machine running the specs, so
+' every request here goes over the network. Promise callbacks get the suite as their context.
+namespace tests
+    @SGNode("Node")
+    @suite("sghttp transport")
+    class SghttpTransportTests extends rooibos.BaseTestSuite
+
+        public transports = []
+        public first = invalid
+        public second = invalid
+        public third = invalid
+        public results = []
+
+        protected override function afterEach()
+            for each transport in m.transports
+                transport.shutdown = true
+            end for
+            m.transports = []
+            m.results = []
+        end function
+
+        ' A started Transport talking to the test server; fields overrides any of its settings
+        function transport(fields = {} as object) as object
+            node = createObject("roSGNode", "Transport")
+            node.baseUrl = testServerUrl()
+            node.setFields(fields)
+            node.control = "RUN"
+            m.transports.push(node)
+            return node
+        end function
+
+        function send(node as object, spec as object) as object
+            return node.callFunc("makeRequest", spec)
+        end function
+
+        ' A unique key for the server's counters, so specs never share one
+        function key(name as string) as string
+            return name + "-" + createObject("roDeviceInfo").getRandomUUID().left(8)
+        end function
+
+        function failed(error as dynamic, suite as object) as dynamic
+            suite.fail("rejected: " + formatJson(error))
+            suite.done()
+            return invalid
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("sending")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("joins baseUrl, appends the query string, merges headers and decodes JSON")
+        function _()
+            node = m.transport({ headers: { "X-Shared": "s" }, baseHeaders: { "X-Base": "b" } })
+            promises.chain(m.send(node, { url: "/echo", query: { a: "1", tag: ["x", "y"] }, headers: { "X-Own": "o" } }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.assertEqual(response.body.method, "GET")
+                ' The parameters' order is the associative array's, not the order they were written in
+                suite.assertTrue(response.body.path.instr("a=1") > 0)
+                suite.assertTrue(response.body.path.instr("tag=x&tag=y") > 0)
+                suite.assertEqual(response.body.headers["x-shared"], "s")
+                suite.assertEqual(response.body.headers["x-base"], "b")
+                suite.assertEqual(response.body.headers["x-own"], "o")
+                suite.assertEqual(response.url, testServerUrl() + response.body.path)
+                suite.assertTrue(response.ms >= 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("leaves out the shared headers for a request that opts out, but keeps the base ones")
+        function _()
+            node = m.transport({ headers: { "X-Shared": "s" }, baseHeaders: { "X-Base": "b" } })
+            promises.chain(m.send(node, { url: "/echo", includeSharedHeaders: false }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertInvalid(response.body.headers["x-shared"])
+                suite.assertEqual(response.body.headers["x-base"], "b")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends shared headers set after it started")
+        function _()
+            node = m.transport({ headers: { "X-Shared": "old" } })
+            node.headers = { "X-Shared": "new" }
+            promises.chain(m.send(node, { url: "/echo" }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.headers["x-shared"], "new")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends an associative array body as JSON with its content type")
+        function _()
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/echo", method: "post", body: { slug: "pilot" } }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.method, "POST")
+                suite.assertEqual(response.body.headers["content-type"], "application/json")
+                suite.assertEqual(parseJson(response.body.body).slug, "pilot")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("form-encodes a body sent as application/x-www-form-urlencoded")
+        function _()
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/echo", method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: { grant_type: "device code" } }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.body, "grant_type=device%20code")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends a HEAD without a body, and keeps a non-JSON body as text")
+        function _()
+            node = m.transport()
+            m.first = m.send(node, { url: "/echo", method: "HEAD" })
+            m.second = m.send(node, { url: "/text" })
+            promises.chain(promises.all([m.first, m.second]), m).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(responses[0].code, 200)
+                suite.assertEqual(responses[1].body, "plain text")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("keeps the text when parseJson is false, and hashes and keeps the raw body when asked")
+        function _()
+            node = m.transport()
+            m.first = m.send(node, { url: "/status/200", parseJson: false })
+            m.second = m.send(node, { url: "/status/200", hashBody: true, keepRawBody: true })
+            promises.chain(promises.all([m.first, m.second]), m).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(responses[0].body, "{" + chr(34) + "status" + chr(34) + ":200}")
+                suite.assertEqual(responses[1].body.status, 200)
+                suite.assertEqual(responses[1].rawBody, responses[0].body)
+                suite.assertEqual(responses[1].bodyHash, hashString(responses[0].body))
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("prefixes the proxy onto a public url")
+        function _()
+            address = testServerUrl().mid(7)
+            node = m.transport({ proxy: address })
+            promises.chain(m.send(node, { url: "http://example.com/echo" }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.path, "/;http://example.com/echo")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("settles every request, so none stays counted as active")
+        function _()
+            node = m.transport()
+            promises.chain(promises.all([m.send(node, { url: "/echo" }), m.send(node, { url: "/text" })]), m).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(suite.transports[0].activeRequests, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("failures")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("rejects a status outside the success codes with its body as text")
+        function _()
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/status/404" }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a 404")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.code, 404)
+                suite.assertEqual(error.body, "{" + chr(34) + "status" + chr(34) + ":404}")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(10000)
+        @it("resolves a status listed in successCodes")
+        function _()
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/status/404", successCodes: [404] }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 404)
+                suite.assertEqual(response.body.status, 404)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("reports a refused connection as a network failure with a kind")
+        function _()
+            node = m.transport({ retries: 0 })
+            host = testServerUrl().left(testServerUrl().instr(7, ":"))
+            promises.chain(m.send(node, { url: host + ":1/echo" }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a refused connection")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertTrue(error.code < 0)
+                suite.assertEqual(error.kind, "connection")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(10000)
+        @it("gives up a request with no answer within its timeout")
+        function _()
+            node = m.transport({ retries: 0 })
+            promises.chain(m.send(node, { url: "/slow/4000", timeoutSeconds: 1 }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved after the timeout")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.kind, "timeout")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(10000)
+        @it("rejects a GraphQL response with errors and no data, and resolves one with partial data")
+        function _()
+            node = m.transport()
+            m.first = m.send(node, { url: "/graphql-partial", graphql: true })
+            promises.chain(m.send(node, { url: "/graphql-error", graphql: true }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a GraphQL error")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.code, 200)
+                suite.assertEqual(error.message, "bad field")
+                suite.assertEqual(error.errors[0].message, "bad field")
+                return suite.first
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.data.a, 1)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("answers a 304 to a conditional request as not modified")
+        function _()
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/etag", headers: { "If-None-Match": chr(34) + "v1" + chr(34) }, allowNotModified: true }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 304)
+                suite.assertTrue(response.notModified)
+                suite.assertInvalid(response.body)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("retries")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("retries a 503 and resolves with the answer that succeeded")
+        function _()
+            node = m.transport({ retries: 1 })
+            promises.chain(m.send(node, { url: "/flaky/" + m.key("get") + "/1" }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.code, 200)
+                suite.assertEqual(response.body.count, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("does not retry a POST answered 503, which may have gone through")
+        function _()
+            node = m.transport({ retries: 2 })
+            m.results = [m.key("post")]
+            promises.chain(m.send(node, { url: "/flaky/" + m.results[0] + "/1", method: "POST" }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a 503")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.code, 503)
+                return suite.send(suite.transports[0], { url: "/hits/" + suite.results[0] })
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.count, 1)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("retries a POST that only reads (safeToRepeat)")
+        function _()
+            node = m.transport({ retries: 1 })
+            promises.chain(m.send(node, { url: "/flaky/" + m.key("read") + "/1", method: "POST", safeToRepeat: true }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.count, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("waits as long as Retry-After asks before retrying")
+        function _()
+            node = m.transport({ retries: 1 })
+            m.results = [createObject("roTimespan")]
+            promises.chain(m.send(node, { url: "/retry-after/" + m.key("wait") + "/1" }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.count, 2)
+                suite.assertTrue(suite.results[0].totalMilliseconds() >= 1000)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("fails at once when Retry-After asks for more than a minute")
+        function _()
+            node = m.transport({ retries: 1 })
+            promises.chain(m.send(node, { url: "/retry-after/" + m.key("long") + "/120" }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.code, 503)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("queue")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("sends a waiting high-priority request before an earlier low one")
+        function _()
+            node = m.transport({ maxConcurrent: 1 })
+            orderKey = m.key("order")
+            m.send(node, { url: "/slow/300" })
+            m.first = m.send(node, { url: "/order/" + orderKey + "/low", priority: "low" })
+            m.second = m.send(node, { url: "/order/" + orderKey + "/high", priority: "high" })
+            promises.chain(promises.all([m.first, m.second]), m).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(responses[1].body.position, 1)
+                suite.assertEqual(responses[0].body.position, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("moves a waiting request up when it is promoted")
+        function _()
+            node = m.transport({ maxConcurrent: 1 })
+            orderKey = m.key("promote")
+            m.send(node, { url: "/slow/300" })
+            m.first = m.send(node, { url: "/order/" + orderKey + "/normal" })
+            m.second = m.send(node, { url: "/order/" + orderKey + "/promoted", priority: "low" })
+            node.promote = { id: m.second.id, priority: "high" }
+            promises.chain(promises.all([m.first, m.second]), m).then(function(responses as object, suite as object) as dynamic
+                suite.assertEqual(responses[1].body.position, 1)
+                suite.assertEqual(responses[0].body.position, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("drops a waiting request that is cancelled, and aborts one in flight")
+        function _()
+            node = m.transport({ maxConcurrent: 1 })
+            m.first = m.send(node, { url: "/slow/3000" })
+            m.second = m.send(node, { url: "/echo" })
+            node.cancel = { id: m.second.id, queuedOnly: true }
+            node.cancel = { id: m.first.id, queuedOnly: false }
+            promises.chain(promises.allSettled([m.first, m.second]), m).then(function(results as object, suite as object) as dynamic
+                suite.assertTrue(results[0].reason.cancelled)
+                suite.assertEqual(results[0].reason.kind, "cancelled")
+                suite.assertTrue(results[1].reason.cancelled)
+                suite.assertEqual(suite.transports[0].activeRequests, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("leaves a request in flight running when the cancel is for queued requests only")
+        function _()
+            node = m.transport()
+            m.first = m.send(node, { url: "/slow/300" })
+            node.cancel = { id: m.first.id, queuedOnly: true }
+            promises.chain(m.first, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.slow, 300)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("downloads")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("writes the body to the file and resolves with its path")
+        function _()
+            deleteFile("tmp:/spec-download.txt")
+            node = m.transport()
+            promises.chain(m.send(node, { url: "/file", toFile: "tmp:/spec-download.txt" }), m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.path, "tmp:/spec-download.txt")
+                suite.assertInvalid(response.body)
+                suite.assertEqual(readAsciiFile("tmp:/spec-download.txt"), "file contents")
+                suite.assertEqual(readAsciiFile("tmp:/spec-download.txt.part"), "")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("keeps an earlier copy when a download fails")
+        function _()
+            writeAsciiFile("tmp:/spec-keep.txt", "earlier")
+            node = m.transport({ retries: 0 })
+            promises.chain(m.send(node, { url: "/file-missing", toFile: "tmp:/spec-keep.txt" }), m).then(function(response as object, suite as object) as dynamic
+                suite.fail("resolved a 404 download")
+                suite.done()
+                return invalid
+            end function).catch(function(error as object, suite as object) as dynamic
+                suite.assertEqual(error.code, 404)
+                suite.assertEqual(readAsciiFile("tmp:/spec-keep.txt"), "earlier")
+                suite.assertEqual(readAsciiFile("tmp:/spec-keep.txt.part"), "")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("createHttpClient in a task")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        ' Runs ClientTask with a scenario and returns the promise it settles with the outcome
+        function inTask(scenario as string) as object
+            task = createObject("roSGNode", "ClientTask")
+            task.baseUrl = testServerUrl()
+            task.scenario = scenario
+            task.promise = promises.create()
+            task.control = "RUN"
+            m.transports.push(task)
+            return task.promise
+        end function
+
+        @async(10000)
+        @it("fills placeholders from args as fetch does, and leaves out the shared headers for auth: false")
+        function _()
+            promises.chain(m.inTask("fill"), m).then(function(outcome as object, suite as object) as dynamic
+                suite.assertEqual(outcome.status, "resolved")
+                echo = outcome.value.body
+                suite.assertEqual(echo.method, "POST")
+                suite.assertEqual(echo.path, "/echo?q=drama")
+                suite.assertEqual(echo.headers["x-id"], "7")
+                suite.assertInvalid(echo.headers["x-shared"])
+                suite.assertEqual(parseJson(echo.body).slug, "pilot")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends a GraphQL operation and resolves with its data, keeping partial errors")
+        function _()
+            promises.chain(m.inTask("graphql"), m).then(function(outcome as object, suite as object) as dynamic
+                suite.assertEqual(outcome.status, "resolved")
+                suite.assertEqual(outcome.value.body.a, 1)
+                suite.assertEqual(outcome.value.errors[0].message, "one field failed")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("retries after the backoff, woken by nextWait")
+        function _()
+            promises.chain(m.inTask("retry"), m).then(function(outcome as object, suite as object) as dynamic
+                suite.assertEqual(outcome.status, "resolved")
+                suite.assertEqual(outcome.value.body.count, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("cancels a request given its promise")
+        function _()
+            promises.chain(m.inTask("cancel"), m).then(function(outcome as object, suite as object) as dynamic
+                suite.assertEqual(outcome.status, "rejected")
+                suite.assertTrue(outcome.reason.cancelled)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("rejects a parser, which a task's client has no task for")
+        function _()
+            promises.chain(m.inTask("parser"), m).then(function(outcome as object, suite as object) as dynamic
+                suite.assertEqual(outcome.status, "rejected")
+                suite.assertEqual(outcome.reason.code, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+    end class
+end namespace

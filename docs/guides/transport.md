@@ -85,4 +85,4 @@ The store doesn't start a replacement. If it's a Task, start it yourself. A repl
 
 ## Next
 
-[Debugging](debugging.md)
+[Requests from a task](tasks.md)

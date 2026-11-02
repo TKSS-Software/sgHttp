@@ -42,7 +42,9 @@ npm test
 
 This builds the package, compiles the test app (`bsconfig-test.json`), deploys it, and prints the Rooibos report. The deploy goes through `scripts/rooibos.js`, which runs the Rooibos CLI but replaces the dev channel instead of deleting it first. Deleting it would wipe the registry that every sideloaded app shares, signing you out of the app you sideload next. The specs' disk cache lives in the test app's own `cachefs:/` folder, so clearing it never touches another sideloaded app's folder. The device's debug console (port 8085) must be free. A VS Code debug session or BrightScript console attached to the device makes the run fail with `SocketConnectionInUseError`.
 
-The specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
+The transport specs (`tests/components/sghttpTransport.spec.bs`) send real requests to a small server, `scripts/test-server.js`, which `npm test` starts on this machine on port 8099 and the Roku must be able to reach. Its address is written to `tests/source/testServer.brs` (ignored by git) by `npm run build` and `npm test`, so build once before compiling the tests in an editor.
+
+The cache specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
 
 ## Documentation
 

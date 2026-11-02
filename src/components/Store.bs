@@ -1,5 +1,6 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
+import "pkg:/source/request.bs"
 
 ' The cache singleton. Everything lives in m (never in fields) so reads never copy.
 ' Entry shape in m.cache[key] (see newEntry):
@@ -312,16 +313,6 @@ function _fetch(spec as dynamic, args = {} as object) as object
     ' Set here, not by normalize: only a fetch downloads to a file (see _define)
     if spec.toFile <> invalid then definition.toFile = spec.toFile
     return runUncached(definition, args, true)
-end function
-
-' Why a fetch can't download to a file as asked, or "": the body goes to the file, so there is
-' nothing to decode or parse, and only a GET is sent that way
-function downloadProblem(spec as object) as string
-    if not isNonEmptyString(spec.toFile) then return "needs a path"
-    if isNonEmptyString(spec.method) and ucase(spec.method) <> "GET" then return "is a GET; it can't be sent as " + ucase(spec.method)
-    if isNonEmptyString(spec.parser) then return "has no body to parse; it can't name a parser"
-    if type(spec.graphql) = "roAssociativeArray" then return "can't be a GraphQL request"
-    return ""
 end function
 
 sub _setScope(scopeName as string, value as dynamic, options = {} as object)
@@ -1436,206 +1427,14 @@ function copyOf(items as object) as object
     return copy
 end function
 
-' Resolves the request template against args/scopes for the transport.
+' The spec for a definition's request with these args (see fillRequest). A cached query reads,
+' whatever its method (a search sent as a POST), so it is retried as a GET would be.
 function buildRequestSpec(definition as object, args as object) as object
     request = definition.request
     ' A page after the first (its args carry the cursor) may have a request of its own
     if definition.pages <> invalid and definition.pages.request <> invalid and args[definition.pages.arg] <> invalid then request = definition.pages.request
-    if type(request) <> "roAssociativeArray" then request = {}
-    spec = {
-        url: fillTemplate(isNonEmptyString(request.url) ? request.url : "", args, m.scopes)
-        method: isNonEmptyString(request.method) ? request.method : "GET"
-        headers: {}
-        body: request.body
-        query: request.query
-        parseJson: request.parseJson <> false
-        successCodes: definition.successCodes
-        retries: request.retries
-        timeoutSeconds: definition.timeout
-        includeSharedHeaders: definition.auth
-        useProxy: definition.proxy
-        priority: definition.priority
-        ' A cached query reads, whatever its method (a search sent as a POST), and so does a
-        ' GraphQL query, cached or not: the transport retries it as it would a GET
-        safeToRepeat: definition.cache or (definition.graphql = true and not definition.graphqlMutation)
-    }
-    if type(spec.headers) <> "roAssociativeArray" then spec.headers = {}
-    ' A fetch that downloads: the body goes to the file, not to the caller
-    if isNonEmptyString(definition.toFile) then
-        spec.toFile = fillTemplate(definition.toFile, args, m.scopes)
-        spec.parseJson = false
-    end if
-    ' An unfilled path placeholder still reaches some other route on the server, with a
-    ' body that parses as nothing; say so instead of failing quietly.
-    if createObject("roRegex", "\{[A-Za-z0-9_]+\}", "").isMatch(spec.url) then
-        print `[sghttp] "${definition.name}" url has an unfilled placeholder: ${spec.url}`
-    end if
-    if type(request.headers) = "roAssociativeArray" then
-        for each headerName in request.headers
-            spec.headers[headerName] = fillTemplate(request.headers[headerName].toStr(), args, m.scopes)
-        end for
-    end if
-    if type(spec.query) = "roAssociativeArray" then
-        filled = {}
-        unfilled = createObject("roRegex", "\{[A-Za-z0-9_]+\}", "")
-        wholePlaceholder = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "")
-        for each queryName in spec.query
-            rawValue = spec.query[queryName]
-            if type(rawValue) = "roArray" then
-                ' Repeated parameter (?slug=a&slug=b); array values are passed through as-is
-                filled[queryName] = rawValue
-            else if rawValue <> invalid then
-                template = rawValue.toStr()
-                whole = wholePlaceholder.match(template)
-                if whole.count() = 2 and type(args[whole[1]]) = "roArray" then
-                    ' A value of exactly "{name}" takes an array arg as a repeated parameter
-                    if args[whole[1]].count() > 0 then filled[queryName] = args[whole[1]]
-                    continue for
-                end if
-                value = fillTemplate(template, args, m.scopes)
-                ' A placeholder that found no arg or scope, or filled to an empty value,
-                ' drops the parameter entirely (e.g. an optional profile id).
-                ' Fixed text in the definition is always sent.
-                fromPlaceholder = unfilled.isMatch(template)
-                if not unfilled.isMatch(value) and not (fromPlaceholder and value = "") then filled[queryName] = value
-            end if
-        end for
-        spec.query = filled
-    end if
-    if type(spec.body) = "roString" or type(spec.body) = "String" then
-        ' A body of exactly "{name}" passes args.name through untouched (objects and arrays included)
-        whole = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "").match(spec.body)
-        if whole.count() = 2 and args[whole[1]] <> invalid then
-            spec.body = args[whole[1]]
-        else
-            spec.body = fillTemplate(spec.body, args, m.scopes)
-        end if
-    else if type(spec.body) = "roAssociativeArray" then
-        filledBody = {}
-        for each bodyKey in spec.body
-            bodyValue = spec.body[bodyKey]
-            if type(bodyValue) = "roString" or type(bodyValue) = "String" then
-                filledBody[bodyKey] = fillTemplate(bodyValue, args, m.scopes)
-            else
-                filledBody[bodyKey] = bodyValue
-            end if
-        end for
-        spec.body = filledBody
-    end if
-    if type(request.graphql) = "roAssociativeArray" then
-        ' GraphQL: the operation goes as JSON, in a POST unless the request names a method. Its
-        ' text is never a template, since a selection set such as {slug} reads as a placeholder;
-        ' only variables are filled.
-        if not isNonEmptyString(request.method) then spec.method = "POST"
-        body = {}
-        body.setModeCaseSensitive()
-        body["query"] = request.graphql.query
-        if request.graphql.variables <> invalid then body["variables"] = fillVariables(request.graphql.variables, args)
-        if isNonEmptyString(request.graphql.operationName) then body["operationName"] = request.graphql.operationName
-        spec.body = body
-        spec.graphql = true
-    end if
-    return spec
-end function
-
-' GraphQL variables with values of exactly "{name}" taken from args, then scopes, as they are:
-' a number stays a number, an object an object. Other strings are filled as text, and nested
-' objects and arrays the same way. A "{name}" with no arg or scope is left out, so the server
-' sees the variable as null.
-function fillVariables(value as dynamic, args as object) as dynamic
-    valueType = type(value)
-    if valueType = "roAssociativeArray" then
-        filled = {}
-        filled.setModeCaseSensitive()
-        for each key in value
-            item = fillVariables(value[key], args)
-            if item <> invalid then filled[key] = item
-        end for
-        return filled
-    end if
-    if valueType = "roArray" then
-        filled = []
-        for each item in value
-            filled.push(fillVariables(item, args))
-        end for
-        return filled
-    end if
-    if valueType <> "roString" and valueType <> "String" then return value
-    whole = createObject("roRegex", "^\{([A-Za-z0-9_]+)\}$", "").match(value)
-    if whole.count() <> 2 then return fillTemplate(value, args, m.scopes)
-    name = whole[1]
-    if type(args) = "roAssociativeArray" and args[name] <> invalid then return args[name]
-    return m.scopes[name]
-end function
-
-' Whether a request has a GraphQL operation
-function hasGraphql(request as dynamic) as boolean
-    return type(request) = "roAssociativeArray" and type(request.graphql) = "roAssociativeArray"
-end function
-
-' Whether a GraphQL document's operation is a mutation: the operation operationName names, when
-' it is given and found in the document, else any top-level mutation in it. Only the top level
-' is read, outside strings and comments, so a field or argument called mutation is not one.
-function isGraphqlMutation(document as dynamic, operationName = "" as string) as boolean
-    if not isNonEmptyString(document) then return false
-    nameChars = createObject("roRegex", "[A-Za-z0-9_$]", "")
-    operations = []
-    naming = false   ' the last word was an operation keyword: a name may follow
-    depth = 0
-    word = ""
-    inString = false
-    inComment = false
-    escaped = false
-    document = document + " "   ' so the last word is handled in the loop
-    for i = 0 to document.len() - 1
-        c = document.mid(i, 1)
-        if depth = 0 and not inString and not inComment and nameChars.isMatch(c) then
-            word = word + c
-        else
-            if word <> "" then
-                if word = "query" or word = "mutation" or word = "subscription" then
-                    operations.push({ type: word, name: "" })
-                    naming = true
-                else if naming then
-                    operations.peek().name = word
-                    naming = false
-                end if
-                word = ""
-            end if
-            if inComment then
-                if c = chr(10) or c = chr(13) then inComment = false
-            else if inString then
-                if escaped then
-                    escaped = false
-                else if c = "\" then
-                    escaped = true
-                else if c = chr(34) then
-                    inString = false
-                end if
-            else
-                if c = "#" then
-                    inComment = true
-                else if c = chr(34) then
-                    inString = true
-                else if c = "{" then
-                    depth++
-                else if c = "}" then
-                    depth--
-                end if
-                ' Anything but whitespace after the keyword: the operation has no name
-                if naming and c <> " " and c <> "," and c <> chr(9) and c <> chr(10) and c <> chr(13) then naming = false
-            end if
-        end if
-    end for
-    if operationName <> "" then
-        for each operation in operations
-            if operation.name = operationName then return operation.type = "mutation"
-        end for
-    end if
-    for each operation in operations
-        if operation.type = "mutation" then return true
-    end for
-    return false
+    safeToRepeat = definition.cache or (definition.graphql = true and not definition.graphqlMutation)
+    return fillRequest(request, args, m.scopes, { timeout: definition.timeout, auth: definition.auth, proxy: definition.proxy, successCodes: definition.successCodes, priority: definition.priority, toFile: definition.toFile, name: definition.name, safeToRepeat: safeToRepeat })
 end function
 
 ' What a GraphQL query resolves with: the response's data. A response with errors and no data
