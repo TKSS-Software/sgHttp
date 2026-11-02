@@ -2,9 +2,10 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 
 ' The cache singleton. Everything lives in m (never in fields) so reads never copy.
-' Entry shape in m.cache[key]:
-'   { id, name, scopes, promise, value, hasValue, storedAt, freshUntil, hash, etag, lastModified,
-'     expired, expiredSequence }
+' Entry shape in m.cache[key] (see newEntry):
+'   { id, name, args, scopes, bucket, promise, value, hasValue, storedAt, freshUntil, hash,
+'     parsedHash, etag, lastModified, expired, expiredSequence, chain, head, nextPending, fetch,
+'     setId }
 '   id       - unique per entry, so a request can tell the entry it started for from one made
 '              after a drop
 '   promise  - pending promise while a fetch is in flight (shared by all callers)
@@ -17,6 +18,10 @@ import "pkg:/source/keys.bs"
 '   expiredSequence - the request sequence number at expiry: a request started before it
 '              answers its own callers but never writes to the entry
 '   bucket   - the time bucket the key was made in (bucket definitions), -1 otherwise
+'   chain, head - pages: a first page's keys of the pages loaded after it; a later page's first page
+'   nextPending - pages: the nextPage load running for a first page
+'   fetch    - the context of the request in flight for it (cancel, promote and nextPage use it)
+'   args, setId - see newEntry
 
 const PERSIST_DIR = "cachefs:/sghttp"
 ' Where bodies were stored when the library was called sgQuery
@@ -271,11 +276,6 @@ function normalizePages(pages as dynamic) as dynamic
     }
 end function
 
-' One request with no definition and no cache: sghttp as a plain HTTP client. The spec is a
-' url, or a define request (url, method, headers, body, query, parseJson, retries) plus the
-' definition keys a request can use (client, auth, proxy, timeout, successCodes, parser) and a
-' name for events. Resolves with the whole response, since a caller here wants the status and
-' headers.
 function _fetch(spec as dynamic, args = {} as object) as object
     if type(spec) = "roString" or type(spec) = "String" then
         if spec.left(1) <> "/" and lcase(spec.left(4)) <> "http" then
@@ -332,8 +332,6 @@ sub _setScope(scopeName as string, value as dynamic, options = {} as object)
     end if
 end sub
 
-' Merged into the client's shared headers (the default client's when none is named). A header
-' set to invalid is removed, e.g. Authorization on sign-out.
 sub _setHeaders(headers as object, clientName = "" as string)
     if clientName = "" then clientName = DEFAULT_CLIENT
     client = m.clients[clientName]
@@ -369,8 +367,6 @@ sub _onUnauthorized(watcher as dynamic, clientName = "" as string)
     client.authWatcher = isNode(watcher) ? watcher : invalid
 end sub
 
-' The app's answer to an unauthorized event: headers (merged as setHeaders does) send the held
-' requests again with them; invalid lets them fail with their 401.
 sub _reauthorize(headers as dynamic, clientName = "" as string)
     if clientName = "" then clientName = DEFAULT_CLIENT
     client = m.clients[clientName]
@@ -451,10 +447,6 @@ function _query(name as string, args = {} as object, options = {} as object) as 
     return promises.resolve(answerFor(definition, lookup.key, m.cache[lookup.key].value))
 end function
 
-' Starts a query without waiting for it, so a later query finds it in flight or in memory:
-' for data a screen will want, asked for before the screen opens. Nothing happens when
-' memory holds a fresh value or a request is already in flight. Returns whether a disk
-' read or a request started.
 function _precache(name as string, args = {} as object) as boolean
     definition = m.definitions[name]
     if definition = invalid then
@@ -480,12 +472,6 @@ function _precache(name as string, args = {} as object) as boolean
     return true
 end function
 
-' Gives up a promise fetch, query, mutate or nextPage returned. A fetch or mutation is
-' cancelled: dropped if it is still queued, aborted if it is in flight and its method is GET or
-' HEAD (any other method may already have changed something on the server, so it is left to
-' finish), and its promise rejects with { cancelled: true }. A cached query's request is shared,
-' and the cache still wants its answer, so the caller only gives up its claim: a request no one
-' else is waiting on drops to low priority. Returns whether the promise was still pending.
 function _cancel(promise as dynamic) as boolean
     if not isNode(promise) then return false
     context = m.calls[promise.id]
@@ -644,11 +630,6 @@ end function
 '#region Local writes
 '*************************************************************************
 
-' Puts a value in the cache for these args, as fresh as a response now, and hands it to
-' watchers (source "local"): for a change the app made and already knows the result of.
-' invalid removes the entry. Returns the previous value, or invalid, so a failed write can
-' put it back. A response to a request that started before the write does not replace it
-' (its callers still get it); the disk copy is deleted, since it is from before the change.
 function _set(name as string, args = {} as object, value = invalid as dynamic) as dynamic
     definition = m.definitions[name]
     if definition = invalid then
@@ -764,9 +745,6 @@ end sub
 ' it, in order (chain); each of those names the head. query and nextPage resolve with every
 ' page in the chain: { pages, hasNext }.
 
-' Loads the page after the last one loaded for these args and resolves with all of them.
-' Nothing loaded yet: the first page. No next page: the pages as they are, without a request.
-' A load already running for these args is shared.
 function _nextPage(name as string, args = {} as object) as object
     definition = m.definitions[name]
     if definition = invalid then return promises.reject({ message: `sghttp: no query named "${name}"` })
@@ -1560,12 +1538,6 @@ function buildRequestSpec(definition as object, args as object) as object
     return spec
 end function
 
-'#endregion
-
-'*************************************************************************
-'#region Removal and eviction
-'*************************************************************************
-
 ' GraphQL variables with values of exactly "{name}" taken from args, then scopes, as they are:
 ' a number stays a number, an object an object. Other strings are filled as text, and nested
 ' objects and arrays the same way. A "{name}" with no arg or scope is left out, so the server
@@ -1596,8 +1568,7 @@ function fillVariables(value as dynamic, args as object) as dynamic
     return m.scopes[name]
 end function
 
-' Whether a GraphQL document's operation is a mutation: its keyword is read at the top level
-' only (outside braces, strings and comments), so a field named mutation never counts
+' Whether a request has a GraphQL operation
 function hasGraphql(request as dynamic) as boolean
     return type(request) = "roAssociativeArray" and type(request.graphql) = "roAssociativeArray"
 end function
@@ -1674,6 +1645,12 @@ function graphqlData(definition as object, body as dynamic) as dynamic
     return body
 end function
 
+'#endregion
+
+'*************************************************************************
+'#region Removal and eviction
+'*************************************************************************
+
 sub _removeAll()
     for each key in m.cache.keys()
         removeEntry(key)
@@ -1714,8 +1691,6 @@ sub _remove(name = invalid as dynamic, args = invalid as dynamic)
     end if
 end sub
 
-' Every cached value becomes stale (kept, served, revalidated on its next fetch): the app
-' was away long enough that anything may have changed
 sub _expireAll()
     for each key in m.cache
         entry = m.cache[key]
@@ -1723,11 +1698,8 @@ sub _expireAll()
     end for
 end sub
 
-' The app knows this data changed (it just wrote it): every matching entry keeps its value
-' (peek and revalidate fetches still get it) but a plain fetch waits for the server, and a
-' disk copy stored before now is not served. Name only: the query and its dotted
-' descendants, like remove. A request already in flight may hold the old answer: it
-' still answers its callers but is no longer shared or stored.
+' A request already in flight may hold the old answer: it still answers its callers but is no
+' longer shared or stored
 sub _expire(name as string, args = invalid as dynamic)
     if not isNonEmptyString(name) then return
     m.sequence++
@@ -1854,11 +1826,6 @@ sub _unwatch(watcher as object)
     end for
 end sub
 
-' Asks the server again, now, for every entry of the query (and its dotted descendants) that
-' has a watcher; with args, that one entry when it is watched; with no name, every watched
-' entry. Each keeps serving its value meanwhile, and a different answer reaches its watchers
-' (see watch). Entries nobody watches are left as they are: revalidate is for one of those.
-' Resolves once every refresh has settled, with the number started.
 function _refresh(name = invalid as dynamic, args = invalid as dynamic) as object
     started = []
     now = nowSeconds()

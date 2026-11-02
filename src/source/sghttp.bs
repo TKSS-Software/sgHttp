@@ -87,57 +87,103 @@ interface Pages
     optional byPosition as boolean
 end interface
 
-' What define takes (see define for each key's meaning and default)
+' What define takes. Every cached query compares the response body's hash with the cached one:
+' an unchanged payload renews the entry without parsing and without a change notification.
 interface Definition
+    ' {name} placeholders are filled from args, then scopes
     request as Request
+    ' A parser name for the parser task's getParser(name); runs off the render thread
     optional parser as string
+    ' Seconds a value is fresh. Negative: until expired or removed. Default: the response's
+    ' Cache-Control, else initialize's defaultTtl (300)
     optional ttl as integer
+    ' A stale value is returned at once and refreshed in the background. Default true
     optional staleWhileRevalidate as boolean
+    ' Writes the raw response to cachefs:/ and serves it on a cold start. Default false
     optional persist as boolean
+    ' Scope names (see setScope) that join the key, e.g. ["profile"]
     optional scopes as object
+    ' Seconds: floor(now / bucket) joins the key, so time-sensitive data rolls over
     optional bucket as integer
+    ' HTTP statuses treated as success. Default 200-299
     optional successCodes as object
+    ' false for mutations and per-call resources (stream urls): sends the request, never stores
+    ' the result. Default true
     optional cache as boolean
+    ' Query names (each with its dotted descendants) removed after a cache: false request succeeds
     optional removes as object
+    ' Query names (each with its dotted descendants) expired after a cache: false request succeeds,
+    ' and refreshed where watched: the usual choice for a mutation
     optional expires as object
+    ' A client from initialize's clients. Default: the default client. Query names are shared by
+    ' all clients, so prefix another server's queries ("partner.homePage")
     optional client as string
+    ' false leaves the client's shared headers out. Default true
     optional auth as boolean
+    ' false sends directly even when a debugging proxy is set. Default true
     optional proxy as boolean
+    ' Seconds before a request with no answer is given up and retried. Default: the client's (30)
     optional timeout as integer
+    ' true sends the last ETag / Last-Modified back; a 304 renews the value. Default false
     optional conditional as boolean
+    ' "parsed" also compares the parsed value when the body differs, for responses with volatile
+    ' fields the parser drops. Default "body"
     optional compare as string
+    ' Makes this a query with pages: query and nextPage resolve with { pages, hasNext }
     optional pages as Pages
     ' "high", "normal" or "low": where this query's requests wait when the transport's pool is
     ' busy. Default "normal". Background refreshes and precaches queue low whatever this says.
     optional priority as string
 end interface
 
-' A server's settings: initialize's top level for the default client, or one of clients
+' A server's settings: initialize's top level for the default client, or one of clients. A client
+' inherits nothing from the default one.
 interface ClientSettings
+    ' Prefix for relative request urls
     optional baseUrl as string
+    ' Shared headers sent with every request except auth: false ones (e.g. Authorization)
     optional headers as object
+    ' Headers sent with every request, even auth: false ones
     optional baseHeaders as object
+    ' A debugging proxy as "host:port" (e.g. Charles): a public host's url becomes
+    ' http://host:port/;<url>. Empty turns it off
     optional proxy as string
+    ' Requests in flight at once. Default 4
     optional maxConcurrent as integer
+    ' Seconds before a request is given up. Default 30
     optional timeout as integer
+    ' Retries for network failures, 429 and 5xx. Default 1
     optional retries as integer
+    ' "http2" to request HTTP/2
     optional httpVersion as string
+    ' A node with makeRequest(spec) returning a promise node. Default: a Transport task
     optional transport as object
 end interface
 
-' What initialize takes (see initialize for each key's meaning and default)
+' What initialize takes: the top-level ClientSettings configure the default client
 interface InitializeParams extends ClientSettings
+    ' Component name of a Task extending ParserTask that implements getParser(name)
     optional parserTask as string
+    ' How many of parserTask to run, each parse going to the least busy. Default 2
     optional parserThreads as integer
+    ' false turns cachefs:/ persistence off for every query. Default true
     optional persist as boolean
+    ' Cache version; change it to stop every body on disk from being read. Rarely needed. Default "1"
     optional version as string
+    ' This app's folder under cachefs:/sghttp/. Default: <id>_<title>-<hash>_<app version> from
+    ' roAppInfo, so sideloaded apps never share bodies and each release starts empty
     optional namespace as string
+    ' In-memory entry cap, least recently used evicted first (the disk copy stays). Default 100
     optional maxEntries as integer
+    ' Seconds, for definitions without a ttl whose responses carry no max-age. Default 300
     optional defaultTtl as integer
-    ' { <name>: ClientSettings }
+    ' More servers: { <name>: ClientSettings }, each with its own transport and shared headers
     optional clients as object
+    ' true prints every event and change to the console with its cache key. Default false
     optional debug as boolean
+    ' An existing Store node (tests)
     optional store as object
+    ' An existing Persistence node to run file operations on (tests)
     optional persistence as object
     ' { id, title, version } to name the disk namespace with instead of roAppInfo (tests)
     optional appInfo as object
@@ -226,38 +272,9 @@ end interface
 
 '#endregion
 
-' Creates the Store singleton on the scene and returns it. Idempotent: a second
-' call returns the existing store.
-' @param {Object} params
-'   The top-level baseUrl, proxy, headers, baseHeaders, transport, maxConcurrent, timeout,
-'   retries and httpVersion configure the default client: the server every definition
-'   without a client talks to. An app with one server needs nothing else.
-'   transport   - node exposing makeRequest(spec) that returns a promise node. Default: a Transport task.
-'   parserTask  - component name of a Task extending ParserTask that implements getParser(name). Optional.
-'   parserThreads - how many of parserTask to run, each parse going to the least busy. Default 2.
-'   baseUrl     - prefix for relative request urls. Optional.
-'   proxy       - debugging proxy as "host:port" (e.g. Charles); every request url to a public host becomes
-'                 http://host:port/;<url>. Empty or missing disables it. Optional.
-'   headers     - associative array of headers sent with every request (e.g. Authorization). Optional.
-'   baseHeaders - headers sent with every request without exception, even where auth is false. Optional.
-'   persist     - enable cachefs:/ persistence for definitions that opt in. Default true.
-'   version     - cache version string; bump to stop every body on disk from being read. Rarely needed:
-'                 the app version (namespace), the server (baseUrl) and the definition already keep
-'                 bodies apart. Default "1".
-'   namespace   - this app's folder under cachefs:/sghttp/. Default: <channel id>_<title>-<hash>_<app version>
-'                 from roAppInfo, so sideloaded apps (all "dev") never share bodies, and each release
-'                 starts empty (the same app's other versions' folders are deleted). Optional.
-'   maxEntries  - in-memory entry cap, least recently used evicted first (the disk copy stays). Default 100.
-'   defaultTtl  - seconds; used by definitions without a ttl. Default 300.
-'   maxConcurrent, timeout, retries, httpVersion - the default client's Transport settings. Optional.
-'   clients     - more servers: { <name>: { baseUrl, headers, baseHeaders, proxy, maxConcurrent,
-'                 timeout, retries, httpVersion, transport } }, each with its own transport and
-'                 shared headers, inheriting nothing from the default client. A definition picks
-'                 one with client: "<name>". Optional.
-'   debug       - true prints every event and change to the console with its cache key, as
-'                 "[sghttp] <type> <name> via <source> (<ms>ms) <key>". Default false.
-'   store       - an existing Store node (tests). Optional.
-'   persistence - an existing Persistence node to run file operations on (tests). Optional.
+' Creates the Store singleton on the scene and returns it. Idempotent: a second call returns the
+' existing store and ignores params. params: see InitializeParams; an app with one server needs
+' only baseUrl.
 function initialize(params = {} as InitializeParams) as object
     scene = m.top.getScene()
     existing = scene.__sghttp
@@ -274,46 +291,9 @@ function getStore() as object
     return m.top.getScene().__sghttp
 end function
 
-' Registers a query definition.
+' Registers a query. Defining a name again replaces the definition, with a console warning.
 ' @param {String} name - unique query name, also the first segment of every cache key
-' @param {Object} definition
-'   request  - { url, method, headers, body, query, parseJson } with {arg} placeholders filled from args and scopes,
-'              or { url, graphql: { query, variables, operationName } } for a GraphQL operation (see GraphQL)
-'   parser   - parser name resolved by the parser task's getParser(name); runs off the render thread. Optional.
-'   ttl      - seconds a resolved value is fresh. Omitted: initialize's defaultTtl (300).
-'              Negative: fresh until expired or removed.
-'   staleWhileRevalidate - when true, a stale value is returned immediately and refetched in the background. Default true.
-'   persist  - write the raw response to cachefs:/ and serve it on cold start. Default false.
-'   scopes   - array of scope names (see setScope) that become part of the key, e.g. ["profile"].
-'   bucket   - seconds; floor(now / bucket) joins the key so time-sensitive data rolls over. Optional.
-'   successCodes - array of HTTP codes treated as success. Default 200-299.
-'   cache    - false for mutations and per-call resources (stream urls): runs the request, never stores. Default true.
-'   removes  - array of query names (the query and its dotted descendants) removed after a cache: false request succeeds.
-'   expires  - array of query names (the query and its dotted descendants) expired (see expire) after a cache: false request
-'              succeeds, and refreshed where watched (see refresh): the usual choice for a mutation,
-'              since the old value stays available and the screens showing it get the server's word.
-'   client   - the name of a client from initialize({ clients }) this query talks to. Default: the
-'              default client (initialize's top-level settings). Query names are shared by all
-'              clients: give another server's queries its name as a prefix ("partner.homePage").
-'   auth     - false to omit the client's shared headers (auth) from this query. Default true.
-'   proxy    - false to send the request directly even when a debugging proxy is set. Default true.
-'   timeout  - seconds before a request with no answer is given up (and retried); default the
-'              transport's (30). Short for endpoints that can stall, so a retry comes sooner.
-'   conditional - true to send the last response's ETag / Last-Modified back (If-None-Match /
-'              If-Modified-Since); a 304 renews the cached value. Default false.
-'   compare  - "parsed" also compares the parsed value (MD5 of its JSON, computed in the
-'              parser task) when the body differs: the same parsed value renews the entry
-'              without a change notification. For responses with volatile fields the parser
-'              drops. Default "body".
-'   pages    - { next, arg, request, hasNext, byPosition } makes this a query with pages: next is the path in a page's value
-'              to the cursor of the page after it (empty or missing on the last page, unless hasNext,
-'              a path to whether a page follows, says so instead: Relay's pageInfo.hasNextPage), arg the arg
-'              that cursor is passed as (default "next"), request the request for pages after the
-'              first (default: request). query and nextPage then resolve with { pages, hasNext }.
-'              byPosition: true for an API that cuts pages by position (page=2): a later page that
-'              has expired (a mutation's expires) is read again by nextPage, not kept.
-' Every cached query compares the response body's hash with the cached one: an unchanged
-' payload renews the entry without parsing and without a change notification.
+' @param {Object} definition - see Definition
 sub define(name as string, definition as Definition)
     getStore().callFunc("_define", name, definition)
 end sub
