@@ -6,6 +6,8 @@ sgHttp covers what a web app gets from `fetch` plus TanStack Query, SWR or Apoll
 
 **To mark data out of date after a write, use `expire`, or a mutation's `expires`, not `remove`.** TanStack Query's `invalidateQueries` is sgHttp's `expire` followed by `refresh`, and a mutation's `expires: [...]` does both for you. sgHttp's `remove` is TanStack's `removeQueries`: the value is deleted from memory and disk, so the next query waits for the server. See [Mutations, expiry and removal](guides/mutations.md).
 
+**`fetch` rejects on a status outside 200–299**, unlike web `fetch`, which resolves on a `404` and leaves you to check `response.ok`. Set `successCodes` to accept others.
+
 ## Threads
 
 | Roku | Web | tvOS | Fire TV |

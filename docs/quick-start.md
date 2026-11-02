@@ -88,6 +88,8 @@ sub onRequestEvent(event as object)
 end sub
 ```
 
+This signs the user out when a token expires. If your API issues refresh tokens, use [`onUnauthorized`](guides/requests.md#when-the-token-expires) instead: the requests answered `401` wait while the app renews the token, then are sent again, and this event fires only for a request that still fails.
+
 ### 5. Handle failures
 
 A promise rejects when the status is outside 200–299 or the request couldn't complete. `error.code` is the HTTP status, or negative for a network failure: the curl error code `roUrlTransfer` reports, such as `-28` for a timeout. The transport retries with backoff before the promise settles, so by the time `catch` runs, it has already given up.
@@ -259,7 +261,7 @@ end function
 ## What you have now
 
 - Every request in the app goes through one pooled transport, with retries, a timeout and the user's auth header, and comes back as a promise.
-- A 401 from any request sends the app to sign-in.
+- A 401 from any request sends the app to sign-in (or, with `onUnauthorized`, renews the token first).
 - When the home screen opens again within five minutes, its query is returned from memory with no request and no parsing, so the screen draws at once.
 - After five minutes, the query is still returned at once from the cache, and sgHttp checks the server in the background. If the response is unchanged, nothing is parsed and nothing is redrawn. If it changed, `onHomeChanged` receives the new tree.
 - On the next launch, the query is returned from the body saved on `cachefs:/`, so the home screen draws before the network answers. sgHttp then refreshes it if it's older than five minutes.

@@ -77,7 +77,7 @@ This is what a mutation's `expires` list does, and it's usually the right choice
 ```brightscript
 sghttp.remove("homePage", { slug: "main" })       ' one entry
 sghttp.remove("homePage")                         ' every homePage entry, and homePage.* queries
-sghttp.remove()                                   ' everything, memory and disk
+sghttp.removeAll()                                ' everything, memory and disk
 ```
 
 ### Matching

@@ -67,6 +67,8 @@ interface FetchSpec extends Request
     optional name as string
     ' "high", "normal" or "low": where the request waits when the transport's pool is busy
     optional priority as string
+    ' A path (tmp:/ or cachefs:/) to write a GET's body to; resolves with path, not body (see Downloading to a file)
+    optional toFile as string
 end interface
 
 ' The pages of a query loaded a page at a time (see define's pages)
@@ -137,6 +139,8 @@ interface InitializeParams extends ClientSettings
     optional debug as boolean
     optional store as object
     optional persistence as object
+    ' { id, title, version } to name the disk namespace with instead of roAppInfo (tests)
+    optional appInfo as object
 end interface
 
 ' What fetch resolves with, and what a failing status or network error rejects with
@@ -151,6 +155,14 @@ interface Response
     ms as integer
     ' On a failure
     optional message as string
+    ' A network failure or cancel: offline | timeout | dns | tls | connection | network | cancelled
+    optional kind as string
+    ' A cancelled call
+    optional cancelled as boolean
+    ' A GraphQL response's errors, alongside partial data or on failure
+    optional errors as object
+    ' fetch with toFile: where the body was written
+    optional path as string
 end interface
 
 ' What query, nextPage and peek answer with for a query defined with pages
@@ -190,7 +202,7 @@ end interface
 
 ' An event, from observeEvents (the store's lastEvent)
 interface Event
-    ' hit | stale | dedupe | resolve | unchanged | set | error
+    ' hit | stale | dedupe | resolve | unchanged | set | error | cancel
     type as string
     name as string
     key as string
@@ -276,8 +288,8 @@ end function
 '   bucket   - seconds; floor(now / bucket) joins the key so time-sensitive data rolls over. Optional.
 '   successCodes - array of HTTP codes treated as success. Default 200-299.
 '   cache    - false for mutations and per-call resources (stream urls): runs the request, never stores. Default true.
-'   removes  - array of query names (prefix match) removed after a cache: false request succeeds.
-'   expires  - array of query names (prefix match) expired (see expire) after a cache: false request
+'   removes  - array of query names (the query and its dotted descendants) removed after a cache: false request succeeds.
+'   expires  - array of query names (the query and its dotted descendants) expired (see expire) after a cache: false request
 '              succeeds, and refreshed where watched (see refresh): the usual choice for a mutation,
 '              since the old value stays available and the screens showing it get the server's word.
 '   client   - the name of a client from initialize({ clients }) this query talks to. Default: the
@@ -394,10 +406,17 @@ function peek(name as string, args = {} as object) as dynamic
     return getStore().callFunc("_peek", name, args)
 end function
 
-' Removes cached entries from memory and disk. No arguments: everything. Name only: every
-' entry for that query. Name and args: that one entry. Compare expire, which keeps the value.
-sub remove(name = invalid as dynamic, args = invalid as dynamic)
+' Removes cached entries from memory and disk. Name only: every entry of the query and its
+' dotted descendants. Name and args: that one entry. Compare expire, which keeps the value,
+' and removeAll, which removes everything.
+sub remove(name as string, args = invalid as dynamic)
     getStore().callFunc("_remove", name, args)
+end sub
+
+' Removes every cached entry from memory, and every stored body in this app's folder on cachefs:/
+' (sign-out). Other apps' folders are never touched.
+sub removeAll()
+    getStore().callFunc("_removeAll")
 end sub
 
 ' Marks data the app knows has changed (it just wrote it) as out of date without dropping it.
@@ -530,7 +549,8 @@ function getStats() as object
     return getStore().callFunc("_getStats")
 end function
 
-' Clears the cache, stops the tasks and removes the scene field.
+' Clears the memory cache, stops the tasks and removes the scene field. The disk copies stay:
+' call removeAll() first to drop them too.
 sub destroy()
     store = getStore()
     if isNode(store) then

@@ -1674,13 +1674,18 @@ function graphqlData(definition as object, body as dynamic) as dynamic
     return body
 end function
 
+sub _removeAll()
+    for each key in m.cache.keys()
+        removeEntry(key)
+    end for
+    clearPersisted()
+    m.expiries = {}
+end sub
+
 sub _remove(name = invalid as dynamic, args = invalid as dynamic)
-    if name = invalid then
-        for each key in m.cache.keys()
-            removeEntry(key)
-        end for
-        clearPersisted()
-        m.expiries = {}
+    ' Removing everything takes removeAll, so a name that is unexpectedly invalid can't wipe the cache
+    if not isNonEmptyString(name) then
+        print `[sghttp] remove needs a query name; removeAll() removes everything`
         return
     end if
 

@@ -49,7 +49,7 @@ Shared headers, `auth: false` and `baseHeaders` work per client as described in 
 
 ## What stays shared
 
-The cache, scopes, watchers, `expireAll` and `remove()` cover every client. Two clients can't hold separate copies of the same query name.
+The cache, scopes, watchers, `expireAll` and `removeAll` cover every client. Two clients can't hold separate copies of the same query name.
 
 ## Telling clients apart
 

@@ -274,12 +274,32 @@ namespace tests
             end function)
         end function
 
+        @async
+        @it("removes nothing without a query name: removing everything takes removeAll")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.store.callFunc("_remove", invalid, invalid)
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "a")
+                suite.store.callFunc("_removeAll")
+                suite.assertInvalid(suite.store.callFunc("_peek", "items", { id: "1" }))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         ' A store that persists to cachefs, holding one entry in memory, so a second key evicts
-        ' the first to disk only. Starts with an empty disk cache: remove() clears only this
+        ' the first to disk only. Starts with an empty disk cache: removeAll() clears only this
         ' app's folder, never another sideloaded app's.
         function makePersistingStore()
             m.makeAppStore("spec app", "1.0.0")
-            m.store.callFunc("_remove", invalid, invalid)
+            m.store.callFunc("_removeAll")
         end function
 
         ' A persisting store as the app with this title and version would make it (its disk folder
@@ -381,7 +401,7 @@ namespace tests
                 ' Another sideloaded app with the same query clears its cache and fetches. Its
                 ' title differs only in punctuation, which folder names cannot carry.
                 suite.makeAppStore("spec-app", "1.0.0")
-                suite.store.callFunc("_remove", invalid, invalid)
+                suite.store.callFunc("_removeAll")
                 suite.fake.callFunc("answerNext", "other")
                 return suite.query("1")
             end function).then(function(value as dynamic, suite as object) as dynamic
@@ -439,7 +459,7 @@ namespace tests
         @it("does not read bodies from another server (QA and production), and sweeps them out")
         function _()
             m.makeAppStore("spec app", "1.0.0", "https://qa.example.com")
-            m.store.callFunc("_remove", invalid, invalid)
+            m.store.callFunc("_removeAll")
             promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
                 ' The same build pointed at production does not read QA's copy
                 suite.makeAppStore("spec app", "1.0.0", "https://api.example.com")
@@ -1216,7 +1236,7 @@ namespace tests
         @it("keeps a parsed body on disk as its text and parses it again after a restart")
         function _()
             m.makeParsingStore(true)
-            m.store.callFunc("_remove", invalid, invalid)
+            m.store.callFunc("_removeAll")
             m.fake.callFunc("answerNext", `{"word":"abc"}`)
             promises.chain(m.store.callFunc("_query", "words", { id: "1" }, {}), m).then(function(value as dynamic, suite as object) as dynamic
                 suite.assertEqual(value, "abc")

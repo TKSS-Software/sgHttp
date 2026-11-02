@@ -11,7 +11,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize)
 - Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
-- Cache control: [`expire`](#expire), [`remove`](#remove), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`removeScope`](#removescope), [`setHeaders`](#setheaders)
+- Cache control: [`expire`](#expire), [`remove`](#remove), [`removeAll`](#removeall), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`removeScope`](#removescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
 - Instrumentation: [`observeEvents`](#observeevents), [`unobserveEvents`](#unobserveevents), [`getStats`](#getstats)
 
@@ -164,18 +164,27 @@ Doesn't notify watchers.
 ## remove
 
 ```brightscript
-sghttp.remove(name = invalid as dynamic, args = invalid as dynamic)
+sghttp.remove(name as string, args = invalid as dynamic)
 ```
 
 Drops values from memory and disk.
 
-- No arguments: everything, including every file in this app's folder under `cachefs:/sghttp/`.
 - Name only: every entry of the query and its dotted descendants, and their files.
 - Name and args: the one entry those args key to now, and the pages loaded after it, with their files.
 
 A request in flight for a dropped entry still resolves for its callers, but its result isn't stored. Doesn't notify watchers.
 
 To mark data out of date and keep showing it, use [`expire`](#expire) instead. TanStack Query's `invalidateQueries` is `expire`; `remove` is its `removeQueries`.
+
+A name that is `invalid` removes nothing and prints a warning; removing everything takes [`removeAll`](#removeall).
+
+## removeAll
+
+```brightscript
+sghttp.removeAll()
+```
+
+Drops every value from memory, and every file in this app's folder under `cachefs:/sghttp/`, including those stored by an earlier launch. Other apps' folders are never touched. For sign-out. Doesn't notify watchers.
 
 ## expireAll
 
@@ -327,4 +336,4 @@ Returns the store node, or `invalid` before `initialize`.
 sghttp.destroy()
 ```
 
-Clears the in-memory cache, watchers and expiry records, stops the parser and persistence tasks and every transport (a replacement transport only if it has a `shutdown` field), and removes the store from the scene. Files on `cachefs:/` stay; call `remove()` first to remove them. A later `initialize` creates a fresh store.
+Clears the in-memory cache, watchers and expiry records, stops the parser task, and the persistence task and transports sgHttp created, and removes the store from the scene. A transport or persistence node the app passed in is left running. Calls still waiting reject as cancelled. Files on `cachefs:/` stay; call [`removeAll`](#removeall) first to remove them. A later `initialize` creates a fresh store.

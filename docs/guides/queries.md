@@ -49,6 +49,8 @@ name | scope=value ... | bucket=N | args
 - **bucket**: the current time bucket, for definitions with `bucket` (see [Time buckets](scopes-and-buckets.md#time-buckets)).
 - **args**: the args, serialized with associative array keys sorted, so `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` are the same key. A node in the args is keyed by its `id`.
 
+Keys ignore case, as BrightScript does: `{ id: "ABC" }` and `{ id: "abc" }` are the same key, and so are the query names `"favorites"` and `"Favorites"`.
+
 Every arg is part of the key, including args the request doesn't use. Passing `{ showId: "abc", from: "home" }` and `{ showId: "abc" }` creates two entries, even though they send the same request. Only pass the args that identify the data.
 
 ## Next
