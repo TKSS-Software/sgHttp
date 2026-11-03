@@ -8,7 +8,19 @@
 
 ## Install with ropm
 
-sgHttp isn't published to npm. Build it from a checkout, then install it from the folder:
+sgHttp isn't on npm yet. Each release candidate is a GitHub release with the package attached, and ropm installs it from that file's url. In your channel:
+
+```sh
+npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.1/sghttp-0.1.0-rc.1.tgz
+```
+
+That line always names the latest candidate; every candidate is listed under [Releases](https://github.com/TKSS-Software/sgHttp/releases) with its own. Your package.json records the url, as it would a version, and `npx ropm install` on another machine installs the same build. When sgHttp reaches npm, the line becomes `npx ropm install sghttp`.
+
+ropm copies the package into your channel's `roku_modules` folders and prefixes its names with `sghttp_`: the `Store` component becomes `sghttp_Store`, the `ParserTask` component becomes `sghttp_ParserTask`, and so on.
+
+### From a checkout
+
+To work on sgHttp itself, or try a change before it's a candidate, build it from a checkout and install it from the folder:
 
 ```sh
 git clone https://github.com/TKSS-Software/sgHttp.git
@@ -22,9 +34,7 @@ Then, in your channel:
 npx ropm install sghttp@file:../sgHttp
 ```
 
-ropm copies the package into your channel's `roku_modules` folders and prefixes its names with `sghttp_`: the `Store` component becomes `sghttp_Store`, the `ParserTask` component becomes `sghttp_ParserTask`, and so on.
-
-After changing sgHttp itself, rebuild it (`npm run build`), then run `npx ropm copy` in the channel to pick up the new build.
+After changing sgHttp, rebuild it (`npm run build`), then run `npx ropm copy` in the channel to pick up the new build.
 
 ## Editor support
 

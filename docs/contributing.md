@@ -46,6 +46,20 @@ The transport specs (`tests/components/sghttpTransport.spec.bs`) send real reque
 
 The cache specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
 
+## Release candidates
+
+sgHttp isn't on npm yet. A build is attached to a GitHub release instead, and an app installs it from that file's url, with no clone:
+
+```sh
+ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.3/sghttp-0.1.0-rc.3.tgz
+```
+
+The app's package.json records the url, as it would a version. When sgHttp reaches npm, the line becomes `ropm install sghttp`.
+
+- **A release candidate:** run the *Release candidate* workflow from the Actions tab, on `main`. It builds the package, tags the commit `v<version>`, creates a prerelease with the `.tgz` attached and the install line in its notes, and pushes one commit that points the README's and the Installation page's install line at it (`scripts/point-install-docs.js`). Left empty, the version is the next `rc` of package.json's version (`0.1.0-rc.1`, `0.1.0-rc.2`, …); type one in to choose. `main`'s package.json is never changed; the tags are the record.
+- **A package from a pull request:** add the `create-package` label. Every push then builds `<version>-<branch>.<timestamp>`, attaches it to the catch-all `v0.0.0-packages` release, and comments the install line on the pull request.
+- **Locally:** `node scripts/release-tree.js 0.1.0-rc.9` builds the package into `build/release/`, with a package.json that has no scripts, so installing it runs nothing; `cd build/release && npm pack` makes the `.tgz`.
+
 ## Documentation
 
 User documentation lives in `docs/`, linked from the README. A change to behaviour should update the guide that describes it and the [API](reference/api.md) or [definition](reference/definition.md) reference.

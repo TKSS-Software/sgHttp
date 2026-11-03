@@ -1,0 +1,59 @@
+# A package from a pull request, for trying a branch before it is a release candidate: add the
+# create-package label and every push to the branch builds <version>-<branch>.<timestamp>,
+# attaches it to the catch-all v0.0.0-packages release, and comments the install line on the pull
+# request. See release-candidate.yml for candidates.
+name: create-package
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-package:
+    if: contains(github.event.pull_request.labels.*.name, 'create-package')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_REF: ${{ github.head_ref }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+
+      - name: Pick the version
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          BRANCH=$(echo "$HEAD_REF" | sed 's/[^0-9a-zA-Z-]/-/g')
+          echo "VERSION=$BASE-$BRANCH.$(date -u +%Y%m%d%H%M%S)" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: node scripts/release-tree.js "$VERSION"
+      - name: Pack
+        run: cd build/release && npm pack --pack-destination ..
+
+      - name: Keep the catch-all release
+        run: gh release create v0.0.0-packages --title "v0.0.0-packages" --latest=false --prerelease --notes "Temporary packages built from pull requests with the create-package label" -R "$GITHUB_REPOSITORY"
+        continue-on-error: true
+      - run: gh release upload v0.0.0-packages "build/sghttp-$VERSION.tgz" -R "$GITHUB_REPOSITORY"
+
+      - name: Comment on the pull request
+        run: |
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v0.0.0-packages/sghttp-$VERSION.tgz"
+          {
+            echo "Built a package from $HEAD_SHA. Install it with:"
+            echo
+            echo '```sh'
+            echo "ropm install sghttp@$URL"
+            echo '```'
+          } > build/comment.md
+          gh pr comment "$PR_NUMBER" -R "$GITHUB_REPOSITORY" --body-file build/comment.md

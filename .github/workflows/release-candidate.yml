@@ -1,0 +1,90 @@
+# Cuts a release candidate without npm: builds the package, tags the commit v<version>, and
+# creates a prerelease with the .tgz attached. Apps install it from that file's url:
+#   ropm install sghttp@https://github.com/<owner>/<repo>/releases/download/v<version>/sghttp-<version>.tgz
+# Run from the Actions tab, on main. main's package.json version is never changed: the tags are
+# the record of what was cut.
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. 0.1.0-rc.3. Empty: the next rc of package.json's version"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release-candidate:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      INPUT_VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: npm
+
+      - name: Pick the version
+        run: |
+          VERSION="$INPUT_VERSION"
+          if [ -z "$VERSION" ]; then
+            BASE=$(node -p "require('./package.json').version")
+            LAST=$(git tag --list "v$BASE-rc.*" | sed "s/^v$BASE-rc\.//" | sort -n | tail -1)
+            VERSION="$BASE-rc.$(( ${LAST:-0} + 1 ))"
+          fi
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "v$VERSION already exists" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PREVIOUS=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude 'v0.0.0-packages' 2>/dev/null || true)" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: node scripts/release-tree.js "$VERSION"
+      - name: Pack
+        run: cd build/release && npm pack --pack-destination ..
+
+      - name: Write the release notes
+        run: |
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v$VERSION/sghttp-$VERSION.tgz"
+          {
+            echo "Release candidate $VERSION, built from ${GITHUB_SHA} on ${GITHUB_REF_NAME}. Not published to npm."
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "ropm install sghttp@$URL"
+            echo '```'
+            echo
+            if [ -n "$PREVIOUS" ]; then
+              echo "## Changes since $PREVIOUS"
+              echo
+              git log --format='- %s' --invert-grep --grep='^Point the install instructions at' "$PREVIOUS..HEAD"
+            else
+              echo "## Changes"
+              echo
+              git log --format='- %s' --invert-grep --grep='^Point the install instructions at' -n 30 HEAD
+            fi
+          } > build/notes.md
+
+      # --target tags the commit as part of creating the release
+      - name: Tag and release
+        run: gh release create "v$VERSION" "build/sghttp-$VERSION.tgz" --target "$GITHUB_SHA" --title "v$VERSION" --prerelease --latest=false --notes-file build/notes.md -R "$GITHUB_REPOSITORY"
+
+      # One small commit on the branch, so the README and the Installation page name this candidate
+      - name: Point the install instructions at it
+        run: |
+          node scripts/point-install-docs.js "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/installation.md
+          git commit -m "Point the install instructions at v$VERSION"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"

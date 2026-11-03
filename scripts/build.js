@@ -67,5 +67,9 @@ console.log(`sghttp: dist ready, build ${stamp}`);
 
 // tests/source/testServer.brs, which the specs import, names the machine the transport specs
 // talk to (scripts/test-server.js); written here too so a fresh checkout compiles the tests
-// before its first npm test
-require('./test-server').writeHost();
+// before its first npm test. A machine with no LAN address (a build runner) just skips it.
+try {
+    require('./test-server').writeHost();
+} catch (e) {
+    console.log(`sghttp: skipped tests/source/testServer.brs (${e.message})`);
+}

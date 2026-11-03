@@ -127,6 +127,16 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 
 ### [Read the docs →](docs/README.md)
 
+## Install
+
+sgHttp isn't on npm yet. Install the latest release candidate from its GitHub release:
+
+```sh
+npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.1/sghttp-0.1.0-rc.1.tgz
+```
+
+Every candidate is listed under [Releases](https://github.com/TKSS-Software/sgHttp/releases), each with its install line.
+
 ## Get started
 
 - [Overview](docs/overview.md): the HTTP client, and what the query cache adds
