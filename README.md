@@ -4,8 +4,6 @@
 
 <p align="center">
   <a href="https://github.com/TKSS-Software/sgHttp/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/TKSS-Software/sgHttp/build.yml?branch=main&logo=github" alt="Build status"></a>
-  <a href="https://www.npmjs.com/package/sghttp"><img src="https://img.shields.io/npm/v/sghttp?logo=npm" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/sghttp"><img src="https://img.shields.io/npm/dm/sghttp" alt="Monthly downloads"></a>
   <a href="https://github.com/TKSS-Software/sgHttp/blob/main/LICENSE"><img src="https://img.shields.io/github/license/TKSS-Software/sgHttp" alt="License"></a>
 </p>
 
