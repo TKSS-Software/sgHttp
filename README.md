@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/TKSS-Software/sgHttp/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/TKSS-Software/sgHttp/build.yml?branch=main&logo=github" alt="Build status"></a>
+  <a href="https://github.com/TKSS-Software/sgHttp/actions/workflows/release-candidate.yml"><img src="https://img.shields.io/github/actions/workflow/status/TKSS-Software/sgHttp/release-candidate.yml?branch=main&logo=github" alt="Build status"></a>
   <a href="https://github.com/TKSS-Software/sgHttp/blob/main/LICENSE"><img src="https://img.shields.io/github/license/TKSS-Software/sgHttp" alt="License"></a>
 </p>
 
