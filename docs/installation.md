@@ -11,7 +11,7 @@
 sgHttp isn't on npm yet. Each release candidate is a GitHub release with the package attached, and ropm installs it from that file's url. In your channel:
 
 ```sh
-npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.2/sghttp-0.1.0-rc.2.tgz
+npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.3/sghttp-0.1.0-rc.3.tgz
 ```
 
 That line always names the latest candidate; every candidate is listed under [Releases](https://github.com/TKSS-Software/sgHttp/releases) with its own. Your package.json records the url, as it would a version, and `npx ropm install` on another machine installs the same build. When sgHttp reaches npm, the line becomes `npx ropm install sghttp`.
