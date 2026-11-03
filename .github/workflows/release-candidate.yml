@@ -82,6 +82,10 @@ jobs:
       - name: Point the install instructions at it
         run: |
           node scripts/point-install-docs.js "$VERSION"
+          if git diff --quiet -- README.md docs/installation.md; then
+            echo "The install instructions already name v$VERSION"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md docs/installation.md
