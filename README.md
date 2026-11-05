@@ -130,7 +130,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 sgHttp isn't on npm yet. Install the latest release candidate from its GitHub release:
 
 ```sh
-npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.3/sghttp-0.1.0-rc.3.tgz
+npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.4/sghttp-0.1.0-rc.4.tgz
 ```
 
 Every candidate is listed under [Releases](https://github.com/TKSS-Software/sgHttp/releases), each with its install line.
