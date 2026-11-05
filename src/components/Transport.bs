@@ -50,15 +50,17 @@ sub onRequestSettled(event as object)
 end sub
 
 sub runTransport()
+    ' Every field in one rendezvous, rather than one per setting
+    settings = m.top.getFields()
     client = createHttpClient({
-        baseUrl: m.top.baseUrl
-        headers: m.top.headers
-        baseHeaders: m.top.baseHeaders
-        maxConcurrent: m.top.maxConcurrent
-        timeout: m.top.timeoutSeconds
-        retries: m.top.retries
-        httpVersion: m.top.httpVersion
-        proxy: m.top.proxy
+        baseUrl: settings.baseUrl
+        headers: settings.headers
+        baseHeaders: settings.baseHeaders
+        maxConcurrent: settings.maxConcurrent
+        timeout: settings.timeoutSeconds
+        retries: settings.retries
+        httpVersion: settings.httpVersion
+        proxy: settings.proxy
     }, m.port)
     lastRequestId = ""
     while true
