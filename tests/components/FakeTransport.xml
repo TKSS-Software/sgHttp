@@ -14,6 +14,8 @@
         <field id="cancel" type="assocarray" alwaysNotify="true" />
         <!-- Set by a store's destroy when it owns the transport; a passed-in one stays false -->
         <field id="shutdown" type="boolean" value="false" />
+        <!-- true: a cancel is taken but aborts nothing, as a transport that cannot abort a request in flight -->
+        <field id="noAbort" type="boolean" value="false" />
         <function name="makeRequest" />
         <function name="answer" />
         <function name="answerBody" />

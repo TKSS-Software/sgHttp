@@ -11,6 +11,8 @@
 
 The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes.
 
+A task that reads or writes a field of a node the render thread owns waits for the render thread to service it (a rendezvous). sgHttp keeps those to a minimum: a request, a parse or a disk read costs two, the two writes that settle its promise, and the data a task needs travels with the job it is handed. The Transport reads its settings once, as it starts; the count of requests in flight is kept on the render thread.
+
 When a decoded body crosses from one thread to another, it's copied field by field, and the copy costs time on the render thread. So a body bound for a parser travels as the text the server sent, which is a single string, and the parser task decodes it. Only the parser's result reaches the render thread, and ContentNodes in it aren't copied.
 
 ## One store for the whole app

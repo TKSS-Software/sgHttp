@@ -163,6 +163,19 @@ namespace tests
         end function
 
         @async(10000)
+        @it("counts a request as active from makeRequest until its promise settles, before the caller hears of it")
+        function _()
+            node = m.transport()
+            promise = m.send(node, { url: "/echo" })
+            m.assertEqual(node.activeRequests, 1)
+            promises.chain(promise, m).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(suite.transports[0].activeRequests, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
         @it("settles every request, so none stays counted as active")
         function _()
             node = m.transport()

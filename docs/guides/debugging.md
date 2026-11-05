@@ -62,6 +62,8 @@ sgHttp prints to the BrightScript console (port 8085) when something is probably
 | `precache: "x" is cache: false, nothing to keep` / `set: "x" is cache: false, nothing to set` | `precache` or `set` was called for a mutation |
 | `transport: request ... delivered twice` / `parser: job ... delivered twice` | A field update to a task was lost. Please report it, with what the app was doing. |
 
+One message is the firmware's, not sgHttp's: `Rendezvous aborted for promises_Promise`, naming a line in `Transport.brs`, `ParserTask.brs`, `Persistence.brs` or `settle.brs`, as the app exits. A promise node belongs to the render thread, and a task settles one by writing to it, which waits for the render thread. When the app exits with a request, a parse or a disk read still in flight, the render thread is already gone when the task finishes, so the write is abandoned and the firmware says so. Nothing is lost: the app is exiting. It only happens when a request is still in flight at exit, and a task writes to a promise twice per settle, so the message is rare and appears at most once per request in flight.
+
 ## Routing traffic through a proxy
 
 Roku apps can't set an HTTP proxy. A proxy such as Charles can still see their traffic, though, if each url is prefixed with the proxy's address. Pass `proxy` to `initialize`, or to a client:

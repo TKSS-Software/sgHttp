@@ -33,21 +33,34 @@ function makeRequest(spec as object) as object
         return promise
     end if
     m.top.activeRequests = m.top.activeRequests + 1
-    m.top.request = { promise: promise, spec: spec }
+    ' Counted down here too, on the render thread, as the promise settles (see onRequestSettled):
+    ' the task never touches the count, which would be two rendezvous per request
+    promise.observeFieldScoped("promiseState", "onRequestSettled")
+    ' The id travels with the request: read here, on the thread that owns the promise, it costs
+    ' the task nothing; read there, it is a rendezvous
+    m.top.request = { promise: promise, id: promise.id, spec: spec }
     return promise
 end function
 
+' Render thread: a request's promise has settled. Its observer was registered before the
+' caller's, so the count is down before the caller's callbacks run.
+sub onRequestSettled(event as object)
+    event.getRoSGNode().unobserveFieldScoped("promiseState")
+    m.top.activeRequests = m.top.activeRequests - 1
+end sub
+
 sub runTransport()
+    ' Every field in one rendezvous, rather than one per setting
+    settings = m.top.getFields()
     client = createHttpClient({
-        baseUrl: m.top.baseUrl
-        headers: m.top.headers
-        baseHeaders: m.top.baseHeaders
-        maxConcurrent: m.top.maxConcurrent
-        timeout: m.top.timeoutSeconds
-        retries: m.top.retries
-        httpVersion: m.top.httpVersion
-        proxy: m.top.proxy
-        counter: m.top
+        baseUrl: settings.baseUrl
+        headers: settings.headers
+        baseHeaders: settings.baseHeaders
+        maxConcurrent: settings.maxConcurrent
+        timeout: settings.timeoutSeconds
+        retries: settings.retries
+        httpVersion: settings.httpVersion
+        proxy: settings.proxy
     }, m.port)
     lastRequestId = ""
     while true
@@ -57,10 +70,12 @@ sub runTransport()
             if field = "request" then
                 request = message.getData()
                 if type(request) = "roAssociativeArray" and isNode(request.promise) then
+                    id = request.id
+                    if not isNonEmptyString(id) then id = request.promise.id
                     ' See ParserTask.runJob: a request delivered twice means another was lost
-                    if request.promise.id = lastRequestId then print `[sghttp] transport: request ${request.promise.id} delivered twice (field events coalesced)`
-                    lastRequestId = request.promise.id
-                    client.send(request.spec, request.promise)
+                    if id = lastRequestId then print `[sghttp] transport: request ${id} delivered twice (field events coalesced)`
+                    lastRequestId = id
+                    client.send(request.spec, request.promise, id)
                 end if
             else if field = "promote" then
                 data = message.getData()
