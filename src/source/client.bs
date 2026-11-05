@@ -16,10 +16,7 @@ const MAX_RETRY_AFTER_SECONDS = 60
 ' Its owner runs the loop: wait on the port for at most nextWait() milliseconds (0: no limit),
 ' and hand every message, or invalid when the wait timed out, to handle().
 '
-' settings: { baseUrl, headers, baseHeaders, maxConcurrent, timeout, retries, httpVersion, proxy,
-'             counter }
-'   counter     - a node whose activeRequests field the owner raises for each request it hands
-'                 over; the client lowers it as each settles, before its promise does
+' settings: { baseUrl, headers, baseHeaders, maxConcurrent, timeout, retries, httpVersion, proxy }
 '
 ' fetch takes the spec sghttp.fetch does, with {placeholders} filled from args. send takes the
 ' spec a transport does, already filled (see fillRequest):
@@ -64,7 +61,6 @@ function createHttpClient(settings = {} as object, port = invalid as dynamic) as
         deviceInfo: invalid
         files: invalid
         proxyWarned: false
-        counter: invalid
         init: httpClient_init
         getPort: httpClient_getPort
         fetch: httpClient_fetch
@@ -112,7 +108,6 @@ sub httpClient_init(settings as object, port as dynamic)
     if isWholeNumber(settings.retries) and settings.retries >= 0 then m.retries = settings.retries
     if isNonEmptyString(settings.httpVersion) then m.httpVersion = settings.httpVersion
     if isNonEmptyString(settings.proxy) then m.proxy = settings.proxy
-    if isNode(settings.counter) then m.counter = settings.counter
     m.deviceInfo = createObject("roDeviceInfo")
     m.files = createObject("roFileSystem")
 end sub
@@ -522,7 +517,6 @@ function httpClient_partPath(path as string) as string
 end function
 
 sub httpClient_finish(job as object, response as object, success as boolean)
-    if m.counter <> invalid then m.counter.activeRequests = m.counter.activeRequests - 1
     settlePromise(job.promise, response, success)
 end sub
 

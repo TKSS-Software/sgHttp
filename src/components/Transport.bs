@@ -33,9 +33,19 @@ function makeRequest(spec as object) as object
         return promise
     end if
     m.top.activeRequests = m.top.activeRequests + 1
+    ' Counted down here too, on the render thread, as the promise settles (see onRequestSettled):
+    ' the task never touches the count, which would be two rendezvous per request
+    promise.observeFieldScoped("promiseState", "onRequestSettled")
     m.top.request = { promise: promise, spec: spec }
     return promise
 end function
+
+' Render thread: a request's promise has settled. Its observer was registered before the
+' caller's, so the count is down before the caller's callbacks run.
+sub onRequestSettled(event as object)
+    event.getRoSGNode().unobserveFieldScoped("promiseState")
+    m.top.activeRequests = m.top.activeRequests - 1
+end sub
 
 sub runTransport()
     client = createHttpClient({
@@ -47,7 +57,6 @@ sub runTransport()
         retries: m.top.retries
         httpVersion: m.top.httpVersion
         proxy: m.top.proxy
-        counter: m.top
     }, m.port)
     lastRequestId = ""
     while true
