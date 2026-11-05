@@ -15,6 +15,8 @@ function markSent(index as integer) as boolean
 end function
 
 sub onCancel()
+    ' A transport that cannot abort a request in flight: the cancel is taken, the answer still comes
+    if m.top.noAbort then return
     data = m.top.cancel
     if type(data) <> "roAssociativeArray" then return
     for each request in m.requests

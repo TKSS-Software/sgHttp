@@ -1557,10 +1557,11 @@ namespace tests
         @it("drops a cancelled fetch's answer when the transport can't abort it")
         function _()
             m.makeStore()
+            m.fake.noAbort = true
             m.slow = m.store.callFunc("_fetch", "/slow", {})
-            ' Sent and answered as far as the transport is concerned; the store still drops it
-            m.fake.callFunc("answer", 0, "late")
+            ' The transport takes the cancel but answers all the same; the store drops the answer
             m.store.callFunc("_cancel", m.slow)
+            m.fake.callFunc("answer", 0, "late")
             promises.chain(m.slow, m).then(function(response as dynamic, suite as object) as dynamic
                 suite.fail("a cancelled fetch resolved")
                 suite.done()

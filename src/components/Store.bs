@@ -56,6 +56,8 @@ sub init()
     m.buckets = {}
     ' promise id -> the context of a fetch or mutation, until it settles (see _cancel)
     m.calls = {}
+    ' transport promise id -> the context waiting on it (see transmit)
+    m.requests = {}
     ' Counts requests handed to a transport, so a 401 can tell whether the request went out
     ' before the shared headers were last renewed (see holdUnauthorized)
     m.sendCount = 0
@@ -385,7 +387,7 @@ sub settleHeld(client as object, renewed as boolean)
         if renewed then
             resend(client, context)
         else
-            promises.reject(context.authError, context.reply)
+            fail(context, context.authError)
         end if
     end for
 end sub
@@ -482,7 +484,7 @@ sub cancelCall(context as object)
     ' Held after a 401, it has changed nothing on the server, whatever its method
     if client <> invalid and releaseHeld(client, context) then
         context.cancelled = true
-        promises.reject(cancelledError(), context.reply)
+        fail(context, cancelledError())
         return
     end if
     ' A safe request's answer is dropped however it arrives: aborted, already parsing, or from
@@ -1025,36 +1027,38 @@ sub startNetwork(context as object)
         spec.allowNotModified = spec.headers.count() > 0
     end if
     spec.priority = context.priority
+    sendRequest(client, spec, context, onNetworkResponse, onNetworkError)
+end sub
 
-    promises.chain(sendRequest(client, spec, context), context).then(function(response as object, context as object) as dynamic
-        context.response = response
-        context.etag = headerValue(response.headers, "etag")
-        context.lastModified = headerValue(response.headers, "last-modified")
-        context.maxAge = cacheControlTtl(response.headers)
-        entry = m.cache[context.key]
-        hasValue = entry <> invalid and entry.hasValue
-        if response.notModified = true then
-            if hasValue then
-                settleUnchanged(context)
-            else
-                settleError(context, { message: `sghttp: "${context.definition.name}" got 304 with nothing cached`, code: 304 })
-            end if
-            return invalid
-        end if
-        context.hash = asString(response.bodyHash)
-        if hasValue and context.hash <> "" and context.hash = entry.hash then
+' The transport answered a cached query's request (see startNetwork)
+sub onNetworkResponse(response as object, context as object)
+    context.response = response
+    context.etag = headerValue(response.headers, "etag")
+    context.lastModified = headerValue(response.headers, "last-modified")
+    context.maxAge = cacheControlTtl(response.headers)
+    entry = m.cache[context.key]
+    hasValue = entry <> invalid and entry.hasValue
+    if response.notModified = true then
+        if hasValue then
             settleUnchanged(context)
-            return invalid
+        else
+            settleError(context, { message: `sghttp: "${context.definition.name}" got 304 with nothing cached`, code: 304 })
         end if
-        context.body = response.body
-        ' Only an answer the entry will keep is stored: not one from before a drop or expire
-        if context.definition.persist and currentEntry(context) <> invalid and not cacheControlNoStore(response.headers) then writePersisted(context.key, bodyText(response), context)
-        runParseStage(context)
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        settleError(context, error)
-        return invalid
-    end function).toPromise()
+        return
+    end if
+    context.hash = asString(response.bodyHash)
+    if hasValue and context.hash <> "" and context.hash = entry.hash then
+        settleUnchanged(context)
+        return
+    end if
+    context.body = response.body
+    ' Only an answer the entry will keep is stored: not one from before a drop or expire
+    if context.definition.persist and currentEntry(context) <> invalid and not cacheControlNoStore(response.headers) then writePersisted(context.key, bodyText(response), context)
+    runParseStage(context)
+end sub
+
+sub onNetworkError(error as dynamic, context as object)
+    settleError(context, error)
 end sub
 
 ' Executes a cache: false definition. Parses if a parser is set, applies the
@@ -1082,71 +1086,138 @@ function runUncached(definition as object, args as object, raw = false as boolea
     context.safeToAbort = method = "GET" or method = "HEAD" or spec.safeToRepeat = true
     context.cancelled = false
     m.calls[pending.id] = context
-
-    promises.chain(sendRequest(client, spec, context), context).then(function(response as object, context as object) as dynamic
-        if context.cancelled then return promises.reject(cancelledError())
-        definition = context.definition
-        context.response = response
-        ' Partial data comes with the errors of the fields that failed: fetch hands them back
-        if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
-        if isNonEmptyString(definition.parser) then
-            if m.parsers.count() = 0 then
-                return promises.reject({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` })
-            end if
-            return parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql })
-        end if
-        return graphqlData(definition, response.body)
-    end function).then(function(value as dynamic, context as object) as dynamic
-        if context.cancelled then return promises.reject(cancelledError())
-        m.calls.delete(context.pending.id)
-        applyRemovals(context.definition)
-        emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), { client: context.definition.client })
-        if context.raw then
-            context.response.body = value
-            value = context.response
-        end if
-        promises.resolve(value, context.pending)
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        m.calls.delete(context.pending.id)
-        ' A cancel is the caller's choice, not a failure: no error event or count
-        if context.cancelled or (type(error) = "roAssociativeArray" and error.cancelled = true) then
-            emit("cancel", context.definition.name, "", "network", context.startedAt.totalMilliseconds())
-            promises.reject(cancelledError(), context.pending)
-            return invalid
-        end if
-        m.stats.errors++
-        emit("error", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), errorDetails(context.definition, error))
-        promises.reject(error, context.pending)
-        return invalid
-    end function).toPromise()
-
+    sendRequest(client, spec, context, onUncachedResponse, onUncachedError)
     return pending
 end function
 
-' Sends a context's request through its client and returns a promise for its answer. A 401 to a
-' request that sent the client's shared headers may be held and sent again with new ones (see
-' holdUnauthorized), so the promise settles with the last answer. context.requestPromise is
-' always the transport's promise for the request now out, for cancel and promote.
-function sendRequest(client as object, spec as object, context as object) as object
-    context.reply = promises.create()
+' The transport answered an uncached request (see runUncached): the body goes through the
+' parser when the definition names one, then to the caller
+sub onUncachedResponse(response as object, context as object)
+    if context.cancelled then
+        onUncachedError(cancelledError(), context)
+        return
+    end if
+    definition = context.definition
+    context.response = response
+    ' Partial data comes with the errors of the fields that failed: fetch hands them back
+    if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
+    if isNonEmptyString(definition.parser) then
+        if m.parsers.count() = 0 then
+            onUncachedError({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` }, context)
+            return
+        end if
+        parsePromise = parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql })
+        promises.chain(parsePromise, context).then(function(value as dynamic, context as object) as dynamic
+            finishUncached(context, value)
+            return invalid
+        end function).catch(function(error as dynamic, context as object) as dynamic
+            onUncachedError(error, context)
+            return invalid
+        end function).toPromise()
+        return
+    end if
+    finishUncached(context, graphqlData(definition, response.body))
+end sub
+
+' An uncached request's value is in hand: the definition's removals apply, and the caller hears
+sub finishUncached(context as object, value as dynamic)
+    if context.cancelled then
+        onUncachedError(cancelledError(), context)
+        return
+    end if
+    m.calls.delete(context.pending.id)
+    applyRemovals(context.definition)
+    emit("resolve", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), { client: context.definition.client })
+    if context.raw then
+        context.response.body = value
+        value = context.response
+    end if
+    promises.resolve(value, context.pending)
+end sub
+
+sub onUncachedError(error as dynamic, context as object)
+    m.calls.delete(context.pending.id)
+    ' A cancel is the caller's choice, not a failure: no error event or count
+    if context.cancelled or (type(error) = "roAssociativeArray" and error.cancelled = true) then
+        emit("cancel", context.definition.name, "", "network", context.startedAt.totalMilliseconds())
+        promises.reject(cancelledError(), context.pending)
+        return
+    end if
+    m.stats.errors++
+    emit("error", context.definition.name, "", "network", context.startedAt.totalMilliseconds(), errorDetails(context.definition, error))
+    promises.reject(error, context.pending)
+end sub
+
+' Sends a context's request through its client. onResponse(response, context) hears the answer
+' and onError(error, context) a failure, on the render thread, straight from the transport's
+' promise: a promise of the store's own in between would copy the response into it and out of
+' it again, a node and a tick per request. A 401 to a request that sent the client's shared
+' headers may be held and sent again with new ones (see holdUnauthorized), so the handlers hear
+' the last answer. context.requestPromise is always the transport's promise for the request now
+' out, for cancel and promote.
+sub sendRequest(client as object, spec as object, context as object, onResponse as function, onError as function)
     context.spec = spec
     context.resent = false
+    context.onResponse = onResponse
+    context.onError = onError
     transmit(client, context)
-    return context.reply
-end function
+end sub
 
 sub transmit(client as object, context as object)
     m.sendCount++
     context.sendNumber = m.sendCount
-    context.requestPromise = client.transport.callFunc("makeRequest", context.spec)
-    promises.chain(context.requestPromise, context).then(function(response as object, context as object) as dynamic
-        promises.resolve(response, context.reply)
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        if not holdUnauthorized(context, error) then promises.reject(error, context.reply)
-        return invalid
-    end function)
+    promise = client.transport.callFunc("makeRequest", context.spec)
+    context.requestPromise = promise
+    if promise.promiseState = "pending" then
+        ' Observed directly rather than through the promises library: the handler runs as the
+        ' settle event is dispatched, in the order the transport answered, with no promise or
+        ' timer of the store's in between. The library's next-tick timers fire in no set order,
+        ' so a success and a 401 settled together could otherwise reach their handlers either
+        ' way round.
+        m.requests[promise.id] = context
+        promise.observeFieldScoped("promiseState", "onRequestSettled")
+    else
+        ' Settled before it was handed back (a transport that answers at once): heard on the
+        ' next tick, as the library hands over any promise already settled
+        promises.chain(promise, context).then(function(response as object, context as object) as dynamic
+            answer(context, response)
+            return invalid
+        end function).catch(function(error as dynamic, context as object) as dynamic
+            if not holdUnauthorized(context, error) then fail(context, error)
+            return invalid
+        end function)
+    end if
+end sub
+
+' A transport's promise settled (see transmit). An exception in a handler fails the request as
+' the promise chain's catch did, rather than ending the app from an observer.
+sub onRequestSettled(event as object)
+    promise = event.getRoSGNode()
+    promise.unobserveFieldScoped("promiseState")
+    context = m.requests[promise.id]
+    if context = invalid then return
+    m.requests.delete(promise.id)
+    result = promise.promiseResult
+    try
+        if event.getData() = "resolved" then
+            answer(context, result)
+        else if not holdUnauthorized(context, result) then
+            fail(context, result)
+        end if
+    catch e
+        fail(context, e)
+    end try
+end sub
+
+' Into a local first: called through the context, the handler would get the context as m
+sub answer(context as object, response as object)
+    handler = context.onResponse
+    handler(response, context)
+end sub
+
+sub fail(context as object, error as dynamic)
+    handler = context.onError
+    handler(error, context)
 end sub
 
 ' A 401 to a request that sent the shared headers of a client the app renews (onUnauthorized).
@@ -1201,9 +1272,9 @@ end sub
 
 ' Takes a context out of its client's held requests; returns whether it was there
 function releaseHeld(client as object, context as object) as boolean
-    if not isNode(context.reply) then return false
+    if not isNode(context.pending) then return false
     for i = 0 to client.held.count() - 1
-        if client.held[i].reply.isSameNode(context.reply) then
+        if client.held[i].pending.isSameNode(context.pending) then
             client.held.delete(i)
             return true
         end if
@@ -2023,6 +2094,7 @@ sub _destroy()
     m.expiries = {}
     m.buckets = {}
     m.calls = {}
+    m.requests = {}
     for each clientName in m.clients
         client = m.clients[clientName]
         transport = client.transport
