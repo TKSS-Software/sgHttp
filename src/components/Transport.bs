@@ -36,7 +36,9 @@ function makeRequest(spec as object) as object
     ' Counted down here too, on the render thread, as the promise settles (see onRequestSettled):
     ' the task never touches the count, which would be two rendezvous per request
     promise.observeFieldScoped("promiseState", "onRequestSettled")
-    m.top.request = { promise: promise, spec: spec }
+    ' The id travels with the request: read here, on the thread that owns the promise, it costs
+    ' the task nothing; read there, it is a rendezvous
+    m.top.request = { promise: promise, id: promise.id, spec: spec }
     return promise
 end function
 
@@ -66,10 +68,12 @@ sub runTransport()
             if field = "request" then
                 request = message.getData()
                 if type(request) = "roAssociativeArray" and isNode(request.promise) then
+                    id = request.id
+                    if not isNonEmptyString(id) then id = request.promise.id
                     ' See ParserTask.runJob: a request delivered twice means another was lost
-                    if request.promise.id = lastRequestId then print `[sghttp] transport: request ${request.promise.id} delivered twice (field events coalesced)`
-                    lastRequestId = request.promise.id
-                    client.send(request.spec, request.promise)
+                    if id = lastRequestId then print `[sghttp] transport: request ${id} delivered twice (field events coalesced)`
+                    lastRequestId = id
+                    client.send(request.spec, request.promise, id)
                 end if
             else if field = "promote" then
                 data = message.getData()

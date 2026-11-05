@@ -138,14 +138,18 @@ function httpClient_fetch(spec as dynamic, args = {} as object) as object
     return m.send(filled, promise)
 end function
 
-' Sends a request and settles the promise given (made by a caller on another thread)
-function httpClient_send(spec as dynamic, promise as object) as object
+' Sends a request and settles the promise given (made by a caller on another thread). id: the
+' promise's id when the caller has it already; reading it from a promise another thread owns is
+' a rendezvous, and the queue is searched by id (promote, cancel)
+function httpClient_send(spec as dynamic, promise as object, id = "" as string) as object
     if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
         settlePromise(promise, { message: "sghttp transport: request needs a url" }, false)
         return promise
     end if
+    if id = "" then id = promise.id
     job = {
         promise: promise
+        id: id
         spec: spec
         attempts: 0
         maxAttempts: 1 + m.retriesFor(spec)
@@ -191,7 +195,7 @@ sub httpClient_promote(request as dynamic, priority as dynamic)
     for each current in m.levels
         queue = m.queues[current]
         for i = 0 to queue.count() - 1
-            if queue[i].promise.id = id then
+            if queue[i].id = id then
                 if current = level then return
                 job = queue[i]
                 queue.delete(i)
@@ -216,7 +220,7 @@ sub httpClient_cancel(request as dynamic, queuedOnly = false as boolean)
     if queuedOnly then return
     for each identity in m.jobs
         slot = m.jobs[identity]
-        if slot.job.promise.id = id then
+        if slot.job.id = id then
             slot.transfer.asyncCancel()
             m.jobs.delete(identity)
             ' The aborted transfer may still post an event: it is not used again, so a new
@@ -255,7 +259,7 @@ end function
 
 function httpClient_removeJob(queue as object, id as string) as boolean
     for i = 0 to queue.count() - 1
-        if queue[i].promise.id = id then
+        if queue[i].id = id then
             job = queue[i]
             queue.delete(i)
             m.finish(job, m.cancelledResponse(job), false)

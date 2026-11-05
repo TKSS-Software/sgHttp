@@ -37,7 +37,9 @@ function parse(job as object) as object
         promises.reject({ message: "sghttp parser: job needs a parser name" }, promise)
         return promise
     end if
-    m.top.job = { promise: promise, parser: job.parser, body: job.body, args: job.args, hashResult: job.hashResult = true, decode: job.decode = true, graphql: job.graphql = true }
+    ' The id travels with the job: read here, on the thread that owns the promise, it costs the
+    ' task nothing; read there, it is a rendezvous
+    m.top.job = { promise: promise, id: promise.id, parser: job.parser, body: job.body, args: job.args, hashResult: job.hashResult = true, decode: job.decode = true, graphql: job.graphql = true }
     return promise
 end function
 
@@ -63,8 +65,10 @@ sub runJob(job as object)
     ' Every set of the job field must arrive once: a repeat means two sets collapsed into
     ' one event, and the earlier job (and its response) is lost. Collapsed sets arrive back
     ' to back, so the last id is all that needs remembering.
-    if job.promise.id = m.lastJobId then print `[sghttp] parser: job ${job.promise.id} delivered twice (field events coalesced)`
-    m.lastJobId = job.promise.id
+    id = job.id
+    if not isNonEmptyString(id) then id = job.promise.id
+    if id = m.lastJobId then print `[sghttp] parser: job ${id} delivered twice (field events coalesced)`
+    m.lastJobId = id
     parser = invalid
     try
         parser = getParser(job.parser)
