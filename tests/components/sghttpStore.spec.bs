@@ -13,6 +13,7 @@ namespace tests
         public oldCheck = invalid
         public watchedOne = invalid
         public watchedTwo = invalid
+        public joinPath = ""
         public partner = invalid
         public legacyPath = ""
         public slow = invalid
@@ -1878,6 +1879,23 @@ namespace tests
                 suite.assertEqual(suite.spy.operations, 2)
                 suite.store.callFunc("_define", "menu", { request: { url: "/menu" }, persist: true })
                 suite.assertEqual(suite.spy.operations, 2)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("writes a header and a body handed over apart as one file, the header first")
+        function _()
+            m.joinPath = "cachefs:/sghttp-spec/join.json"
+            m.disk().callFunc("execute", { type: "write", path: m.joinPath, header: "{}", body: "body" })
+            promises.chain(m.disk().callFunc("execute", { type: "read", path: m.joinPath }), m).then(function(text as dynamic, suite as object) as dynamic
+                suite.assertEqual(text, "{}" + chr(10) + "body")
+                suite.disk().callFunc("execute", { type: "delete", path: suite.joinPath })
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic

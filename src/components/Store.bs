@@ -1871,12 +1871,11 @@ end function
 sub writePersisted(key as string, body as dynamic, meta = {} as object)
     if not isNonEmptyString(body) or not isNode(diskTask()) then return
     header = { format: ENVELOPE_FORMAT, version: m.version, request: requestHashOf(key), key: key, storedAt: nowSeconds(), hash: asString(meta.hash), etag: asString(meta.etag), lastModified: asString(meta.lastModified), decode: meta.decode <> false, maxAge: isWholeNumber(meta.maxAge) ? meta.maxAge : -1 }
-    text = formatJson(header) + chr(10) + body
-    if text <> "" then
-        m.persistence.callFunc("execute", { type: "write", path: persistPath(key), text: text })
-        ' The copy on disk is now newer than any expire of this key
-        m.expiries.delete(key)
-    end if
+    ' The task joins the header to the body (see Persistence.runOp): joining them here would copy
+    ' the body on the render thread once more than handing it over does
+    m.persistence.callFunc("execute", { type: "write", path: persistPath(key), header: formatJson(header), body: body })
+    ' The copy on disk is now newer than any expire of this key
+    m.expiries.delete(key)
 end sub
 
 ' Validates the text read from disk. Returns its first line's fields with body set to the

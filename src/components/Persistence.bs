@@ -8,7 +8,8 @@ import "pkg:/source/settle.bs"
 '
 ' ops: { type: "ensureDir", dir }
 '      { type: "read", path }        -> promise resolving to the file text, or "" when missing
-'      { type: "write", path, text }
+'      { type: "write", path, header, body }   the file is header, a newline, then body
+'      { type: "write", path, text }           the file is text
 '      { type: "delete", path }
 '      { type: "clear", dir }                          everything under dir
 '      { type: "clearQuery", dir, name, descendants }  dir/name, and dir/name.* when descendants
@@ -59,10 +60,14 @@ sub runOp(op as object)
         if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then text = readAsciiFile(op.path)
         if isNode(op.promise) then settlePromise(op.promise, text, true)
     else if opType = "write" then
-        if isNonEmptyString(op.path) and isNonEmptyString(op.text) then
+        ' Joined here: a body joined to its header on the render thread is a copy of the body made
+        ' there, before the one that crosses to this task
+        text = op.text
+        if isNonEmptyString(op.body) then text = (isNonEmptyString(op.header) ? op.header + chr(10) : "") + op.body
+        if isNonEmptyString(op.path) and isNonEmptyString(text) then
             dir = op.path.left(op.path.len() - op.path.split("/").peek().len() - 1)
             if dir <> "" and not m.fileSystem.exists(dir) then m.fileSystem.createDirectory(dir)
-            writeAsciiFile(op.path, op.text)
+            writeAsciiFile(op.path, text)
         end if
     else if opType = "delete" then
         if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then deleteFile(op.path)
