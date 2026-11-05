@@ -1,0 +1,18 @@
+' Settling a promise made on another thread.
+'
+' A promise node belongs to the thread that made it: the render thread, for a request, a parse or
+' a disk read. Every field read or write on it from a task is a rendezvous, where the task waits
+' for the render thread to service it. promises.resolve makes four: a state read to see whether
+' the promise is settled, removeField, addFields and the state write. This makes two. The code
+' that owns a job settles its promise once, so the library's guard against settling twice is not
+' needed, and the result field does not exist until the promise is settled, so there is nothing
+' to remove first. The state is written last and on its own: one update that sets both fields
+' hands an observer the state before the result reaches it.
+sub settlePromise(promise as object, value as dynamic, resolved as boolean)
+    if type(value) = "roAssociativeArray" then
+        promise.addFields({ promiseResult: value })
+    else
+        promise.update({ promiseResult: value }, true)
+    end if
+    promise.promiseState = resolved ? "resolved" : "rejected"
+end sub

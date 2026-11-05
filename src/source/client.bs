@@ -1,6 +1,7 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 import "pkg:/source/request.bs"
+import "pkg:/source/settle.bs"
 
 ' The longest Retry-After wait honoured; a longer one fails the request at once rather than
 ' hold its callers
@@ -145,7 +146,7 @@ end function
 ' Sends a request and settles the promise given (made by a caller on another thread)
 function httpClient_send(spec as dynamic, promise as object) as object
     if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then
-        promises.reject({ message: "sghttp transport: request needs a url" }, promise)
+        settlePromise(promise, { message: "sghttp transport: request needs a url" }, false)
         return promise
     end if
     job = {
@@ -522,11 +523,7 @@ end function
 
 sub httpClient_finish(job as object, response as object, success as boolean)
     if m.counter <> invalid then m.counter.activeRequests = m.counter.activeRequests - 1
-    if success then
-        promises.resolve(response, job.promise)
-    else
-        promises.reject(response, job.promise)
-    end if
+    settlePromise(job.promise, response, success)
 end sub
 
 ' A GraphQL server reports a failed operation in the body: with a 200, or with a 4xx, as

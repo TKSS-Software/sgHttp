@@ -1,5 +1,6 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
+import "pkg:/source/settle.bs"
 
 ' File I/O for the cache, off the render thread. roFileSystem can only be
 ' created on the main or a task thread, and synchronous disk writes would
@@ -56,7 +57,7 @@ sub runOp(op as object)
     else if opType = "read" then
         text = ""
         if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then text = readAsciiFile(op.path)
-        if isNode(op.promise) then promises.resolve(text, op.promise)
+        if isNode(op.promise) then settlePromise(op.promise, text, true)
     else if opType = "write" then
         if isNonEmptyString(op.path) and isNonEmptyString(op.text) then
             dir = op.path.left(op.path.len() - op.path.split("/").peek().len() - 1)

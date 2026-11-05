@@ -1,5 +1,6 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
+import "pkg:/source/settle.bs"
 
 ' Runs query parsers off the render thread. Apps extend this component and
 ' override getParser(name) to return their own parser instances:
@@ -68,11 +69,11 @@ sub runJob(job as object)
     try
         parser = getParser(job.parser)
     catch e
-        promises.reject({ message: `sghttp parser: getParser("${job.parser}") threw: ${e.message}`, error: e }, job.promise)
+        settlePromise(job.promise, { message: `sghttp parser: getParser("${job.parser}") threw: ${e.message}`, error: e }, false)
         return
     end try
     if parser = invalid then
-        promises.reject({ message: `sghttp parser: unknown parser "${job.parser}"` }, job.promise)
+        settlePromise(job.promise, { message: `sghttp parser: unknown parser "${job.parser}"` }, false)
         return
     end if
     args = job.args
@@ -86,12 +87,12 @@ sub runJob(job as object)
     try
         result = parser.parse(body, args)
         if job.hashResult = true then
-            promises.resolve({ value: result, hash: hashValue(result) }, job.promise)
+            settlePromise(job.promise, { value: result, hash: hashValue(result) }, true)
         else
-            promises.resolve(result, job.promise)
+            settlePromise(job.promise, result, true)
         end if
     catch e
-        promises.reject({ message: `sghttp parser "${job.parser}" threw: ${e.message}`, error: e }, job.promise)
+        settlePromise(job.promise, { message: `sghttp parser "${job.parser}" threw: ${e.message}`, error: e }, false)
     end try
 end sub
 
