@@ -1,4 +1,5 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
 
 sub init()
     m.requests = []
@@ -84,6 +85,16 @@ function answerBody(index as integer, body as object) as boolean
     if request = invalid then return false
     request.settled = true
     promises.resolve({ code: 200, body: body, bodyHash: formatJson(body), headers: {}, url: "", ms: 0 }, request.promise)
+    return true
+end function
+
+' Answers request index as a transport does when the body hashes to the spec's knownHash: a 200
+' with no body. false when the request sent no knownHash.
+function answerUnchanged(index as integer) as boolean
+    request = m.requests[index]
+    if request = invalid or not isNonEmptyString(request.spec.knownHash) then return false
+    request.settled = true
+    promises.resolve({ code: 200, body: invalid, bodyHash: request.spec.knownHash, unchanged: true, headers: {}, url: "", ms: 0 }, request.promise)
     return true
 end function
 

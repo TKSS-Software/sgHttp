@@ -1026,6 +1026,9 @@ sub startNetwork(context as object)
         if entry.lastModified <> "" then spec.headers["If-Modified-Since"] = entry.lastModified
         spec.allowNotModified = spec.headers.count() > 0
     end if
+    ' The body the value came from: the same body again comes back as unchanged, without it, so an
+    ' unchanged refresh copies nothing across threads (see onNetworkResponse)
+    if entry <> invalid and entry.hasValue and entry.hash <> "" then spec.knownHash = entry.hash
     spec.priority = context.priority
     sendRequest(client, spec, context, onNetworkResponse, onNetworkError)
 end sub
@@ -1049,6 +1052,16 @@ sub onNetworkResponse(response as object, context as object)
     context.hash = asString(response.bodyHash)
     if hasValue and context.hash <> "" and context.hash = entry.hash then
         settleUnchanged(context)
+        return
+    end if
+    if response.unchanged = true then
+        ' The body matched a value that has gone since (set, remove): the body is needed after
+        ' all, so the request goes again without the hash
+        context.spec.delete("knownHash")
+        client = clientOf(context.definition)
+        m.stats.requests++
+        client.requests++
+        transmit(client, context)
         return
     end if
     context.body = response.body

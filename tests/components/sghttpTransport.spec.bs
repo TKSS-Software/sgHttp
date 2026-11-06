@@ -151,6 +151,29 @@ namespace tests
         end function
 
         @async(10000)
+        @it("answers unchanged without the body when it hashes to knownHash, and sends it when it does not")
+        function _()
+            node = m.transport()
+            m.first = node
+            promises.chain(m.send(node, { url: "/status/200", hashBody: true }), m).then(function(response as object, suite as object) as dynamic
+                suite.results = [response.bodyHash]
+                return promises.all([
+                    suite.send(suite.first, { url: "/status/200", hashBody: true, knownHash: response.bodyHash })
+                    suite.send(suite.first, { url: "/status/200", hashBody: true, knownHash: "another body's hash" })
+                ])
+            end function).then(function(responses as object, suite as object) as dynamic
+                suite.assertTrue(responses[0].unchanged)
+                suite.assertInvalid(responses[0].body)
+                suite.assertEqual(responses[0].code, 200)
+                suite.assertEqual(responses[0].bodyHash, suite.results[0])
+                suite.assertInvalid(responses[1].unchanged)
+                suite.assertEqual(responses[1].body.status, 200)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
         @it("prefixes the proxy onto a public url")
         function _()
             address = testServerUrl().mid(7)

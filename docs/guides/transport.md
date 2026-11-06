@@ -69,6 +69,7 @@ The store calls `makeRequest(spec)` on the render thread. The spec is:
 | `includeSharedHeaders` | `false` when the definition sets `auth: false` |
 | `useProxy` | `false` when the definition sets `proxy: false` |
 | `hashBody` | `true` when the store wants `bodyHash` back |
+| `knownHash` | The `bodyHash` of the body the cached value came from, or `invalid` when nothing is cached |
 | `allowNotModified` | `true` when the request carries conditional headers |
 | `keepRawBody` | `true` when the store will write the body to disk |
 | `priority` | `"high"`, `"normal"` or `"low"` |
@@ -78,6 +79,7 @@ Resolve the promise with `{ code, body, headers, url, ms }` for a success, or re
 - Set `bodyHash` (any stable hash of the raw body) when `spec.hashBody` is true. Without it, every refresh counts as a change.
 - Set `rawBody` to the body's text when `spec.keepRawBody` is true. Without it, the store encodes the decoded body again before writing it.
 - Resolve a `304` with `{ notModified: true }` when `spec.allowNotModified` is true.
+- Optionally, when a success's `bodyHash` equals `spec.knownHash`, resolve with `{ unchanged: true, bodyHash }` and no body. The store already has that body, so this saves decoding it and copying it across threads. A transport that ignores `knownHash` and sends the body works as before.
 
 The store sets `baseUrl`, `headers`, `baseHeaders`, `proxy`, `maxConcurrent`, `timeoutSeconds`, `retries` and `httpVersion` on a replacement only where it has a field with that name. Shared headers reach the transport through its `headers` field, at `initialize` and on every `setHeaders`. If it has no such field, it never receives them. If a replacement has an `activeRequests` integer field, `getStats().clients` reports it.
 

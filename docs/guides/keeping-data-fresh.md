@@ -7,7 +7,8 @@ Data can change on the server, or be changed from another device, while a screen
 The transport takes an MD5 hash of the raw body of every cached query's response, on its task thread. When a refresh returns a body with the same hash as the cached value:
 
 - the entry is renewed, and its `ttl` starts again
-- nothing is parsed, nothing is written to disk, and no watcher is notified
+- nothing is decoded or parsed, nothing is written to disk, and no watcher is notified
+- the body stays on the transport's task: the store sends the cached body's hash with the request, so only the answer that it's unchanged reaches the render thread
 - the [event](../reference/events-and-stats.md#events) is `unchanged`
 
 Because of this, a short `ttl` is affordable for data that changes often. A check every 30 seconds costs one request, and only parses and redraws when the data has changed.

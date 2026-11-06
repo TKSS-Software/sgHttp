@@ -19,6 +19,7 @@
         <function name="makeRequest" />
         <function name="answer" />
         <function name="answerBody" />
+        <function name="answerUnchanged" />
         <function name="answerNext" />
         <function name="answerNextWith" />
         <function name="answerWith" />

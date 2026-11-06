@@ -592,6 +592,68 @@ namespace tests
             end function)
         end function
 
+        @describe("unchanged bodies")
+
+        @async
+        @it("sends the hash of the cached body, and settles an answer of unchanged with the value it has")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Nothing cached yet: no hash to send
+                suite.assertInvalid(suite.fake.callFunc("requestAt", 0).knownHash)
+                again = suite.query("1", { force: true })
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).knownHash, "a")
+                suite.assertTrue(suite.fake.callFunc("answerUnchanged", 1))
+                return again
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.store.callFunc("_getStats").unchanged, 1)
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertTrue(suite.heardNothing(suite.watchedOne))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("asks again for the body when the value it matched was replaced meanwhile")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.slow = suite.query("1", { force: true })
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).knownHash, "a")
+                ' A local write while the request is out: the value "a" is gone
+                suite.store.callFunc("_set", "items", { id: "1" }, "local")
+                suite.fake.callFunc("answerUnchanged", 1)
+                return promises.resolve(invalid)
+            end function).then(function(_ as dynamic, suite as object) as dynamic
+                ' Sent again, without the hash, for the body itself
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.assertInvalid(suite.fake.callFunc("requestAt", 2).knownHash)
+                suite.fake.callFunc("answer", 2, "a")
+                return suite.slow
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' The caller hears the server's value; the local write stays in the cache
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "local")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("expire and disk copies")
 
         @async
