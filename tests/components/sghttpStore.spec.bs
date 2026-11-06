@@ -802,6 +802,39 @@ namespace tests
             end function)
         end function
 
+        @describe("decoding without a parser")
+
+        @async
+        @it("asks the transport for the text and decodes it on the render thread, for a query and a fetch")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "raw", { request: { url: "/raw", parseJson: false }, ttl: 300 })
+            waiting = [
+                m.query("1")
+                m.store.callFunc("_fetch", "/fetched", {})
+                m.store.callFunc("_query", "raw", {}, {})
+            ]
+            ' The transport decodes nothing: a decoded body would be copied across field by field
+            for i = 0 to 2
+                m.assertFalse(m.fake.callFunc("requestAt", i).parseJson)
+            end for
+            m.fake.callFunc("answer", 0, `{"word":"abc"}`)
+            m.fake.callFunc("answer", 1, `{"word":"def"}`)
+            m.fake.callFunc("answer", 2, `{"word":"ghi"}`)
+            promises.chain(promises.all(waiting), m).then(function(values as object, suite as object) as dynamic
+                suite.assertEqual(values[0].word, "abc")
+                suite.assertEqual(values[1].body.word, "def")
+                ' parseJson: false in the definition keeps the text
+                suite.assertEqual(values[2], `{"word":"ghi"}`)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("request values")
 
         @it("sends numbers and booleans in the query string, headers and url as their text")

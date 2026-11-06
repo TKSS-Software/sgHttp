@@ -4,16 +4,16 @@
 
 | Work | Where |
 |---|---|
-| Cache lookups, keys, freshness, bookkeeping | `Store` node, on the render thread |
-| HTTP, gzip, body hashing, JSON decoding of network bodies without a parser (a disk copy without a parser is decoded on the render thread) | `Transport` task, one per client |
+| Cache lookups, keys, freshness, bookkeeping, and JSON decoding of bodies without a parser | `Store` node, on the render thread |
+| HTTP, gzip, body hashing | `Transport` task, one per client |
 | JSON decoding of bodies with a parser, parsers, parsed-value hashing | Your `ParserTask` subclass, two of them by default |
 | Reading, writing and deleting `cachefs:/` files | `Persistence` task, started when the first query with `persist: true` is defined |
 
-The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes.
+The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes. The exception is decoding a body that has no parser: a query or fetch without one leaves that to the render thread, by choice. Give a large response a parser to keep it on a task.
 
 A task that reads or writes a field of a node the render thread owns waits for the render thread to service it (a rendezvous). sgHttp keeps those to a minimum: a request, a parse or a disk read costs two, the two writes that settle its promise, and the data a task needs travels with the job it is handed. The Transport reads its settings once, as it starts; the count of requests in flight is kept on the render thread.
 
-When a decoded body crosses from one thread to another, it's copied field by field, and the copy costs time on the render thread. So a body bound for a parser travels as the text the server sent, which is a single string, and the parser task decodes it. Only the parser's result reaches the render thread, and ContentNodes in it aren't copied.
+When a decoded body crosses from one thread to another, it's copied field by field, and the copy runs on the render thread. That costs more than decoding the text there: in the benchmark (`npm run bench`, Roku Express 4K), a 300 KB body without a parser reached its caller in 84 ms decoded on the render thread, against 211.5 ms decoded on the transport task and copied across. So every body crosses as the text the server sent, which is a single string. A body for a parser is decoded on the parser task, and only the parser's result reaches the render thread; ContentNodes in it aren't copied. Any other body is decoded on the render thread.
 
 ## One store for the whole app
 

@@ -1012,14 +1012,12 @@ sub startNetwork(context as object)
     client.requests++
     spec = buildRequestSpec(context.definition, context.args)
     spec.hashBody = true
-    ' A parser's body comes back as text and is decoded on its task (see parseOnTask). Without
-    ' a parser the body is decoded here, and a persisted one keeps its text for the disk too.
+    ' The body comes back as text: a parser's is decoded on its task (see parseOnTask), any other
+    ' here, on the render thread (see onNetworkResponse). Decoded on the transport's task, it
+    ' would be copied across field by field, which costs the render thread more than decoding.
+    ' The text is also what a persisted body is written as.
     context.decode = spec.parseJson
-    if isNonEmptyString(context.definition.parser) then
-        spec.parseJson = false
-    else if context.definition.persist then
-        spec.keepRawBody = true
-    end if
+    spec.parseJson = false
     entry = m.cache[context.key]
     if context.definition.conditional and entry <> invalid and entry.hasValue then
         if entry.etag <> "" then spec.headers["If-None-Match"] = entry.etag
@@ -1067,6 +1065,8 @@ sub onNetworkResponse(response as object, context as object)
     context.body = response.body
     ' Only an answer the entry will keep is stored: not one from before a drop or expire
     if context.definition.persist and currentEntry(context) <> invalid and not cacheControlNoStore(response.headers) then writePersisted(context.key, bodyText(response), context)
+    ' Without a parser, the value is the decoded body (see startNetwork)
+    if not isNonEmptyString(context.definition.parser) then context.body = decodeBody(context.body, context.decode)
     runParseStage(context)
 end sub
 
@@ -1090,9 +1090,10 @@ function runUncached(definition as object, args as object, raw = false as boolea
     m.stats.requests++
     client.requests++
     spec = buildRequestSpec(definition, args)
-    ' A parser's body crosses to its task as text and is decoded there (see parseOnTask)
+    ' The body comes back as text, as for a cached query (see startNetwork): a parser's is decoded
+    ' on its task, any other here (see onUncachedResponse)
     context.decode = spec.parseJson
-    if isNonEmptyString(definition.parser) then spec.parseJson = false
+    spec.parseJson = false
     ' Only a request that changes nothing can be abandoned once it is sent (see _cancel): a GET,
     ' a HEAD, or a cached query's request sent with fetch(name)
     method = ucase(spec.method)
@@ -1112,6 +1113,7 @@ sub onUncachedResponse(response as object, context as object)
     end if
     definition = context.definition
     context.response = response
+    if not isNonEmptyString(definition.parser) then response.body = decodeBody(response.body, context.decode)
     ' Partial data comes with the errors of the fields that failed: fetch hands them back
     if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
     if isNonEmptyString(definition.parser) then

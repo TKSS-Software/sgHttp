@@ -10,10 +10,10 @@ SceneGraph gives you `roUrlTransfer`, Task nodes and message ports, and leaves c
 - **Concurrency.** A screen that needs five things wants five requests in flight, but not fifty. That means writing a pool and a queue.
 - **Failures.** Requests need timeouts and retries with backoff, and not every failure is safe to retry: a `POST` may already have gone through.
 - **Headers.** The auth token has to reach every request, and change when the user signs in or out.
-- **Decoding.** JSON parsing on the render thread can stall animation. It belongs on the task.
+- **Decoding.** JSON parsing on the render thread can stall animation. A large response belongs on a task.
 - **Answers.** The component that asked wants something it can chain, not a field to poll.
 
-sgHttp's HTTP client does that work. Each server gets a transport task with a pool of `roUrlTransfer` objects, retries and timeouts. Shared headers are added to every request, JSON is decoded on the task, a debugging proxy can be set in `initialize`, and the render thread receives a promise.
+sgHttp's HTTP client does that work. Each server gets a transport task with a pool of `roUrlTransfer` objects, retries and timeouts. Shared headers are added to every request, a [parser](guides/parsers.md) can decode and shape a response on a task thread, a debugging proxy can be set in `initialize`, and the render thread receives a promise.
 
 ### The query cache
 
