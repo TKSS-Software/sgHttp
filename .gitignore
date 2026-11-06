@@ -5,3 +5,6 @@ src/**/roku_modules/
 build/
 .env
 tests/source/testServer.brs
+
+# Written by scripts/bench.js for each run
+bench/source/benchConfig.brs

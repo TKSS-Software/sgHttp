@@ -107,7 +107,7 @@ request: { url: "/oauth/token", method: "POST", headers: { "Content-Type": "appl
 
 `method` defaults to `GET` (`POST` for a [GraphQL](graphql.md) request). `GET` and `HEAD` are sent without a body. Any other method (`POST`, `PUT`, `PATCH`, `DELETE`) is sent with the body, or with an empty body if there is none.
 
-The transport task decodes successful responses as JSON. A body that isn't JSON stays a string, and `parseJson: false` always keeps the raw text.
+A successful response is decoded as JSON: on the parser task when the request names a [parser](parsers.md), otherwise on the render thread as it arrives. A body that isn't JSON stays a string, and `parseJson: false` always keeps the raw text.
 
 ## Auth: headers on every request
 

@@ -1,11 +1,19 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
-import "pkg:/source/settle.bs"
 
 ' File I/O for the cache, off the render thread. roFileSystem can only be
 ' created on the main or a task thread, and synchronous disk writes would
 ' stall rendering anyway.
 '
+' A read's promise stays on the render thread, keyed by the op's number (seq); the task answers
+' through the result field, { seq, text }, and onResult settles the promise on the thread that
+' owns it. A task's write to a field of a render-thread node (a rendezvous) now and then never
+' lands, with the task none the wiser, so a read unanswered after READ_RETRY_SECONDS goes again
+' (see onRetryTick). The promise used to travel in the op for the task to settle, and that write
+' went missing the same way, leaving the caller waiting forever.
+'
+'      { type: "dropAnswers", count }                  for the specs: the task drops the next count reads' answers
+
 ' ops: { type: "ensureDir", dir }
 '      { type: "read", path }        -> promise resolving to the file text, or "" when missing
 '      { type: "write", path, header, body }   the file is header, a newline, then body
@@ -18,10 +26,24 @@ import "pkg:/source/settle.bs"
 '      { type: "sweep", dir, keep }                      in each folder dir/<name> that keep lists, every entry whose
 '                                                        name starts with none of keep[name]'s prefixes
 
+' A read unanswered for this long is sent again (see onRetryTick)
+const READ_RETRY_SECONDS = 1.0
+
 sub init()
     m.port = createObject("roMessagePort")
     m.top.observeField("op", m.port)
     m.top.observeField("shutdown", m.port)
+    ' Heard on the render thread, which owns the promises the reads return
+    m.top.observeField("result", "onResult")
+    m.top.observeFieldScoped("shutdown", "onShutdown")
+    ' seq -> { promise, op } for every read not yet answered
+    m.reads = {}
+    m.opCount = 0
+    m.clock = createObject("roTimespan")
+    m.retryTimer = createObject("roSGNode", "Timer")
+    m.retryTimer.duration = READ_RETRY_SECONDS / 2
+    m.retryTimer.repeat = true
+    m.retryTimer.observeFieldScoped("fire", "onRetryTick")
     m.top.functionName = "runPersistence"
     m.top.control = "RUN"
 end sub
@@ -30,22 +52,90 @@ end sub
 function execute(op as object) as dynamic
     if type(op) <> "roAssociativeArray" or not isNonEmptyString(op.type) then return invalid
     promise = invalid
-    if op.type = "read" then
-        promise = promises.create()
-        op.promise = promise
+    if op.type = "read" then promise = promises.create()
+    ' The task has stopped: nothing will answer, so a read says so now rather than wait
+    if m.top.shutdown then
+        if isNode(promise) then promises.reject(stoppedError(), promise)
+        return promise
     end if
-    m.top.op = op
+    send(op, promise)
     return promise
 end function
 
+' The task was told to stop (see Store._destroy): the reads still waiting are rejected, since
+' no answer is coming, and the retry timer stops rather than send them to a stopped task
+sub onShutdown()
+    m.retryTimer.control = "stop"
+    waiting = m.reads
+    m.reads = {}
+    for each key in waiting
+        promises.reject(stoppedError(), waiting[key].promise)
+    end for
+end sub
+
+function stoppedError() as object
+    return { code: 0, kind: "cancelled", cancelled: true, message: "sghttp: persistence stopped" }
+end function
+
+' Numbers the op, on the render thread, so the task can tell one lost or delivered twice (see
+' runPersistence) and a read's answer finds its promise (see onResult)
+sub send(op as object, promise as dynamic)
+    m.opCount++
+    op.seq = m.opCount
+    if isNode(promise) then
+        m.reads[op.seq.toStr()] = { promise: promise, op: op, sentAt: m.clock.totalMilliseconds() }
+        m.retryTimer.control = "start"
+    end if
+    m.top.op = op
+end sub
+
+' A read's answer can go missing: the task's write of result, a rendezvous, now and then never
+' lands on this thread, though the task carries on as if it had (about once in 250 reads on a
+' Roku Express 4K, OS 16). The file is still there, so a read unanswered for READ_RETRY_SECONDS
+' is sent again, with a new number.
+sub onRetryTick()
+    now = m.clock.totalMilliseconds()
+    for each key in m.reads.keys()
+        waiting = m.reads[key]
+        if now - waiting.sentAt >= READ_RETRY_SECONDS * 1000 then
+            print `[sghttp] persistence: read ${waiting.op.seq} unanswered after ${now - waiting.sentAt} ms; sending it again`
+            m.reads.delete(key)
+            send(waiting.op, waiting.promise)
+        end if
+    end for
+    if m.reads.count() = 0 then m.retryTimer.control = "stop"
+end sub
+
+' The task answered a read (see runOp): its promise is settled here, on the thread that owns it
+sub onResult(event as object)
+    result = event.getData()
+    if type(result) <> "roAssociativeArray" or not isWholeNumber(result.seq) then return
+    read = m.reads[result.seq.toStr()]
+    if read = invalid then return
+    m.reads.delete(result.seq.toStr())
+    if m.reads.count() = 0 then m.retryTimer.control = "stop"
+    promises.resolve(result.text, read.promise)
+end sub
+
 sub runPersistence()
     m.fileSystem = createObject("roFileSystem")
+    m.dropAnswers = 0
+    lastSeq = 0
     while true
         message = wait(0, m.port)
         if type(message) = "roSGNodeEvent" then
             field = message.getField()
             if field = "shutdown" then return
-            if field = "op" then runOp(message.getData())
+            if field = "op" then
+                op = message.getData()
+                ' See ParserTask.runJob: every set of op must arrive once
+                if type(op) = "roAssociativeArray" and isWholeNumber(op.seq) then
+                    if op.seq = lastSeq then print `[sghttp] persistence: op ${op.seq} (${op.type}) delivered twice (field events coalesced)`
+                    if op.seq > lastSeq + 1 then print `[sghttp] persistence: ops ${lastSeq + 1} to ${op.seq - 1} lost before ${op.seq} (${op.type})`
+                    lastSeq = op.seq
+                end if
+                runOp(op)
+            end if
         end if
     end while
 end sub
@@ -53,12 +143,19 @@ end sub
 sub runOp(op as object)
     if type(op) <> "roAssociativeArray" then return
     opType = op.type
-    if opType = "ensureDir" then
+    if opType = "dropAnswers" then
+        if isWholeNumber(op.count) then m.dropAnswers = op.count
+    else if opType = "ensureDir" then
         if isNonEmptyString(op.dir) and not m.fileSystem.exists(op.dir) then m.fileSystem.createDirectory(op.dir)
     else if opType = "read" then
         text = ""
         if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then text = readAsciiFile(op.path)
-        if isNode(op.promise) then settlePromise(op.promise, text, true)
+        if m.dropAnswers > 0 then
+            m.dropAnswers--
+            return
+        end if
+        ' One rendezvous; the render thread settles the read's promise (see onResult)
+        m.top.result = { seq: op.seq, text: text }
     else if opType = "write" then
         ' Joined here: a body joined to its header on the render thread is a copy of the body made
         ' there, before the one that crosses to this task

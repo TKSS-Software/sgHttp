@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The parser task an app would extend, with a parser cheap enough that the benchmark times
+     sgHttp's work around the parse rather than the parse -->
+<component name="BenchParserTask" extends="ParserTask">
+</component>

@@ -52,7 +52,7 @@ sub load()
 end sub
 ```
 
-The request goes out on the transport task, the JSON is decoded there, and the `then` callback runs on the render thread with the whole response: `code`, `headers`, `body`, `url` and `ms`. A relative url is joined to `baseUrl`; a url starting with `http` is sent as is.
+The request goes out on the transport task, the JSON is decoded as it reaches the render thread, and the `then` callback runs there with the whole response: `code`, `headers`, `body`, `url` and `ms`. To decode a large response on a task thread instead, give it a [parser](guides/parsers.md). A relative url is joined to `baseUrl`; a url starting with `http` is sent as is.
 
 ### 3. Send data
 

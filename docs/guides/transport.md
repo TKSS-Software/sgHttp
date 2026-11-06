@@ -8,7 +8,7 @@ The default `Transport` is a Task with:
 
 - **A bounded pool** of `roUrlTransfer` objects (`maxConcurrent`, default 4). Requests beyond that wait in a queue per [priority](#priorities), and the highest queue with a request is served first.
 - **gzip and HTTPS**, using the Roku's certificate bundle.
-- **JSON decoding** of successful responses on the task thread. A body that will go to a [parser](parsers.md) is left as text, and the parser task decodes it.
+- **JSON decoding** of successful responses on the task thread, when the request asks for it (`parseJson`). The store asks for the text instead: a body for a [parser](parsers.md) is decoded on the parser task, and any other on the render thread (see [Threads and memory](threads-and-memory.md#what-runs-where)).
 - **Body hashing** (MD5) of responses to cached queries, so the cache can [tell when a payload hasn't changed](keeping-data-fresh.md).
 - **Retries** on network failures and `429` and 5xx responses. If the answer has a `Retry-After` header (seconds or an HTTP date), the transport waits that long; otherwise it backs off exponentially (1 s, 2 s, 4 s, ...). If `Retry-After` asks for more than 60 seconds, the request fails at once rather than keep its callers waiting. A `POST` or `PATCH` is retried only when it can't have been applied: on a `429`, which the server rejected before handling it, or when the connection never opened (the host name didn't resolve, the connection was refused, or the TLS handshake failed). After a timeout or a 5xx it may already have gone through, and repeating it could apply the change twice, so it fails instead. A cached query only reads, whatever its method, so a query sent as a `POST` (a GraphQL query, or a search) is retried like a `GET`. So is a `POST` or `PATCH` that sets `retries` itself.
 - **Cancellation**: a request still queued, or waiting to retry, can be dropped, and one in flight aborted (see [Cancelling a request](requests.md#cancelling-a-request)).
@@ -62,22 +62,24 @@ The store calls `makeRequest(spec)` on the render thread. The spec is:
 | `headers` | The request's own headers, filled. Shared headers are not included; see below. |
 | `body` | Filled body: a string, associative array, array or `invalid` |
 | `query` | Filled query parameters, `{ name: value or array }` |
-| `parseJson` | Whether to JSON-decode a successful body |
+| `parseJson` | Whether to JSON-decode a successful body. The store sends `false`, and decodes the text itself. |
 | `successCodes` | Array of success statuses, or `invalid` for 200 to 299 |
 | `retries` | Retries for this request, or `invalid` for the transport's own |
 | `timeoutSeconds` | Timeout for this request, or `invalid` |
 | `includeSharedHeaders` | `false` when the definition sets `auth: false` |
 | `useProxy` | `false` when the definition sets `proxy: false` |
 | `hashBody` | `true` when the store wants `bodyHash` back |
+| `knownHash` | The `bodyHash` of the body the cached value came from, or `invalid` when nothing is cached |
 | `allowNotModified` | `true` when the request carries conditional headers |
-| `keepRawBody` | `true` when the store will write the body to disk |
+| `keepRawBody` | `true` when the caller wants the text beside a decoded body. The store doesn't set it, since it asks for the text. |
 | `priority` | `"high"`, `"normal"` or `"low"` |
 
 Resolve the promise with `{ code, body, headers, url, ms }` for a success, or reject it with at least `{ code, message }` for a failure. To keep the cache's change detection working:
 
 - Set `bodyHash` (any stable hash of the raw body) when `spec.hashBody` is true. Without it, every refresh counts as a change.
-- Set `rawBody` to the body's text when `spec.keepRawBody` is true. Without it, the store encodes the decoded body again before writing it.
+- Leave a body as its text when `spec.parseJson` is false. A transport that decodes it anyway still works: the store takes a decoded body as it is, but it's then copied across threads, and encoded again before it's written to disk.
 - Resolve a `304` with `{ notModified: true }` when `spec.allowNotModified` is true.
+- Optionally, when a success's `bodyHash` equals `spec.knownHash`, resolve with `{ unchanged: true, bodyHash }` and no body. The store already has that body, so this saves decoding it and copying it across threads. A transport that ignores `knownHash` and sends the body works as before.
 
 The store sets `baseUrl`, `headers`, `baseHeaders`, `proxy`, `maxConcurrent`, `timeoutSeconds`, `retries` and `httpVersion` on a replacement only where it has a field with that name. Shared headers reach the transport through its `headers` field, at `initialize` and on every `setHeaders`. If it has no such field, it never receives them. If a replacement has an `activeRequests` integer field, `getStats().clients` reports it.
 

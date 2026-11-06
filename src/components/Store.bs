@@ -56,8 +56,9 @@ sub init()
     m.buckets = {}
     ' promise id -> the context of a fetch or mutation, until it settles (see _cancel)
     m.calls = {}
-    ' transport promise id -> the context waiting on it (see transmit)
-    m.requests = {}
+    ' promise id -> the waiter for a promise the store waits on: a request, a disk read, a parse
+    ' (see await)
+    m.awaiting = {}
     ' Counts requests handed to a transport, so a 401 can tell whether the request went out
     ' before the shared headers were last renewed (see holdUnauthorized)
     m.sendCount = 0
@@ -696,20 +697,22 @@ function runOptimistic(definition as object, args as object, writes as object) a
     context = { undo: undo, pending: pending }
     ' The caller holds this promise, not the request's: cancel finds the request through it
     if m.calls[request.id] <> invalid then m.calls[pending.id] = m.calls[request.id]
-    promises.chain(request, context).then(function(value as dynamic, context as object) as dynamic
-        m.calls.delete(context.pending.id)
-        promises.resolve(value, context.pending)
-        return invalid
-    end function).catch(function(error as dynamic, context as object) as dynamic
-        m.calls.delete(context.pending.id)
-        for each write in context.undo
-            rollback(write)
-        end for
-        promises.reject(error, context.pending)
-        return invalid
-    end function).toPromise()
+    await(request, context, onOptimisticDone, onOptimisticFailed)
     return pending
 end function
+
+sub onOptimisticDone(value as dynamic, context as object)
+    m.calls.delete(context.pending.id)
+    promises.resolve(value, context.pending)
+end sub
+
+sub onOptimisticFailed(error as dynamic, context as object)
+    m.calls.delete(context.pending.id)
+    for each write in context.undo
+        rollback(write)
+    end for
+    promises.reject(error, context.pending)
+end sub
 
 ' Puts the value from before an optimistic write back, if the write's value is still there
 sub rollback(write as object)
@@ -961,42 +964,44 @@ function startFetch(definition as object, key as string, args as object, now as 
     ' (task thread); a miss or a failure falls through to the network.
     if not background and not skipDisk and not entry.hasValue and definition.persist and isNode(diskTask()) then
         readPromise = m.persistence.callFunc("execute", { type: "read", path: persistPath(key) })
-        promises.chain(readPromise, context).then(function(text as dynamic, context as object) as dynamic
-            runCleanups()
-            envelope = parseEnvelope(text, context.key)
-            ' A copy stored before an expire() of this query is known to be out of date
-            if envelope <> invalid and diskExpired(context, envelope.storedAt) then envelope = invalid
-            if envelope <> invalid then
-                ' A parser decodes the text on its own task; without one the value is the
-                ' decoded body, as the transport would have made it
-                context.decode = envelope.decode = true
-                context.body = envelope.body
-                if not isNonEmptyString(context.definition.parser) then context.body = decodeBody(envelope.body, context.decode)
-            end if
-            if envelope <> invalid then
-                m.stats.diskHits++
-                context.source = "disk"
-                context.persistedAt = envelope.storedAt
-                context.maxAge = envelope.maxAge
-                context.hash = asString(envelope.hash)
-                context.etag = asString(envelope.etag)
-                context.lastModified = asString(envelope.lastModified)
-                runParseStage(context)
-            else
-                startNetwork(context)
-            end if
-            return invalid
-        end function).catch(function(error as dynamic, context as object) as dynamic
-            runCleanups()
-            startNetwork(context)
-            return invalid
-        end function).toPromise()
+        await(readPromise, context, onDiskRead, onDiskReadFailed)
         return pending
     end if
 
     startNetwork(context)
     return pending
 end function
+
+' The disk read for a context created by startFetch has answered: a copy that can still be read
+' goes to the parse stage, anything else to the network
+sub onDiskRead(text as dynamic, context as object)
+    runCleanups()
+    envelope = parseEnvelope(text, context.key)
+    ' A copy stored before an expire() of this query is known to be out of date
+    if envelope <> invalid and diskExpired(context, envelope.storedAt) then envelope = invalid
+    if envelope = invalid then
+        startNetwork(context)
+        return
+    end if
+    ' A parser decodes the text on its own task; without one the value is the decoded body, as
+    ' it would be from the network
+    context.decode = envelope.decode = true
+    context.body = envelope.body
+    if not isNonEmptyString(context.definition.parser) then context.body = decodeBody(envelope.body, context.decode)
+    m.stats.diskHits++
+    context.source = "disk"
+    context.persistedAt = envelope.storedAt
+    context.maxAge = envelope.maxAge
+    context.hash = asString(envelope.hash)
+    context.etag = asString(envelope.etag)
+    context.lastModified = asString(envelope.lastModified)
+    runParseStage(context)
+end sub
+
+sub onDiskReadFailed(error as dynamic, context as object)
+    runCleanups()
+    startNetwork(context)
+end sub
 
 ' Issues the transport request for a context created by startFetch. A response whose
 ' body hashes the same as the cached value's (or a 304 to a conditional request) only
@@ -1012,20 +1017,21 @@ sub startNetwork(context as object)
     client.requests++
     spec = buildRequestSpec(context.definition, context.args)
     spec.hashBody = true
-    ' A parser's body comes back as text and is decoded on its task (see parseOnTask). Without
-    ' a parser the body is decoded here, and a persisted one keeps its text for the disk too.
+    ' The body comes back as text: a parser's is decoded on its task (see parseOnTask), any other
+    ' here, on the render thread (see onNetworkResponse). Decoded on the transport's task, it
+    ' would be copied across field by field, which costs the render thread more than decoding.
+    ' The text is also what a persisted body is written as.
     context.decode = spec.parseJson
-    if isNonEmptyString(context.definition.parser) then
-        spec.parseJson = false
-    else if context.definition.persist then
-        spec.keepRawBody = true
-    end if
+    spec.parseJson = false
     entry = m.cache[context.key]
     if context.definition.conditional and entry <> invalid and entry.hasValue then
         if entry.etag <> "" then spec.headers["If-None-Match"] = entry.etag
         if entry.lastModified <> "" then spec.headers["If-Modified-Since"] = entry.lastModified
         spec.allowNotModified = spec.headers.count() > 0
     end if
+    ' The body the value came from: the same body again comes back as unchanged, without it, so an
+    ' unchanged refresh copies nothing across threads (see onNetworkResponse)
+    if entry <> invalid and entry.hasValue and entry.hash <> "" then spec.knownHash = entry.hash
     spec.priority = context.priority
     sendRequest(client, spec, context, onNetworkResponse, onNetworkError)
 end sub
@@ -1051,9 +1057,21 @@ sub onNetworkResponse(response as object, context as object)
         settleUnchanged(context)
         return
     end if
+    if response.unchanged = true then
+        ' The body matched a value that has gone since (set, remove): the body is needed after
+        ' all, so the request goes again without the hash
+        context.spec.delete("knownHash")
+        client = clientOf(context.definition)
+        m.stats.requests++
+        client.requests++
+        transmit(client, context)
+        return
+    end if
     context.body = response.body
     ' Only an answer the entry will keep is stored: not one from before a drop or expire
     if context.definition.persist and currentEntry(context) <> invalid and not cacheControlNoStore(response.headers) then writePersisted(context.key, bodyText(response), context)
+    ' Without a parser, the value is the decoded body (see startNetwork)
+    if not isNonEmptyString(context.definition.parser) then context.body = decodeBody(context.body, context.decode)
     runParseStage(context)
 end sub
 
@@ -1077,9 +1095,10 @@ function runUncached(definition as object, args as object, raw = false as boolea
     m.stats.requests++
     client.requests++
     spec = buildRequestSpec(definition, args)
-    ' A parser's body crosses to its task as text and is decoded there (see parseOnTask)
+    ' The body comes back as text, as for a cached query (see startNetwork): a parser's is decoded
+    ' on its task, any other here (see onUncachedResponse)
     context.decode = spec.parseJson
-    if isNonEmptyString(definition.parser) then spec.parseJson = false
+    spec.parseJson = false
     ' Only a request that changes nothing can be abandoned once it is sent (see _cancel): a GET,
     ' a HEAD, or a cached query's request sent with fetch(name)
     method = ucase(spec.method)
@@ -1099,6 +1118,7 @@ sub onUncachedResponse(response as object, context as object)
     end if
     definition = context.definition
     context.response = response
+    if not isNonEmptyString(definition.parser) then response.body = decodeBody(response.body, context.decode)
     ' Partial data comes with the errors of the fields that failed: fetch hands them back
     if definition.graphql and type(response.body) = "roAssociativeArray" and type(response.body.errors) = "roArray" then context.response.errors = response.body.errors
     if isNonEmptyString(definition.parser) then
@@ -1106,17 +1126,14 @@ sub onUncachedResponse(response as object, context as object)
             onUncachedError({ message: `sghttp: query "${definition.name}" names parser "${definition.parser}" but no parserTask was configured` }, context)
             return
         end if
-        parsePromise = parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql })
-        promises.chain(parsePromise, context).then(function(value as dynamic, context as object) as dynamic
-            finishUncached(context, value)
-            return invalid
-        end function).catch(function(error as dynamic, context as object) as dynamic
-            onUncachedError(error, context)
-            return invalid
-        end function).toPromise()
+        parseOnTask({ parser: definition.parser, body: response.body, args: context.args, decode: context.decode, graphql: definition.graphql }, context, onUncachedParsed, onUncachedError)
         return
     end if
     finishUncached(context, graphqlData(definition, response.body))
+end sub
+
+sub onUncachedParsed(value as dynamic, context as object)
+    finishUncached(context, value)
 end sub
 
 ' An uncached request's value is in hand: the definition's removals apply, and the caller hears
@@ -1168,44 +1185,66 @@ sub transmit(client as object, context as object)
     context.sendNumber = m.sendCount
     promise = client.transport.callFunc("makeRequest", context.spec)
     context.requestPromise = promise
-    if promise.promiseState = "pending" then
-        ' Observed directly rather than through the promises library: the handler runs as the
-        ' settle event is dispatched, in the order the transport answered, with no promise or
-        ' timer of the store's in between. The library's next-tick timers fire in no set order,
-        ' so a success and a 401 settled together could otherwise reach their handlers either
-        ' way round.
-        m.requests[promise.id] = context
-        promise.observeFieldScoped("promiseState", "onRequestSettled")
-    else
-        ' Settled before it was handed back (a transport that answers at once): heard on the
-        ' next tick, as the library hands over any promise already settled
-        promises.chain(promise, context).then(function(response as object, context as object) as dynamic
-            answer(context, response)
-            return invalid
-        end function).catch(function(error as dynamic, context as object) as dynamic
-            if not holdUnauthorized(context, error) then fail(context, error)
-            return invalid
-        end function)
-    end if
+    ' Heard in the order the transport answered (see await): the library's next-tick timers fire
+    ' in no set order, so a success and a 401 settled together could otherwise reach their
+    ' handlers either way round
+    await(promise, context, onTransportAnswer, onTransportFailure)
 end sub
 
-' A transport's promise settled (see transmit). An exception in a handler fails the request as
-' the promise chain's catch did, rather than ending the app from an observer.
-sub onRequestSettled(event as object)
+sub onTransportAnswer(response as object, context as object)
+    answer(context, response)
+end sub
+
+sub onTransportFailure(error as dynamic, context as object)
+    if not holdUnauthorized(context, error) then fail(context, error)
+end sub
+
+' Waits on a promise: one a task settles (a request, a disk read, a parse), or one of the
+' store's own. onOk(value, context) or onError(error, context) runs as the settle event is
+' dispatched, on the render thread, with no timer or promise node of the promises library in
+' between: on a busy render thread each of those costs about a frame. An exception in onOk goes
+' to onError, as a promise chain's catch would take it, rather than ending the app from an
+' observer. A promise settled before it is handed back (a transport that answers at once) is heard
+' on the next tick, through the library, as any promise already settled is.
+' A promise the store waits on this way must not also be listened to through the library from
+' this component: registering a listener clears the component's observers of its promiseState.
+sub await(promise as object, context as object, onOk as function, onError as function)
+    waiter = { context: context, onOk: onOk, onError: onError }
+    if promise.promiseState <> "pending" then
+        promises.chain(promise, waiter).then(function(value as dynamic, waiter as object) as dynamic
+            settleAwait(waiter, true, value)
+            return invalid
+        end function).catch(function(error as dynamic, waiter as object) as dynamic
+            settleAwait(waiter, false, error)
+            return invalid
+        end function)
+        return
+    end if
+    m.awaiting[promise.id] = waiter
+    promise.observeFieldScoped("promiseState", "onAwaitSettled")
+end sub
+
+sub onAwaitSettled(event as object)
     promise = event.getRoSGNode()
     promise.unobserveFieldScoped("promiseState")
-    context = m.requests[promise.id]
-    if context = invalid then return
-    m.requests.delete(promise.id)
-    result = promise.promiseResult
+    waiter = m.awaiting[promise.id]
+    if waiter = invalid then return
+    m.awaiting.delete(promise.id)
+    settleAwait(waiter, event.getData() = "resolved", promise.promiseResult)
+end sub
+
+' Into a local first: called through the waiter, a handler would get the waiter as m
+sub settleAwait(waiter as object, resolved as boolean, result as dynamic)
     try
-        if event.getData() = "resolved" then
-            answer(context, result)
-        else if not holdUnauthorized(context, result) then
-            fail(context, result)
+        if resolved then
+            handler = waiter.onOk
+        else
+            handler = waiter.onError
         end if
+        handler(result, waiter.context)
     catch e
-        fail(context, e)
+        handler = waiter.onError
+        handler(e, waiter.context)
     end try
 end sub
 
@@ -1322,44 +1361,57 @@ sub runParseStage(context as object)
             return
         end if
         hashResult = definition.compare = "parsed"
-        parsePromise = parseOnTask({ parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult, decode: context.decode = true, graphql: definition.graphql })
-        promises.chain(parsePromise, context).then(function(parsed as dynamic, context as object) as dynamic
-            if context.definition.compare = "parsed" and type(parsed) = "roAssociativeArray" then
-                context.parsedHash = asString(parsed.hash)
-                parsed = parsed.value
-            end if
-            settleValue(context, parsed)
-            return invalid
-        end function).catch(function(error as dynamic, context as object) as dynamic
-            settleError(context, error)
-            return invalid
-        end function).toPromise()
+        parseOnTask({ parser: definition.parser, body: context.body, args: context.args, hashResult: hashResult, decode: context.decode = true, graphql: definition.graphql }, context, onParsed, onParseFailed)
     else
         settleValue(context, graphqlData(definition, context.body))
     end if
 end sub
 
+sub onParsed(parsed as dynamic, context as object)
+    if context.definition.compare = "parsed" and type(parsed) = "roAssociativeArray" then
+        context.parsedHash = asString(parsed.hash)
+        parsed = parsed.value
+    end if
+    settleValue(context, parsed)
+end sub
+
+sub onParseFailed(error as dynamic, context as object)
+    settleError(context, error)
+end sub
+
 ' Hands a job to the parser task with the fewest jobs waiting, so a small body (the menu) is
-' not held behind a large one (a page of rows) while another task is free
-function parseOnTask(job as object) as object
+' not held behind a large one (a page of rows) while another task is free. onOk(value, context)
+' hears the parsed value and onError(error, context) a failure (see await).
+sub parseOnTask(job as object, context as object, onOk as function, onError as function)
     index = 0
     for i = 1 to m.parsers.count() - 1
         if m.parsers[i].pending < m.parsers[index].pending then index = i
     end for
     worker = m.parsers[index]
     worker.pending++
-    parsePromise = worker.node.callFunc("parse", job)
-    ' Settled either way: the task has one job fewer
-    promises.onThen(parsePromise, function(value as dynamic, worker as object) as dynamic
-        worker.pending--
-        return invalid
-    end function, worker)
-    promises.onCatch(parsePromise, function(error as dynamic, worker as object) as dynamic
-        worker.pending--
-        return invalid
-    end function, worker)
-    return parsePromise
-end function
+    parse = { worker: worker, counted: true, context: context, onOk: onOk, onError: onError }
+    await(worker.node.callFunc("parse", job), parse, onWorkerParsed, onWorkerFailed)
+end sub
+
+sub onWorkerParsed(value as dynamic, parse as object)
+    releaseWorker(parse)
+    handler = parse.onOk
+    handler(value, parse.context)
+end sub
+
+sub onWorkerFailed(error as dynamic, parse as object)
+    releaseWorker(parse)
+    handler = parse.onError
+    handler(error, parse.context)
+end sub
+
+' Settled either way, the task has one job fewer: once, though a handler that throws has both
+' handlers run (see settleAwait)
+sub releaseWorker(parse as object)
+    if not parse.counted then return
+    parse.counted = false
+    parse.worker.pending--
+end sub
 
 sub settleValue(context as object, value as dynamic)
     key = context.key
@@ -2094,7 +2146,7 @@ sub _destroy()
     m.expiries = {}
     m.buckets = {}
     m.calls = {}
-    m.requests = {}
+    m.awaiting = {}
     for each clientName in m.clients
         client = m.clients[clientName]
         transport = client.transport

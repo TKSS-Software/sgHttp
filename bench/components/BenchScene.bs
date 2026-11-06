@@ -1,0 +1,419 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+' Both written by scripts/bench.js for each run: testServerUrl(), and benchRuns(), benchRunId()
+' benchBusy() and benchOnly()
+import "pkg:/source/testServer.brs"
+import "pkg:/source/benchConfig.brs"
+
+' The benchmark behind npm run bench (see scripts/bench.js). Each case runs one query
+' WARMUP_RUNS times untimed, then benchRuns() times timed, through a Store driven as the specs
+' drive it, against the test server on the developer's machine. It prints lines for the script to
+' read off the debug console (port 8085):
+'   [bench] start <run id>
+'   [bench] device { model, name, os, runs, busy }
+'   [bench] case <name>
+'   [bench] result { case, kind, parser, size, runs, caller, store, block, wrongSource, failures }
+'   [bench] done
+' Times are milliseconds. caller: from the query call to the caller's then, which is what a
+' screen waits for. store: the ms of the store's own resolve (or unchanged) event, from the start
+' of its work to settling the caller's promise. block: the longest the render thread went
+' without servicing a timer that asks to fire every frame, during the run: how long sgHttp (and
+' this harness) kept it from drawing. Each is { median, p90, min, max, mean } over the runs.
+'
+' busy (npm run bench -- --busy): an animation runs throughout, and every tick of that timer also
+' spends BUSY_MS in script and sets two observed fields (a label's text, and a field of a node
+' with a script observer), as an app's own UI code would, so the times show sgHttp's work
+' competing with drawing and with field traffic on the render thread.
+'
+' kinds:
+'   disk      - a cold start: memory has nothing, the body is on cachefs:/ (persist: true). The
+'               entry is pushed out of memory before each run by setting another query's value,
+'               with maxEntries 1; an evicted entry's disk copy stays.
+'   miss      - nothing cached: a new key each run, so each is a request and a parse
+'   unchanged - a refresh the server answers with the same body (force: true on a cached key)
+'   hit       - a fresh value in memory: nothing is sent, the value is handed to the caller
+'   burst     - BURST misses sent in one go, as a screen that loads several queries at once:
+'               the times are to the last answer
+'   disklone  - a cold start whose read is the only thing sent to the Persistence task for a
+'               while: the eviction's delete goes LONE_GAP_SECONDS before it (disk sends them
+'               back to back)
+'   diskburst - BURST cold starts sent in one go, as a launch that reads several persisted
+'               queries at once, LONE_GAP_SECONDS after their evictions; timed to the last answer
+
+const WARMUP_RUNS = 2
+' Between runs, so the previous run's background work (a disk write) is out of the way
+const GAP_SECONDS = 0.05
+' After priming a disk case, for its write to land before the first read
+const PRIME_SECONDS = 1.0
+' A query not answered by then has stalled: the store's state is printed and the run counts as
+' failed, so one lost answer cannot hang the whole benchmark
+const STALL_SECONDS = 15
+' The timer the block measure (and busy mode's script) runs on: a frame at 60 fps
+const TICK_SECONDS = 0.016
+' Script a busy tick runs, as an app's UI code would between frames
+const BUSY_MS = 4
+' Queries a burst run sends at once
+const BURST = 4
+' Between a disklone or diskburst run's evictions and its reads
+const LONE_GAP_SECONDS = 0.3
+const SMALL = 5000
+const LARGE = 300000
+
+sub init()
+    m.status = m.top.findNode("status")
+    m.runs = benchRuns()
+    m.serverUrl = testServerUrl()
+    ' One persistence task for every store, as in the specs: file operations of a store and the
+    ' next run in one queue, in order
+    m.disk = createObject("roSGNode", "Persistence")
+    m.store = invalid
+    m.cases = []
+    for each kind in ["disk", "miss", "unchanged", "hit", "burst", "disklone", "diskburst"]
+        for each parser in [true, false]
+            for each size in [SMALL, LARGE]
+                ' An unchanged refresh of a small body is too cheap to show anything; a burst is
+                ' about many requests at once, not their size
+                include = true
+                if kind = "unchanged" then include = size = LARGE
+                if kind = "burst" or kind = "disklone" or kind = "diskburst" then include = size = SMALL
+                if include then
+                    benchCase = newCase(kind, parser, size)
+                    ' --only: the cases whose name holds that text
+                    if benchOnly() = "" or benchCase.name.instr(benchOnly()) >= 0 then m.cases.push(benchCase)
+                end if
+            end for
+        end for
+    end for
+    m.caseIndex = -1
+    m.timer = createObject("roSGNode", "Timer")
+    m.timer.repeat = false
+    m.timer.observeFieldScoped("fire", "onTimer")
+    m.afterTimer = ""
+    m.watchdog = createObject("roSGNode", "Timer")
+    m.watchdog.repeat = false
+    m.watchdog.duration = STALL_SECONDS
+    m.watchdog.observeFieldScoped("fire", "onStall")
+    ' Counts the queries watched: an answer to one the watchdog gave up on is ignored
+    m.waitCount = 0
+    m.waiting = invalid
+    ' The block measure: the gap between ticks, kept while a timed run waits (see onTick)
+    m.busy = benchBusy()
+    m.tickClock = createObject("roTimespan")
+    m.lastTick = 0
+    m.measuring = false
+    m.runBlock = 0
+    m.ticker = createObject("roSGNode", "Timer")
+    m.ticker.repeat = true
+    m.ticker.duration = TICK_SECONDS
+    m.ticker.observeFieldScoped("fire", "onTick")
+    m.ticker.control = "start"
+    m.top.findNode("busyRow").visible = m.busy
+    ' Set every busy tick: field traffic with observers, as an app's UI makes (see onTick)
+    m.busyCounter = m.top.findNode("busyCounter")
+    m.busyProbe = createObject("roSGNode", "Node")
+    m.busyProbe.addField("tick", "integer", true)
+    m.busyProbe.observeFieldScoped("tick", "onBusyProbe")
+    m.busyTicks = 0
+    if m.busy then m.top.findNode("busyAnimation").control = "start"
+
+    ' Before anything else: the script reads only what follows it (see scripts/bench.js)
+    print "[bench] start " + benchRunId()
+    info = createObject("roDeviceInfo")
+    os = info.getOSVersion()
+    ' Printed again at the end, in case the console was reconnecting as the app started
+    m.deviceLine = "[bench] device " + formatJson({ model: info.getModel(), name: info.getModelDisplayName(), os: `${os.major}.${os.minor}.${os.revision} build ${os.build}`, runs: m.runs, busy: m.busy })
+    print m.deviceLine
+    nextCase()
+end sub
+
+function newCase(kind as string, parser as boolean, size as integer) as object
+    name = kind + (parser ? ", parser, " : ", no parser, ") + (size \ 1000).toStr() + " KB"
+    return { name: name, kind: kind, parser: parser, size: size }
+end function
+
+' Runs the step named after a pause of seconds
+sub after(seconds as float, stepName as string)
+    m.afterTimer = stepName
+    m.timer.duration = seconds
+    m.timer.control = "start"
+end sub
+
+sub onTimer()
+    stepName = m.afterTimer
+    m.afterTimer = ""
+    if stepName = "run" then
+        runOnce()
+    else if stepName = "read" then
+        startRead()
+    else if stepName = "nextCase" then
+        nextCase()
+    end if
+end sub
+
+sub nextCase()
+    m.caseIndex++
+    if m.caseIndex >= m.cases.count() then
+        finish()
+        return
+    end if
+    m.case = m.cases[m.caseIndex]
+    m.iteration = 0
+    m.callerTimes = []
+    m.storeTimes = []
+    m.blockTimes = []
+    m.wrongSource = 0
+    m.failures = 0
+    m.lastFailure = invalid
+    m.priming = false
+    print "[bench] case " + m.case.name
+    m.status.text = `sghttp bench: ${m.caseIndex + 1}/${m.cases.count()} ${m.case.name}`
+    makeStore()
+    if m.case.kind = "miss" or m.case.kind = "burst" then
+        after(GAP_SECONDS, "run")
+        return
+    end if
+    ' The other kinds start from a cached copy: the first answer puts it there
+    m.priming = true
+    m.status.text = m.status.text + " (priming)"
+    if m.case.kind = "diskburst" then
+        watch(promises.all(burstQueries({})))
+    else
+        watch(m.store.callFunc("_query", "bench", argsFor(-1), {}))
+    end if
+end sub
+
+' A query of each of a diskburst run's BURST keys
+function burstQueries(options as object) as object
+    queries = []
+    for k = 0 to BURST - 1
+        queries.push(m.store.callFunc("_query", "bench", { size: m.case.size.toStr(), i: k.toStr() }, options))
+    end for
+    return queries
+end function
+
+function readsFromDisk() as boolean
+    return m.case.kind = "disk" or m.case.kind = "disklone" or m.case.kind = "diskburst"
+end function
+
+' A store per case, so no case inherits another's entries or definitions
+sub makeStore()
+    if type(m.store) = "roSGNode" then m.store.callFunc("_destroy")
+    m.store = createObject("roSGNode", "Store")
+    m.store.callFunc("_initialize", { baseUrl: m.serverUrl, parserTask: "BenchParserTask", persistence: m.disk, namespace: "bench", maxEntries: m.case.kind = "diskburst" ? BURST : 1 })
+    definition = { request: { url: "/bench/body/{size}", query: { i: "{i}" } }, ttl: 3600, persist: readsFromDisk() }
+    if m.case.parser then definition.parser = "Count"
+    m.store.callFunc("_define", "bench", definition)
+    ' Set to push the bench entry out of memory (see runOnce)
+    m.store.callFunc("_define", "filler", { request: { url: "/unused" }, ttl: 3600 })
+    ' A disk case reads only the copy this run wrote
+    m.store.callFunc("_removeAll")
+    m.store.observeFieldScoped("lastEvent", "onStoreEvent")
+    m.storeEvent = invalid
+end sub
+
+' args for a run: a miss asks for a key of its own each time; the others ask for one key
+function argsFor(iteration as integer) as object
+    args = { size: m.case.size.toStr() }
+    if m.case.kind = "miss" or m.case.kind = "burst" then args.i = iteration.toStr()
+    return args
+end function
+
+sub runOnce()
+    ' Evictions first: a disk kind's entry (or entries) leave memory, their copies on disk stay
+    if m.case.kind = "disk" or m.case.kind = "disklone" then m.store.callFunc("_set", "filler", { i: m.iteration.toStr() }, { filler: true })
+    if m.case.kind = "diskburst" then
+        for k = 0 to BURST - 1
+            m.store.callFunc("_set", "filler", { i: (m.iteration * BURST + k).toStr() }, { filler: true })
+        end for
+    end if
+    if m.case.kind = "disklone" or m.case.kind = "diskburst" then
+        after(LONE_GAP_SECONDS, "read")
+        return
+    end if
+    startRead()
+end sub
+
+' The timed part of a run
+sub startRead()
+    options = {}
+    if m.case.kind = "unchanged" then options.force = true
+    m.storeEvent = invalid
+    m.measuring = m.iteration >= WARMUP_RUNS
+    m.runBlock = 0
+    m.lastTick = m.tickClock.totalMilliseconds()
+    m.clock = createObject("roTimespan")
+    if m.case.kind = "burst" then
+        queries = []
+        for k = 0 to BURST - 1
+            queries.push(m.store.callFunc("_query", "bench", argsFor(m.iteration * BURST + k), options))
+        end for
+        watch(promises.all(queries))
+        return
+    end if
+    if m.case.kind = "diskburst" then
+        watch(promises.all(burstQueries(options)))
+        return
+    end if
+    watch(m.store.callFunc("_query", "bench", argsFor(m.iteration), options))
+end sub
+
+' The library turns an exception in a callback into a rejection nobody hears, which would leave
+' the run hanging: say so on the console and stop instead
+sub watch(promise as object)
+    m.waitCount++
+    m.waiting = promise
+    m.watchdog.control = "stop"
+    m.watchdog.control = "start"
+    promises.onThen(promise, function(value as dynamic, ticket as object) as dynamic
+        if ticket.count <> m.waitCount then return invalid
+        m.watchdog.control = "stop"
+        try
+            onAnswered(value)
+        catch e
+            abort(e)
+        end try
+        return invalid
+    end function, { count: m.waitCount })
+    promises.onCatch(promise, function(error as dynamic, ticket as object) as dynamic
+        if ticket.count <> m.waitCount then return invalid
+        m.watchdog.control = "stop"
+        try
+            onFailed(error)
+        catch e
+            abort(e)
+        end try
+        return invalid
+    end function, { count: m.waitCount })
+end sub
+
+' A query went unanswered for STALL_SECONDS: what the store knew, then on with the next run
+sub onStall()
+    m.waitCount++
+    state = invalid
+    if type(m.waiting) = "roSGNode" then state = m.waiting.promiseState
+    print "[bench] stall " + formatJson({ case: m.case.name, iteration: m.iteration, priming: m.priming, promiseState: state, lastEvent: m.storeEvent, stats: m.store.callFunc("_getStats") })
+    onFailed({ message: `no answer after ${STALL_SECONDS} seconds` })
+end sub
+
+sub abort(e as object)
+    print "[bench] error " + formatJson({ message: e.message, case: m.case.name, line: e.backtrace.peek().line_number })
+    finish()
+end sub
+
+' A tick of the block measure. The gap since the last one is how long the render thread was
+' kept from it; busy mode then spends BUSY_MS as an app's script would.
+sub onTick()
+    now = m.tickClock.totalMilliseconds()
+    if m.measuring and now - m.lastTick > m.runBlock then m.runBlock = now - m.lastTick
+    m.lastTick = now
+    if m.busy then
+        m.busyTicks++
+        m.busyCounter.text = m.busyTicks.toStr()
+        m.busyProbe.tick = m.busyTicks
+        spin = createObject("roTimespan")
+        while spin.totalMilliseconds() < BUSY_MS
+        end while
+    end if
+end sub
+
+sub onBusyProbe()
+end sub
+
+' The store's last word on the bench query, read when the caller is answered
+sub onStoreEvent(event as object)
+    data = event.getData()
+    if type(data) <> "roAssociativeArray" or data.name <> "bench" then return
+    if data.type = "resolve" or data.type = "unchanged" or data.type = "hit" or data.type = "error" then m.storeEvent = data
+end sub
+
+sub onAnswered(value as dynamic)
+    if m.priming = true then
+        m.priming = false
+        after(PRIME_SECONDS, "run")
+        return
+    end if
+    callerMs = m.clock.totalMilliseconds()
+    ' The stretch since the last tick counts too: it ends here
+    now = m.tickClock.totalMilliseconds()
+    if m.measuring and now - m.lastTick > m.runBlock then m.runBlock = now - m.lastTick
+    m.measuring = false
+    event = m.storeEvent
+    if not answeredAsExpected(event) then m.wrongSource++
+    if m.iteration >= WARMUP_RUNS then
+        m.callerTimes.push(callerMs)
+        m.blockTimes.push(m.runBlock)
+        if type(event) = "roAssociativeArray" then m.storeTimes.push(event.ms)
+    end if
+    nextRun()
+end sub
+
+sub onFailed(error as dynamic)
+    m.measuring = false
+    m.failures++
+    m.lastFailure = error
+    if m.priming = true then
+        ' Nothing cached to time: the case is reported with its failure
+        m.priming = false
+        report()
+        return
+    end if
+    nextRun()
+end sub
+
+' A run that took another path than its case's (a disk case that went to the network) is not
+' timing what it says, and is counted
+function answeredAsExpected(event as dynamic) as boolean
+    if type(event) <> "roAssociativeArray" then return false
+    if readsFromDisk() then return event.type = "resolve" and event.source = "disk"
+    if m.case.kind = "miss" then return event.type = "resolve" and event.source = "network"
+    if m.case.kind = "hit" then return event.type = "hit"
+    if m.case.kind = "burst" then return event.type = "resolve" and event.source = "network"
+    return event.type = "unchanged"
+end function
+
+sub nextRun()
+    m.iteration++
+    if m.callerTimes.count() >= m.runs or m.failures > m.runs then
+        report()
+        return
+    end if
+    after(GAP_SECONDS, "run")
+end sub
+
+sub report()
+    result = { case: m.case.name, kind: m.case.kind, parser: m.case.parser, size: m.case.size, runs: m.callerTimes.count(), caller: summary(m.callerTimes), store: summary(m.storeTimes), block: summary(m.blockTimes), wrongSource: m.wrongSource, failures: m.failures }
+    if m.lastFailure <> invalid then result.lastFailure = m.lastFailure
+    print "[bench] result " + formatJson(result)
+    after(GAP_SECONDS * 4, "nextCase")
+end sub
+
+function summary(times as object) as object
+    if times.count() = 0 then return invalid
+    sorted = []
+    sorted.append(times)
+    sorted.sort()
+    count = sorted.count()
+    total = 0
+    for each ms in sorted
+        total += ms
+    end for
+    if count mod 2 = 1 then
+        median = sorted[count \ 2]
+    else
+        median = (sorted[count \ 2 - 1] + sorted[count \ 2]) / 2
+    end if
+    return { median: median, p90: sorted[int(0.9 * (count - 1) + 0.5)], min: sorted[0], max: sorted[count - 1], mean: int(total / count + 0.5) }
+end function
+
+sub finish()
+    m.watchdog.control = "stop"
+    m.ticker.control = "stop"
+    if type(m.store) = "roSGNode" then
+        m.store.callFunc("_removeAll")
+        m.store.callFunc("_destroy")
+    end if
+    m.disk.shutdown = true
+    m.status.text = "sghttp bench: done"
+    print m.deviceLine
+    print "[bench] done"
+    m.top.done = true
+end sub

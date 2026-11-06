@@ -4,16 +4,16 @@
 
 | Work | Where |
 |---|---|
-| Cache lookups, keys, freshness, bookkeeping | `Store` node, on the render thread |
-| HTTP, gzip, body hashing, JSON decoding of network bodies without a parser (a disk copy without a parser is decoded on the render thread) | `Transport` task, one per client |
+| Cache lookups, keys, freshness, bookkeeping, and JSON decoding of bodies without a parser | `Store` node, on the render thread |
+| HTTP, gzip, body hashing | `Transport` task, one per client |
 | JSON decoding of bodies with a parser, parsers, parsed-value hashing | Your `ParserTask` subclass, two of them by default |
 | Reading, writing and deleting `cachefs:/` files | `Persistence` task, started when the first query with `persist: true` is defined |
 
-The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes.
+The store does only bookkeeping, so a query costs the render thread very little: it builds a key, looks it up and creates a promise. Everything slow runs on tasks, and results come back through promise nodes. The store observes those promises itself, and handles a request's, a disk read's or a parse's answer as its settle event is dispatched: a wait through the promises library costs about a frame on a busy render thread, and a cold start from disk with a parser would otherwise pay for two of them before the caller's own. The exception is decoding a body that has no parser: a query or fetch without one leaves that to the render thread, by choice. Give a large response a parser to keep it on a task.
 
-A task that reads or writes a field of a node the render thread owns waits for the render thread to service it (a rendezvous). sgHttp keeps those to a minimum: a request, a parse or a disk read costs two, the two writes that settle its promise, and the data a task needs travels with the job it is handed. The Transport reads its settings once, as it starts; the count of requests in flight is kept on the render thread.
+A task that reads or writes a field of a node the render thread owns waits for the render thread to service it (a rendezvous). sgHttp keeps those to a minimum: a request or a parse costs two, the two writes that settle its promise; a disk read costs one, the write of its answer, which the render thread settles the promise from; and the data a task needs travels with the job it is handed. A task's write to a render-thread node can also fail to land, with the task none the wiser (about once in 250 reads on a Roku Express 4K running OS 16), so a disk read unanswered after a second is sent again rather than left hanging. The Transport reads its settings once, as it starts; the count of requests in flight is kept on the render thread.
 
-When a decoded body crosses from one thread to another, it's copied field by field, and the copy costs time on the render thread. So a body bound for a parser travels as the text the server sent, which is a single string, and the parser task decodes it. Only the parser's result reaches the render thread, and ContentNodes in it aren't copied.
+When a decoded body crosses from one thread to another, it's copied field by field, and the copy runs on the render thread. That costs more than decoding the text there: in the benchmark (`npm run bench`, Roku Express 4K), a 300 KB body without a parser reached its caller in 84 ms decoded on the render thread, against 211.5 ms decoded on the transport task and copied across. So every body crosses as the text the server sent, which is a single string. A body for a parser is decoded on the parser task, and only the parser's result reaches the render thread; ContentNodes in it aren't copied. Any other body is decoded on the render thread.
 
 ## One store for the whole app
 
@@ -27,6 +27,7 @@ Nodes are cached by reference. Every query of a key whose value is a ContentNode
 
 - A node has one parent. Attaching a cached tree to a second container moves it out of the first. If two screens show the same data at once, give the second one a copy (`node.clone(true)`) or build its own view of the data.
 - Changing a field on a cached node changes it for every later query of that key. Treat cached values as read-only. To change data, write to the server and expire the query.
+- The copy of an associative array is made on the render thread, on every hit. It is cheap for a small value and not for a large one: in the benchmark, a memory hit of a 300 KB decoded body costs about 40 ms on a Roku Express 4K, 22 to 26 ms of it with the render thread blocked, where a hit of the same body parsed into ContentNodes costs 2 ms. A parser that builds nodes avoids the copy; so does a parser that keeps only the fields the screen shows.
 
 ## What the cache holds on to
 

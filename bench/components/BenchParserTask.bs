@@ -1,0 +1,13 @@
+' Counts the listing's rows: a small value, so what crosses back to the render thread is the
+' same size whatever the body's
+class CountParser
+    function parse(body as dynamic, args as object) as dynamic
+        if type(body) <> "roAssociativeArray" or type(body.items) <> "roArray" then return { count: -1 }
+        return { count: body.items.count() }
+    end function
+end class
+
+function getParser(name as string) as dynamic
+    if name = "Count" then return new CountParser()
+    return invalid
+end function

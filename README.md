@@ -9,7 +9,7 @@
 
 # sgHttp
 
-An HTTP client for Roku SceneGraph apps, for REST and GraphQL APIs. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts, shared headers and JSON decoding; the render thread only ever sees the promise. A request can also name a parser, which is not required, but lets the response be turned into ContentNodes on a task thread instead of the render thread.
+An HTTP client for Roku SceneGraph apps, for REST and GraphQL APIs. Send a request from any component and get a promise back, without writing a Task, a message port or an `roUrlTransfer` loop yourself. Requests run on a pooled task thread with retries, timeouts and shared headers; the render thread only ever sees the promise. A request can also name a parser, which decodes the response and turns it into ContentNodes on a task thread. Without one, the JSON is decoded on the render thread as it arrives.
 
 ```brightscript
 ' once, either in the main scene or another function that runs before your first request
@@ -96,7 +96,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 - A pool of `roUrlTransfer` objects on a task thread, with a queue, per-request timeouts and retries with backoff
 - Shared headers for auth, changed at any time with `setHeaders`
 - More than one server, each with its own base url, headers and pool
-- JSON decoding off the render thread, and the whole response back: status, headers and body
+- The whole response back: status, headers and the decoded body, or with a parser, decoding and parsing on a task thread
 - An event for every request, so one observer can send the app to sign-in on a 401
 - Token renewal: on a 401, requests wait while the app renews its auth headers, then are sent again
 - A debugging proxy switch for Charles or mitmproxy
@@ -130,7 +130,7 @@ If a detail screen adds a favourite with a mutation that lists `expires: ["favor
 sgHttp isn't on npm yet. Install the latest release candidate from its GitHub release:
 
 ```sh
-npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.5/sghttp-0.1.0-rc.5.tgz
+npx ropm install sghttp@https://github.com/TKSS-Software/sgHttp/releases/download/v0.1.0-rc.6/sghttp-0.1.0-rc.6.tgz
 ```
 
 Every candidate is listed under [Releases](https://github.com/TKSS-Software/sgHttp/releases), each with its install line.

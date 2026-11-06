@@ -21,8 +21,10 @@ const MAX_RETRY_AFTER_SECONDS = 60
 ' fetch takes the spec sghttp.fetch does, with {placeholders} filled from args. send takes the
 ' spec a transport does, already filled (see fillRequest):
 ' spec: { url, method, headers, body, query, parseJson, successCodes, retries, hashBody,
-'         allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat, graphql, toFile,
-'         includeSharedHeaders, useProxy }
+'         knownHash, allowNotModified, timeoutSeconds, keepRawBody, priority, safeToRepeat,
+'         graphql, toFile, includeSharedHeaders, useProxy }
+'   knownHash   - with hashBody, the hash of the body the caller already has: a success with that
+'                 body answers unchanged, with no body (a transport may ignore it and send the body)
 '   toFile      - a path (tmp:/, cachefs:/) a GET's body is written to instead of returned: the
 '                 response has path and no body (see finishDownload)
 '   graphql     - true for a GraphQL request: a response with errors and no data fails, and a
@@ -31,7 +33,8 @@ const MAX_RETRY_AFTER_SECONDS = 60
 '   safeToRepeat - true when the request only reads, whatever its method (a cached query sent
 '                 as a POST, such as a GraphQL query): it is retried as a GET would be
 '   priority    - "high", "normal" (the default) or "low": which queue the request waits in
-' response: { code, body, headers, url, ms, bodyHash, notModified, rawBody, kind, path }
+' response: { code, body, headers, url, ms, bodyHash, notModified, unchanged, rawBody, kind, path }
+'   unchanged   - true when the body hashed to spec.knownHash: body is invalid
 '   kind        - for a request with no HTTP answer (a negative code, or cancelled): see
 '                 failureKind, or "cancelled"
 '   rawBody     - the body's text, when spec.keepRawBody is true and body was decoded from it
@@ -434,6 +437,14 @@ function httpClient_onUrlEvent(event as object) as boolean
 
     success = m.isSuccess(code, job.spec)
     if success and job.spec.hashBody = true and rawBody <> "" then response.bodyHash = hashString(rawBody)
+    ' The body the caller already has (knownHash): it is not decoded, nor sent back, since across
+    ' threads that copy is most of what a response costs
+    if success and isNonEmptyString(response.bodyHash) and response.bodyHash = job.spec.knownHash then
+        response.unchanged = true
+        response.body = invalid
+        m.finish(job, response, true)
+        return true
+    end if
     if success and job.spec.parseJson <> false and rawBody <> "" then
         parsed = parseJson(rawBody)
         if parsed <> invalid then

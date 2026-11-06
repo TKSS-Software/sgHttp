@@ -11,6 +11,7 @@
 | `src/components/ParserTask.bs` | The parser task apps extend |
 | `src/components/Persistence.bs` | `cachefs:/` file access |
 | `tests/` | A small test app that `src/` is compiled into, with the Rooibos specs |
+| `bench/` | The benchmark app that `src/` is compiled into (`npm run bench`) |
 | `scripts/build.js` | The package build |
 
 The store runs on the render thread and only does bookkeeping. Network, parsing and file work belong on the tasks. `roFileSystem` can't be created on the render thread, so never add file access to the store.
@@ -45,6 +46,38 @@ This builds the package, compiles the test app (`bsconfig-test.json`), deploys i
 The transport specs (`tests/components/sghttpTransport.spec.bs`) send real requests to a small server, `scripts/test-server.js`, which `npm test` starts on this machine on port 8099 and the Roku must be able to reach. Its address is written to `tests/source/testServer.brs` (ignored by git) by `npm run build` and `npm test`, so build once before compiling the tests in an editor.
 
 The cache specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
+
+## Benchmark
+
+```sh
+npm run bench
+```
+
+This compiles the benchmark app in `bench/` with `src/` (`bsconfig-bench.json`), sideloads it to the device in `.env` the same way `npm test` does, and prints a table of timings it reads off the debug console. Port 8085 must be free, as for the specs. The bodies come from the same test server, so network jitter stays out of the numbers.
+
+Each case times one query, 20 times after two untimed warm-up runs (`--runs 50` for more):
+
+| Kind | What it times |
+|---|---|
+| `disk` | A cold start: nothing in memory, the body on `cachefs:/` |
+| `miss` | A request and a parse, with nothing cached |
+| `unchanged` | A refresh the server answers with the same body |
+| `hit` | A fresh value in memory, handed to the caller |
+| `burst` | Four misses sent at once, as a screen loading several queries; timed to the last answer |
+| `disklone` | A cold start whose read is the only thing sent to the Persistence task for a while: the eviction's delete goes 300 ms before it, where `disk` sends them back to back |
+| `diskburst` | Four cold starts sent at once, 300 ms after their evictions, as a launch reading several persisted queries; timed to the last answer |
+
+Each kind runs with and without a parser, at 5 KB and 300 KB bodies (`unchanged` at 300 KB only, `burst` at 5 KB only). `--only "disk, parser"` runs just the cases whose name contains that text, and with `--runs 300` makes a stress run of them. `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own event. `block` is the longest the render thread went without servicing a timer due every frame during a run: how long the work kept it from drawing. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network). A query unanswered after 15 seconds prints the store's state and counts as failed.
+
+Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working tree has changes, and everything the device's console printed during it to `build/bench/<commit>.log`. To compare against an earlier run, pass it:
+
+```sh
+npm run bench -- --compare build/bench/ea1e0a6.json
+```
+
+The table then adds that run's caller median and the change.
+
+By default the render thread is otherwise idle, which shows what sgHttp's own work costs. An app's render thread rarely is, so measure a change with `--busy` too: an animation runs throughout, and every frame also spends 4 ms in script and sets two observed fields (a label's text and a field with a script observer), as an app's UI code would. Busy runs are saved as `<commit>-busy.json`; compare them with busy runs. A lost disk answer shows in the saved console log as a `persistence: read N unanswered` line; `--only disk --runs 300` is the stress run that provokes them (a few per 1,200), and `disklone` and `diskburst` the two patterns that never have. On a busy render thread, each step that waits on a promise through the promises library costs about a frame, where an idle one costs about 2 ms.
 
 ## Release candidates
 

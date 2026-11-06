@@ -592,6 +592,68 @@ namespace tests
             end function)
         end function
 
+        @describe("unchanged bodies")
+
+        @async
+        @it("sends the hash of the cached body, and settles an answer of unchanged with the value it has")
+        function _()
+            m.makeStore()
+            m.watchedOne = m.watcher("1")
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                ' Nothing cached yet: no hash to send
+                suite.assertInvalid(suite.fake.callFunc("requestAt", 0).knownHash)
+                again = suite.query("1", { force: true })
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).knownHash, "a")
+                suite.assertTrue(suite.fake.callFunc("answerUnchanged", 1))
+                return again
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.store.callFunc("_getStats").unchanged, 1)
+                suite.assertEqual(suite.fake.requestCount, 2)
+                suite.assertTrue(suite.heardNothing(suite.watchedOne))
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async
+        @it("asks again for the body when the value it matched was replaced meanwhile")
+        function _()
+            m.makeStore()
+            first = m.query("1")
+            m.fake.callFunc("answer", 0, "a")
+            promises.chain(first, m).then(function(value as dynamic, suite as object) as dynamic
+                suite.slow = suite.query("1", { force: true })
+                suite.assertEqual(suite.fake.callFunc("requestAt", 1).knownHash, "a")
+                ' A local write while the request is out: the value "a" is gone
+                suite.store.callFunc("_set", "items", { id: "1" }, "local")
+                suite.fake.callFunc("answerUnchanged", 1)
+                return promises.resolve(invalid)
+            end function).then(function(_ as dynamic, suite as object) as dynamic
+                ' Sent again, without the hash, for the body itself
+                suite.assertEqual(suite.fake.requestCount, 3)
+                suite.assertInvalid(suite.fake.callFunc("requestAt", 2).knownHash)
+                suite.fake.callFunc("answer", 2, "a")
+                return suite.slow
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' The caller hears the server's value; the local write stays in the cache
+                suite.assertEqual(value, "a")
+                suite.assertEqual(suite.store.callFunc("_peek", "items", { id: "1" }), "local")
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("expire and disk copies")
 
         @async
@@ -735,6 +797,39 @@ namespace tests
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.assertEqual(suite.fake.requestCount, 0)
                 suite.assertEqual(suite.store.lastEvent.client, "ghost")
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @describe("decoding without a parser")
+
+        @async
+        @it("asks the transport for the text and decodes it on the render thread, for a query and a fetch")
+        function _()
+            m.makeStore()
+            m.store.callFunc("_define", "raw", { request: { url: "/raw", parseJson: false }, ttl: 300 })
+            waiting = [
+                m.query("1")
+                m.store.callFunc("_fetch", "/fetched", {})
+                m.store.callFunc("_query", "raw", {}, {})
+            ]
+            ' The transport decodes nothing: a decoded body would be copied across field by field
+            for i = 0 to 2
+                m.assertFalse(m.fake.callFunc("requestAt", i).parseJson)
+            end for
+            m.fake.callFunc("answer", 0, `{"word":"abc"}`)
+            m.fake.callFunc("answer", 1, `{"word":"def"}`)
+            m.fake.callFunc("answer", 2, `{"word":"ghi"}`)
+            promises.chain(promises.all(waiting), m).then(function(values as object, suite as object) as dynamic
+                suite.assertEqual(values[0].word, "abc")
+                suite.assertEqual(values[1].body.word, "def")
+                ' parseJson: false in the definition keeps the text
+                suite.assertEqual(values[2], `{"word":"ghi"}`)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
                 suite.done()
                 return invalid
             end function)
@@ -1901,6 +1996,47 @@ namespace tests
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(5000)
+        @it("sends a read again when its answer never lands, as a dropped rendezvous leaves it")
+        function _()
+            disk = m.disk()
+            path = "cachefs:/sghttp-spec/retry.json"
+            disk.callFunc("execute", { type: "ensureDir", dir: "cachefs:/sghttp-spec" })
+            disk.callFunc("execute", { type: "write", path: path, text: "kept" })
+            disk.callFunc("execute", { type: "dropAnswers", count: 1 })
+            m.slow = createObject("roTimespan")
+            promises.chain(disk.callFunc("execute", { type: "read", path: path }), m).then(function(text as dynamic, suite as object) as dynamic
+                suite.assertEqual(text, "kept")
+                ' The first answer was dropped: the read went again after READ_RETRY_SECONDS
+                suite.assertTrue(suite.slow.totalMilliseconds() >= 900)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(5000)
+        @it("rejects the reads still waiting when the task is shut down, and any sent after, instead of retrying them")
+        function _()
+            disk = createObject("roSGNode", "Persistence")
+            disk.callFunc("execute", { type: "dropAnswers", count: 1 })
+            m.slow = createObject("roTimespan")
+            waiting = disk.callFunc("execute", { type: "read", path: "cachefs:/sghttp-spec/none.json" })
+            disk.shutdown = true
+            promises.chain(promises.allSettled([waiting, disk.callFunc("execute", { type: "read", path: "cachefs:/sghttp-spec/none.json" })]), m).then(function(results as object, suite as object) as dynamic
+                suite.assertEqual(results[0].status, "rejected")
+                suite.assertTrue(results[0].reason.cancelled)
+                suite.assertEqual(results[1].status, "rejected")
+                ' Rejected at the shutdown, not sent again a second later
+                suite.assertTrue(suite.slow.totalMilliseconds() < 900)
                 suite.done()
                 return invalid
             end function)
