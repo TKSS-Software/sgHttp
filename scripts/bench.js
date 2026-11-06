@@ -5,6 +5,8 @@
 //
 //   npm run bench                                   20 timed runs per case
 //   npm run bench -- --runs 50                      more runs per case
+//   npm run bench -- --busy                         an animation and script on the render thread
+//                                                   throughout, saved as <commit>-busy.json
 //   npm run bench -- --compare build/bench/abc1234.json
 //                                                   adds the saved run's medians and the change
 //
@@ -160,14 +162,14 @@ function change(now, before) {
 
 function printTable(run, baseline) {
     const before = new Map((baseline ? baseline.results : []).map((r) => [r.case, r]));
-    const header = ['case', 'caller median', 'caller p90', 'store median', 'store p90'];
+    const header = ['case', 'caller median', 'caller p90', 'store median', 'store p90', 'block median', 'block max'];
     if (baseline) header.push(`caller median @${baseline.commit}`, 'change');
     header.push('notes');
     const rows = run.results.map((r) => {
         const notes = [];
         if (r.failures) notes.push(`${r.failures} failed`);
         if (r.wrongsource) notes.push(`${r.wrongsource} took another path`);
-        const row = [r.case, ms(r.caller?.median), ms(r.caller?.p90), ms(r.store?.median), ms(r.store?.p90)];
+        const row = [r.case, ms(r.caller?.median), ms(r.caller?.p90), ms(r.store?.median), ms(r.store?.p90), ms(r.block?.median), ms(r.block?.max)];
         if (baseline) {
             const old = before.get(r.case);
             row.push(ms(old?.caller?.median), change(r.caller?.median, old?.caller?.median));
@@ -178,8 +180,9 @@ function printTable(run, baseline) {
     const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => String(row[i]).length)));
     const line = (cells) => cells.map((c, i) => (i === 0 || i === cells.length - 1 ? String(c).padEnd(widths[i]) : String(c).padStart(widths[i]))).join('  ');
     console.log('');
-    console.log(`${run.device.name || run.device.model || 'device'} (${run.device.model || '?'}), OS ${run.device.os || '?'}, ${run.device.runs} runs per case, commit ${run.commit}`);
-    console.log('Milliseconds. caller: query() to the caller\'s then. store: the store\'s own resolve or unchanged event.');
+    console.log(`${run.device.name || run.device.model || 'device'} (${run.device.model || '?'}), OS ${run.device.os || '?'}, ${run.device.runs} runs per case, commit ${run.commit}${run.device.busy ? ', render thread busy' : ''}`);
+    console.log('Milliseconds. caller: query() to the caller\'s then. store: the store\'s own event.');
+    console.log('block: the longest the render thread went without servicing a timer due every frame, during a run.');
     console.log('');
     console.log(line(header));
     console.log(line(widths.map((w) => '-'.repeat(w))));
@@ -193,6 +196,7 @@ async function main() {
     if (!host || !password) fail('set ROKU_IP and ROKU_PASSWORD in .env (or ROKU_HOST and ROKU_PASSWORD in the environment)');
     const runs = Number(option('runs', '20'));
     if (!Number.isInteger(runs) || runs < 1) fail('--runs takes a whole number');
+    const busy = process.argv.includes('--busy');
     const comparePath = option('compare', '');
     const baseline = comparePath ? JSON.parse(fs.readFileSync(path.resolve(comparePath), 'utf8')) : null;
 
@@ -204,7 +208,7 @@ async function main() {
     const runId = `${Date.now()}`;
     fs.writeFileSync(
         path.join(root, 'bench', 'source', 'benchConfig.brs'),
-        `' Written by scripts/bench.js for this run\nfunction benchRuns() as integer\n    return ${runs}\nend function\n\nfunction benchRunId() as string\n    return "${runId}"\nend function\n`
+        `' Written by scripts/bench.js for this run\nfunction benchRuns() as integer\n    return ${runs}\nend function\n\nfunction benchRunId() as string\n    return "${runId}"\nend function\n\nfunction benchBusy() as boolean\n    return ${busy}\nend function\n`
     );
     execFileSync(path.join(root, 'node_modules', '.bin', 'bsc'), ['--project', 'bsconfig-bench.json'], { cwd: root, stdio: 'inherit' });
 
@@ -216,13 +220,13 @@ async function main() {
     // Listening before the sideload, which launches the app: its first lines are not missed
     const deviceConsole = (openConsole = watchConsole(host, runId));
     await deviceConsole.ready;
-    console.log(`bench: sideloading to ${host}, ${runs} runs per case`);
+    console.log(`bench: sideloading to ${host}, ${runs} runs per case${busy ? ', render thread busy' : ''}`);
     await rokuDeploy.publish({ host, password, outDir, outFile: 'sghttp-bench.zip', failOnCompileError: true });
     const lines = await deviceConsole.done;
 
     const run = { commit, date: new Date().toISOString(), ...parseResults(lines) };
     if (run.results.length === 0) fail('the app reported no results');
-    const savedPath = path.join(outDir, `${commit}.json`);
+    const savedPath = path.join(outDir, `${commit}${busy ? '-busy' : ''}.json`);
     fs.writeFileSync(savedPath, JSON.stringify(run, null, 2));
     printTable(run, baseline);
     console.log(`bench: saved to ${path.relative(root, savedPath)}${baseline ? '' : `; compare a later run with --compare ${path.relative(root, savedPath)}`}`);

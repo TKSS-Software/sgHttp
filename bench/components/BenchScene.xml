@@ -6,5 +6,17 @@
     </interface>
     <children>
         <Label id="status" translation="[96,96]" width="1728" wrap="true" text="sghttp bench" />
+        <!-- Busy mode (npm run bench -- --busy): a row of posters' worth of rectangles sliding
+             across the screen, so the render thread has frames to draw throughout -->
+        <Group id="busyRow" translation="[0,400]">
+            <Rectangle width="360" height="540" color="0x3A4A5AFF" translation="[0,0]" />
+            <Rectangle width="360" height="540" color="0x4A5A6AFF" translation="[400,0]" />
+            <Rectangle width="360" height="540" color="0x5A6A7AFF" translation="[800,0]" />
+            <Rectangle width="360" height="540" color="0x6A7A8AFF" translation="[1200,0]" />
+            <Rectangle width="360" height="540" color="0x7A8A9AFF" translation="[1600,0]" />
+        </Group>
+        <Animation id="busyAnimation" duration="2" repeat="true" easeFunction="linear">
+            <Vector2DFieldInterpolator key="[0.0, 0.5, 1.0]" keyValue="[[0,400], [-400,400], [0,400]]" fieldToInterp="busyRow.translation" />
+        </Animation>
     </children>
 </component>

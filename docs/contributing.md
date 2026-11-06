@@ -62,8 +62,9 @@ Each case times one query, 20 times after two untimed warm-up runs (`--runs 50` 
 | `disk` | A cold start: nothing in memory, the body on `cachefs:/` |
 | `miss` | A request and a parse, with nothing cached |
 | `unchanged` | A refresh the server answers with the same body |
+| `hit` | A fresh value in memory, handed to the caller |
 
-Each kind runs with and without a parser, at 5 KB and 300 KB bodies. `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own `resolve` or `unchanged` event. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network).
+Each kind runs with and without a parser, at 5 KB and 300 KB bodies (`unchanged` at 300 KB only). `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own event. `block` is the longest the render thread went without servicing a timer due every frame during a run: how long the work kept it from drawing. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network). A query unanswered after 15 seconds prints the store's state and counts as failed.
 
 Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working tree has changes. To compare against an earlier run, pass it:
 
@@ -71,7 +72,9 @@ Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working
 npm run bench -- --compare build/bench/ea1e0a6.json
 ```
 
-The table then adds that run's caller median and the change. The benchmark's render thread is otherwise idle, so it shows what sgHttp's own work costs, not how that work competes with an app's animations.
+The table then adds that run's caller median and the change.
+
+By default the render thread is otherwise idle, which shows what sgHttp's own work costs. An app's render thread rarely is, so measure a change with `--busy` too: an animation runs throughout, and every frame also spends 4 ms in script, as an app's UI code would. Busy runs are saved as `<commit>-busy.json`; compare them with busy runs. On a busy render thread, each step that waits on a promise through the promises library costs about a frame, where an idle one costs about 2 ms.
 
 ## Release candidates
 
