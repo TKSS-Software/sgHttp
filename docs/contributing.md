@@ -63,10 +63,11 @@ Each case times one query, 20 times after two untimed warm-up runs (`--runs 50` 
 | `miss` | A request and a parse, with nothing cached |
 | `unchanged` | A refresh the server answers with the same body |
 | `hit` | A fresh value in memory, handed to the caller |
+| `burst` | Four misses sent at once, as a screen loading several queries; timed to the last answer |
 
-Each kind runs with and without a parser, at 5 KB and 300 KB bodies (`unchanged` at 300 KB only). `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own event. `block` is the longest the render thread went without servicing a timer due every frame during a run: how long the work kept it from drawing. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network). A query unanswered after 15 seconds prints the store's state and counts as failed.
+Each kind runs with and without a parser, at 5 KB and 300 KB bodies (`unchanged` at 300 KB only, `burst` at 5 KB only). `--only "disk, parser"` runs just the cases whose name contains that text, and with `--runs 300` makes a stress run of them. `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own event. `block` is the longest the render thread went without servicing a timer due every frame during a run: how long the work kept it from drawing. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network). A query unanswered after 15 seconds prints the store's state and counts as failed.
 
-Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working tree has changes. To compare against an earlier run, pass it:
+Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working tree has changes, and everything the device's console printed during it to `build/bench/<commit>.log`. To compare against an earlier run, pass it:
 
 ```sh
 npm run bench -- --compare build/bench/ea1e0a6.json

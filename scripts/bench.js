@@ -5,6 +5,7 @@
 //
 //   npm run bench                                   20 timed runs per case
 //   npm run bench -- --runs 50                      more runs per case
+//   npm run bench -- --only "disk, parser"         only the cases whose name contains that text
 //   npm run bench -- --busy                         an animation and script on the render thread
 //                                                   throughout, saved as <commit>-busy.json
 //   npm run bench -- --compare build/bench/abc1234.json
@@ -64,8 +65,10 @@ const CONSOLE_SETTLE_MS = 500;
 // and rejects when another client holds it. done resolves with the lines once the app says done;
 // a BrightScript crash rejects it. A console that drops (the channel being replaced) is
 // connected again, keeping the lines so far.
-function watchConsole(host, runId) {
+function watchConsole(host, runId, logPath) {
     const lines = [];
+    // Everything the console says during the run, for when a run goes wrong
+    const log = fs.createWriteStream(logPath);
     const recent = [];
     let socket = null;
     let finished = false;
@@ -83,6 +86,7 @@ function watchConsole(host, runId) {
         finished = true;
         clearTimeout(timer);
         socket.destroy();
+        log.end();
         if (error) {
             rejectReady(error);
             rejectDone(error);
@@ -92,6 +96,7 @@ function watchConsole(host, runId) {
     }
 
     function onLine(line) {
+        if (finished) return;
         if (line.includes(CONSOLE_IN_USE)) {
             return finish(new Error(`the debug console on ${host}:${CONSOLE_PORT} is in use: close the VS Code debug session or telnet attached to it, then run again`));
         }
@@ -101,6 +106,7 @@ function watchConsole(host, runId) {
             started = text === `start ${runId}`;
             return;
         }
+        log.write(line + '\n');
         recent.push(line);
         if (recent.length > 40) recent.shift();
         if (/Brightscript Debugger|BrightScript Micro Debugger/i.test(line)) {
@@ -197,6 +203,7 @@ async function main() {
     const runs = Number(option('runs', '20'));
     if (!Number.isInteger(runs) || runs < 1) fail('--runs takes a whole number');
     const busy = process.argv.includes('--busy');
+    const only = option('only', '');
     const comparePath = option('compare', '');
     const baseline = comparePath ? JSON.parse(fs.readFileSync(path.resolve(comparePath), 'utf8')) : null;
 
@@ -208,7 +215,7 @@ async function main() {
     const runId = `${Date.now()}`;
     fs.writeFileSync(
         path.join(root, 'bench', 'source', 'benchConfig.brs'),
-        `' Written by scripts/bench.js for this run\nfunction benchRuns() as integer\n    return ${runs}\nend function\n\nfunction benchRunId() as string\n    return "${runId}"\nend function\n\nfunction benchBusy() as boolean\n    return ${busy}\nend function\n`
+        `' Written by scripts/bench.js for this run\nfunction benchRuns() as integer\n    return ${runs}\nend function\n\nfunction benchRunId() as string\n    return "${runId}"\nend function\n\nfunction benchBusy() as boolean\n    return ${busy}\nend function\n\nfunction benchOnly() as string\n    return ${JSON.stringify(only)}\nend function\n`
     );
     execFileSync(path.join(root, 'node_modules', '.bin', 'bsc'), ['--project', 'bsconfig-bench.json'], { cwd: root, stdio: 'inherit' });
 
@@ -218,7 +225,8 @@ async function main() {
 
     testServer.start();
     // Listening before the sideload, which launches the app: its first lines are not missed
-    const deviceConsole = (openConsole = watchConsole(host, runId));
+    const logPath = path.join(outDir, `${commit}${busy ? '-busy' : ''}.log`);
+    const deviceConsole = (openConsole = watchConsole(host, runId, logPath));
     await deviceConsole.ready;
     console.log(`bench: sideloading to ${host}, ${runs} runs per case${busy ? ', render thread busy' : ''}`);
     await rokuDeploy.publish({ host, password, outDir, outFile: 'sghttp-bench.zip', failOnCompileError: true });
@@ -229,6 +237,7 @@ async function main() {
     const savedPath = path.join(outDir, `${commit}${busy ? '-busy' : ''}.json`);
     fs.writeFileSync(savedPath, JSON.stringify(run, null, 2));
     printTable(run, baseline);
+    console.log(`bench: the device's console output is in ${path.relative(root, logPath)}`);
     console.log(`bench: saved to ${path.relative(root, savedPath)}${baseline ? '' : `; compare a later run with --compare ${path.relative(root, savedPath)}`}`);
     if (run.results.some((r) => r.failures)) process.exitCode = 1;
 }

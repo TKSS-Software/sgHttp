@@ -1,6 +1,6 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 ' Both written by scripts/bench.js for each run: testServerUrl(), and benchRuns(), benchRunId()
-' and benchBusy()
+' benchBusy() and benchOnly()
 import "pkg:/source/testServer.brs"
 import "pkg:/source/benchConfig.brs"
 
@@ -30,6 +30,8 @@ import "pkg:/source/benchConfig.brs"
 '   miss      - nothing cached: a new key each run, so each is a request and a parse
 '   unchanged - a refresh the server answers with the same body (force: true on a cached key)
 '   hit       - a fresh value in memory: nothing is sent, the value is handed to the caller
+'   burst     - BURST misses sent in one go, as a screen that loads several queries at once:
+'               the times are to the last answer
 
 const WARMUP_RUNS = 2
 ' Between runs, so the previous run's background work (a disk write) is out of the way
@@ -43,6 +45,8 @@ const STALL_SECONDS = 15
 const TICK_SECONDS = 0.016
 ' Script a busy tick runs, as an app's UI code would between frames
 const BUSY_MS = 4
+' Queries a burst run sends at once
+const BURST = 4
 const SMALL = 5000
 const LARGE = 300000
 
@@ -55,11 +59,19 @@ sub init()
     m.disk = createObject("roSGNode", "Persistence")
     m.store = invalid
     m.cases = []
-    for each kind in ["disk", "miss", "unchanged", "hit"]
+    for each kind in ["disk", "miss", "unchanged", "hit", "burst"]
         for each parser in [true, false]
             for each size in [SMALL, LARGE]
-                ' An unchanged refresh of a small body is too cheap to show anything
-                if kind <> "unchanged" or size = LARGE then m.cases.push(newCase(kind, parser, size))
+                ' An unchanged refresh of a small body is too cheap to show anything; a burst is
+                ' about many requests at once, not their size
+                include = true
+                if kind = "unchanged" then include = size = LARGE
+                if kind = "burst" then include = size = SMALL
+                if include then
+                    benchCase = newCase(kind, parser, size)
+                    ' --only: the cases whose name holds that text
+                    if benchOnly() = "" or benchCase.name.instr(benchOnly()) >= 0 then m.cases.push(benchCase)
+                end if
             end for
         end for
     end for
@@ -139,7 +151,7 @@ sub nextCase()
     print "[bench] case " + m.case.name
     m.status.text = `sghttp bench: ${m.caseIndex + 1}/${m.cases.count()} ${m.case.name}`
     makeStore()
-    if m.case.kind = "miss" then
+    if m.case.kind = "miss" or m.case.kind = "burst" then
         after(GAP_SECONDS, "run")
         return
     end if
@@ -168,7 +180,7 @@ end sub
 ' args for a run: a miss asks for a key of its own each time; the others ask for one key
 function argsFor(iteration as integer) as object
     args = { size: m.case.size.toStr() }
-    if m.case.kind = "miss" then args.i = iteration.toStr()
+    if m.case.kind = "miss" or m.case.kind = "burst" then args.i = iteration.toStr()
     return args
 end function
 
@@ -181,6 +193,14 @@ sub runOnce()
     m.runBlock = 0
     m.lastTick = m.tickClock.totalMilliseconds()
     m.clock = createObject("roTimespan")
+    if m.case.kind = "burst" then
+        queries = []
+        for k = 0 to BURST - 1
+            queries.push(m.store.callFunc("_query", "bench", argsFor(m.iteration * BURST + k), options))
+        end for
+        watch(promises.all(queries))
+        return
+    end if
     watch(m.store.callFunc("_query", "bench", argsFor(m.iteration), options))
 end sub
 
@@ -288,6 +308,7 @@ function answeredAsExpected(event as dynamic) as boolean
     if m.case.kind = "disk" then return event.type = "resolve" and event.source = "disk"
     if m.case.kind = "miss" then return event.type = "resolve" and event.source = "network"
     if m.case.kind = "hit" then return event.type = "hit"
+    if m.case.kind = "burst" then return event.type = "resolve" and event.source = "network"
     return event.type = "unchanged"
 end function
 
