@@ -11,6 +11,7 @@
 | `src/components/ParserTask.bs` | The parser task apps extend |
 | `src/components/Persistence.bs` | `cachefs:/` file access |
 | `tests/` | A small test app that `src/` is compiled into, with the Rooibos specs |
+| `bench/` | The benchmark app that `src/` is compiled into (`npm run bench`) |
 | `scripts/build.js` | The package build |
 
 The store runs on the render thread and only does bookkeeping. Network, parsing and file work belong on the tasks. `roFileSystem` can't be created on the render thread, so never add file access to the store.
@@ -45,6 +46,32 @@ This builds the package, compiles the test app (`bsconfig-test.json`), deploys i
 The transport specs (`tests/components/sghttpTransport.spec.bs`) send real requests to a small server, `scripts/test-server.js`, which `npm test` starts on this machine on port 8099 and the Roku must be able to reach. Its address is written to `tests/source/testServer.brs` (ignored by git) by `npm run build` and `npm test`, so build once before compiling the tests in an editor.
 
 The cache specs live in `tests/components/sghttpStore.spec.bs`. They drive a real store through `FakeTransport`, which holds each request until the spec answers it with `answer(index, body)` or `fail(index, code)`, so a spec decides the order responses arrive in. A `persist: true` query reads the disk before its request starts. For requests that start late like that, `answerNext(body)` queues an answer for the next request made.
+
+## Benchmark
+
+```sh
+npm run bench
+```
+
+This compiles the benchmark app in `bench/` with `src/` (`bsconfig-bench.json`), sideloads it to the device in `.env` the same way `npm test` does, and prints a table of timings it reads off the debug console. Port 8085 must be free, as for the specs. The bodies come from the same test server, so network jitter stays out of the numbers.
+
+Each case times one query, 20 times after two untimed warm-up runs (`--runs 50` for more):
+
+| Kind | What it times |
+|---|---|
+| `disk` | A cold start: nothing in memory, the body on `cachefs:/` |
+| `miss` | A request and a parse, with nothing cached |
+| `unchanged` | A refresh the server answers with the same body |
+
+Each kind runs with and without a parser, at 5 KB and 300 KB bodies. `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own `resolve` or `unchanged` event. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network).
+
+Each run is saved to `build/bench/<commit>.json`, with `-dirty` when the working tree has changes. To compare against an earlier run, pass it:
+
+```sh
+npm run bench -- --compare build/bench/ea1e0a6.json
+```
+
+The table then adds that run's caller median and the change. The benchmark's render thread is otherwise idle, so it shows what sgHttp's own work costs, not how that work competes with an app's animations.
 
 ## Release candidates
 

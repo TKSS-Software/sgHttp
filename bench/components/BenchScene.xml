@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component name="BenchScene" extends="Scene">
+    <interface>
+        <!-- Set once every case has run: main exits the app -->
+        <field id="done" type="boolean" alwaysNotify="true" />
+    </interface>
+    <children>
+        <Label id="status" translation="[96,96]" width="1728" wrap="true" text="sghttp bench" />
+    </children>
+</component>

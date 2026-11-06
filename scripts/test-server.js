@@ -112,9 +112,37 @@ function route(req, res, body) {
             return send(res, 200, 'file contents');
         case 'file-missing':
             return send(res, 404, 'no such file');
+        // /bench/body/<bytes>: the same JSON listing of about that size every time (npm run bench)
+        case 'bench':
+            if (parts[1] !== 'body') throw new BadRoute(`unknown bench route: ${parts[1]}`);
+            return send(res, 200, benchBody(number(parts[2])), { 'Content-Type': 'application/json' });
         default:
             return send(res, 404, { error: 'unknown route' });
     }
+}
+
+// A listing of rows like an app's home page, at least `bytes` long once encoded. Built once per
+// size, so every response of a size is byte for byte the same (its hash too).
+const benchBodies = new Map();
+function benchBody(bytes) {
+    if (!benchBodies.has(bytes)) {
+        const items = [];
+        let length = 0;
+        for (let i = 0; length < bytes; i++) {
+            const item = {
+                id: `item-${i}`,
+                title: `Item ${i}`,
+                description: 'A description long enough to look like the synopsis an app would show under a poster.',
+                image: `https://images.example.com/posters/${i}.jpg`,
+                duration: 1200 + i,
+                tags: ['drama', 'new'],
+            };
+            items.push(item);
+            length += JSON.stringify(item).length + 1;
+        }
+        benchBodies.set(bytes, JSON.stringify({ items }));
+    }
+    return benchBodies.get(bytes);
 }
 
 function start() {

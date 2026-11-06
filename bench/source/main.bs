@@ -1,0 +1,15 @@
+' The benchmark app's entry point (npm run bench): shows BenchScene, which runs every case and
+' sets done, then exits so the next sideload starts from a clean launch
+sub main(args as object)
+    screen = createObject("roSGScreen")
+    port = createObject("roMessagePort")
+    screen.setMessagePort(port)
+    scene = screen.createScene("BenchScene")
+    screen.show()
+    scene.observeField("done", port)
+    while true
+        message = wait(0, port)
+        if type(message) = "roSGScreenEvent" and message.isScreenClosed() then return
+        if type(message) = "roSGNodeEvent" and message.getField() = "done" then return
+    end while
+end sub

@@ -1,0 +1,28 @@
+{
+  "rootDir": "bench",
+  "outDir": "build/bench-staging",
+  "files": [
+    "manifest",
+    "source/**/*",
+    "components/**/*",
+    {
+      "src": "../src/**/*",
+      "dest": ""
+    },
+    {
+      "src": "../tests/source/testServer*.brs",
+      "dest": "source"
+    }
+  ],
+  "compilerOptions": {
+    "autoImportComponentScript": true
+  },
+  "diagnosticFilters": [
+    {
+      "src": "**/roku_modules/**/*",
+      "codes": [
+        "unnecessary-codebehind-script-import"
+      ]
+    }
+  ]
+}
