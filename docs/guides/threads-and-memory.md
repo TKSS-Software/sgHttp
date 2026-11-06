@@ -27,6 +27,7 @@ Nodes are cached by reference. Every query of a key whose value is a ContentNode
 
 - A node has one parent. Attaching a cached tree to a second container moves it out of the first. If two screens show the same data at once, give the second one a copy (`node.clone(true)`) or build its own view of the data.
 - Changing a field on a cached node changes it for every later query of that key. Treat cached values as read-only. To change data, write to the server and expire the query.
+- The copy of an associative array is made on the render thread, on every hit. It is cheap for a small value and not for a large one: in the benchmark, a memory hit of a 300 KB decoded body costs about 40 ms on a Roku Express 4K, 22 to 26 ms of it with the render thread blocked, where a hit of the same body parsed into ContentNodes costs 2 ms. A parser that builds nodes avoids the copy; so does a parser that keeps only the fields the screen shows.
 
 ## What the cache holds on to
 
