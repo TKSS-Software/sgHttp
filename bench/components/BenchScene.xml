@@ -8,6 +8,7 @@
         <Label id="status" translation="[96,96]" width="1728" wrap="true" text="sghttp bench" />
         <!-- Busy mode (npm run bench -- --busy): a row of posters' worth of rectangles sliding
              across the screen, so the render thread has frames to draw throughout -->
+        <Label id="busyCounter" translation="[96,200]" width="400" />
         <Group id="busyRow" translation="[0,400]">
             <Rectangle width="360" height="540" color="0x3A4A5AFF" translation="[0,0]" />
             <Rectangle width="360" height="540" color="0x4A5A6AFF" translation="[400,0]" />

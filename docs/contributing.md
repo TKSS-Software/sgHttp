@@ -64,6 +64,8 @@ Each case times one query, 20 times after two untimed warm-up runs (`--runs 50` 
 | `unchanged` | A refresh the server answers with the same body |
 | `hit` | A fresh value in memory, handed to the caller |
 | `burst` | Four misses sent at once, as a screen loading several queries; timed to the last answer |
+| `disklone` | A cold start whose read is the only thing sent to the Persistence task for a while: the eviction's delete goes 300 ms before it, where `disk` sends them back to back |
+| `diskburst` | Four cold starts sent at once, 300 ms after their evictions, as a launch reading several persisted queries; timed to the last answer |
 
 Each kind runs with and without a parser, at 5 KB and 300 KB bodies (`unchanged` at 300 KB only, `burst` at 5 KB only). `--only "disk, parser"` runs just the cases whose name contains that text, and with `--runs 300` makes a stress run of them. `caller` is the time from the query call to the caller's `then`, which is what a screen waits for. `store` is the `ms` of the store's own event. `block` is the longest the render thread went without servicing a timer due every frame during a run: how long the work kept it from drawing. The notes column flags runs that failed, or took another path than their case (a disk case that went to the network). A query unanswered after 15 seconds prints the store's state and counts as failed.
 
@@ -75,7 +77,7 @@ npm run bench -- --compare build/bench/ea1e0a6.json
 
 The table then adds that run's caller median and the change.
 
-By default the render thread is otherwise idle, which shows what sgHttp's own work costs. An app's render thread rarely is, so measure a change with `--busy` too: an animation runs throughout, and every frame also spends 4 ms in script, as an app's UI code would. Busy runs are saved as `<commit>-busy.json`; compare them with busy runs. On a busy render thread, each step that waits on a promise through the promises library costs about a frame, where an idle one costs about 2 ms.
+By default the render thread is otherwise idle, which shows what sgHttp's own work costs. An app's render thread rarely is, so measure a change with `--busy` too: an animation runs throughout, and every frame also spends 4 ms in script and sets two observed fields (a label's text and a field with a script observer), as an app's UI code would. Busy runs are saved as `<commit>-busy.json`; compare them with busy runs. A lost disk answer shows in the saved console log as a `persistence: read N unanswered` line; `--only disk --runs 300` is the stress run that provokes them (a few per 1,200), and `disklone` and `diskburst` the two patterns that never have. On a busy render thread, each step that waits on a promise through the promises library costs about a frame, where an idle one costs about 2 ms.
 
 ## Release candidates
 

@@ -20,8 +20,9 @@ import "pkg:/source/benchConfig.brs"
 ' this harness) kept it from drawing. Each is { median, p90, min, max, mean } over the runs.
 '
 ' busy (npm run bench -- --busy): an animation runs throughout, and every tick of that timer also
-' spends BUSY_MS in script, as an app's own UI code would, so the times show sgHttp's work
-' competing with drawing.
+' spends BUSY_MS in script and sets two observed fields (a label's text, and a field of a node
+' with a script observer), as an app's own UI code would, so the times show sgHttp's work
+' competing with drawing and with field traffic on the render thread.
 '
 ' kinds:
 '   disk      - a cold start: memory has nothing, the body is on cachefs:/ (persist: true). The
@@ -32,6 +33,11 @@ import "pkg:/source/benchConfig.brs"
 '   hit       - a fresh value in memory: nothing is sent, the value is handed to the caller
 '   burst     - BURST misses sent in one go, as a screen that loads several queries at once:
 '               the times are to the last answer
+'   disklone  - a cold start whose read is the only thing sent to the Persistence task for a
+'               while: the eviction's delete goes LONE_GAP_SECONDS before it (disk sends them
+'               back to back)
+'   diskburst - BURST cold starts sent in one go, as a launch that reads several persisted
+'               queries at once, LONE_GAP_SECONDS after their evictions; timed to the last answer
 
 const WARMUP_RUNS = 2
 ' Between runs, so the previous run's background work (a disk write) is out of the way
@@ -47,6 +53,8 @@ const TICK_SECONDS = 0.016
 const BUSY_MS = 4
 ' Queries a burst run sends at once
 const BURST = 4
+' Between a disklone or diskburst run's evictions and its reads
+const LONE_GAP_SECONDS = 0.3
 const SMALL = 5000
 const LARGE = 300000
 
@@ -59,14 +67,14 @@ sub init()
     m.disk = createObject("roSGNode", "Persistence")
     m.store = invalid
     m.cases = []
-    for each kind in ["disk", "miss", "unchanged", "hit", "burst"]
+    for each kind in ["disk", "miss", "unchanged", "hit", "burst", "disklone", "diskburst"]
         for each parser in [true, false]
             for each size in [SMALL, LARGE]
                 ' An unchanged refresh of a small body is too cheap to show anything; a burst is
                 ' about many requests at once, not their size
                 include = true
                 if kind = "unchanged" then include = size = LARGE
-                if kind = "burst" then include = size = SMALL
+                if kind = "burst" or kind = "disklone" or kind = "diskburst" then include = size = SMALL
                 if include then
                     benchCase = newCase(kind, parser, size)
                     ' --only: the cases whose name holds that text
@@ -99,6 +107,12 @@ sub init()
     m.ticker.observeFieldScoped("fire", "onTick")
     m.ticker.control = "start"
     m.top.findNode("busyRow").visible = m.busy
+    ' Set every busy tick: field traffic with observers, as an app's UI makes (see onTick)
+    m.busyCounter = m.top.findNode("busyCounter")
+    m.busyProbe = createObject("roSGNode", "Node")
+    m.busyProbe.addField("tick", "integer", true)
+    m.busyProbe.observeFieldScoped("tick", "onBusyProbe")
+    m.busyTicks = 0
     if m.busy then m.top.findNode("busyAnimation").control = "start"
 
     ' Before anything else: the script reads only what follows it (see scripts/bench.js)
@@ -128,6 +142,8 @@ sub onTimer()
     m.afterTimer = ""
     if stepName = "run" then
         runOnce()
+    else if stepName = "read" then
+        startRead()
     else if stepName = "nextCase" then
         nextCase()
     end if
@@ -155,18 +171,35 @@ sub nextCase()
         after(GAP_SECONDS, "run")
         return
     end if
-    ' disk, unchanged and hit start from a cached copy: the first answer puts it there
+    ' The other kinds start from a cached copy: the first answer puts it there
     m.priming = true
     m.status.text = m.status.text + " (priming)"
-    watch(m.store.callFunc("_query", "bench", argsFor(-1), {}))
+    if m.case.kind = "diskburst" then
+        watch(promises.all(burstQueries({})))
+    else
+        watch(m.store.callFunc("_query", "bench", argsFor(-1), {}))
+    end if
 end sub
+
+' A query of each of a diskburst run's BURST keys
+function burstQueries(options as object) as object
+    queries = []
+    for k = 0 to BURST - 1
+        queries.push(m.store.callFunc("_query", "bench", { size: m.case.size.toStr(), i: k.toStr() }, options))
+    end for
+    return queries
+end function
+
+function readsFromDisk() as boolean
+    return m.case.kind = "disk" or m.case.kind = "disklone" or m.case.kind = "diskburst"
+end function
 
 ' A store per case, so no case inherits another's entries or definitions
 sub makeStore()
     if type(m.store) = "roSGNode" then m.store.callFunc("_destroy")
     m.store = createObject("roSGNode", "Store")
-    m.store.callFunc("_initialize", { baseUrl: m.serverUrl, parserTask: "BenchParserTask", persistence: m.disk, namespace: "bench", maxEntries: 1 })
-    definition = { request: { url: "/bench/body/{size}", query: { i: "{i}" } }, ttl: 3600, persist: m.case.kind = "disk" }
+    m.store.callFunc("_initialize", { baseUrl: m.serverUrl, parserTask: "BenchParserTask", persistence: m.disk, namespace: "bench", maxEntries: m.case.kind = "diskburst" ? BURST : 1 })
+    definition = { request: { url: "/bench/body/{size}", query: { i: "{i}" } }, ttl: 3600, persist: readsFromDisk() }
     if m.case.parser then definition.parser = "Count"
     m.store.callFunc("_define", "bench", definition)
     ' Set to push the bench entry out of memory (see runOnce)
@@ -185,8 +218,23 @@ function argsFor(iteration as integer) as object
 end function
 
 sub runOnce()
+    ' Evictions first: a disk kind's entry (or entries) leave memory, their copies on disk stay
+    if m.case.kind = "disk" or m.case.kind = "disklone" then m.store.callFunc("_set", "filler", { i: m.iteration.toStr() }, { filler: true })
+    if m.case.kind = "diskburst" then
+        for k = 0 to BURST - 1
+            m.store.callFunc("_set", "filler", { i: (m.iteration * BURST + k).toStr() }, { filler: true })
+        end for
+    end if
+    if m.case.kind = "disklone" or m.case.kind = "diskburst" then
+        after(LONE_GAP_SECONDS, "read")
+        return
+    end if
+    startRead()
+end sub
+
+' The timed part of a run
+sub startRead()
     options = {}
-    if m.case.kind = "disk" then m.store.callFunc("_set", "filler", { i: m.iteration.toStr() }, { filler: true })
     if m.case.kind = "unchanged" then options.force = true
     m.storeEvent = invalid
     m.measuring = m.iteration >= WARMUP_RUNS
@@ -199,6 +247,10 @@ sub runOnce()
             queries.push(m.store.callFunc("_query", "bench", argsFor(m.iteration * BURST + k), options))
         end for
         watch(promises.all(queries))
+        return
+    end if
+    if m.case.kind = "diskburst" then
+        watch(promises.all(burstQueries(options)))
         return
     end if
     watch(m.store.callFunc("_query", "bench", argsFor(m.iteration), options))
@@ -254,10 +306,16 @@ sub onTick()
     if m.measuring and now - m.lastTick > m.runBlock then m.runBlock = now - m.lastTick
     m.lastTick = now
     if m.busy then
+        m.busyTicks++
+        m.busyCounter.text = m.busyTicks.toStr()
+        m.busyProbe.tick = m.busyTicks
         spin = createObject("roTimespan")
         while spin.totalMilliseconds() < BUSY_MS
         end while
     end if
+end sub
+
+sub onBusyProbe()
 end sub
 
 ' The store's last word on the bench query, read when the caller is answered
@@ -305,7 +363,7 @@ end sub
 ' timing what it says, and is counted
 function answeredAsExpected(event as dynamic) as boolean
     if type(event) <> "roAssociativeArray" then return false
-    if m.case.kind = "disk" then return event.type = "resolve" and event.source = "disk"
+    if readsFromDisk() then return event.type = "resolve" and event.source = "disk"
     if m.case.kind = "miss" then return event.type = "resolve" and event.source = "network"
     if m.case.kind = "hit" then return event.type = "hit"
     if m.case.kind = "burst" then return event.type = "resolve" and event.source = "network"
