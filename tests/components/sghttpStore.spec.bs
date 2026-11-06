@@ -2023,6 +2023,25 @@ namespace tests
             end function)
         end function
 
+        @async(5000)
+        @it("rejects the reads still waiting when the task is shut down, and any sent after, instead of retrying them")
+        function _()
+            disk = createObject("roSGNode", "Persistence")
+            disk.callFunc("execute", { type: "dropAnswers", count: 1 })
+            m.slow = createObject("roTimespan")
+            waiting = disk.callFunc("execute", { type: "read", path: "cachefs:/sghttp-spec/none.json" })
+            disk.shutdown = true
+            promises.chain(promises.allSettled([waiting, disk.callFunc("execute", { type: "read", path: "cachefs:/sghttp-spec/none.json" })]), m).then(function(results as object, suite as object) as dynamic
+                suite.assertEqual(results[0].status, "rejected")
+                suite.assertTrue(results[0].reason.cancelled)
+                suite.assertEqual(results[1].status, "rejected")
+                ' Rejected at the shutdown, not sent again a second later
+                suite.assertTrue(suite.slow.totalMilliseconds() < 900)
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("GraphQL")
 
         @async

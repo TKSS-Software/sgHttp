@@ -35,6 +35,7 @@ sub init()
     m.top.observeField("shutdown", m.port)
     ' Heard on the render thread, which owns the promises the reads return
     m.top.observeField("result", "onResult")
+    m.top.observeFieldScoped("shutdown", "onShutdown")
     ' seq -> { promise, op } for every read not yet answered
     m.reads = {}
     m.opCount = 0
@@ -52,8 +53,28 @@ function execute(op as object) as dynamic
     if type(op) <> "roAssociativeArray" or not isNonEmptyString(op.type) then return invalid
     promise = invalid
     if op.type = "read" then promise = promises.create()
+    ' The task has stopped: nothing will answer, so a read says so now rather than wait
+    if m.top.shutdown then
+        if isNode(promise) then promises.reject(stoppedError(), promise)
+        return promise
+    end if
     send(op, promise)
     return promise
+end function
+
+' The task was told to stop (see Store._destroy): the reads still waiting are rejected, since
+' no answer is coming, and the retry timer stops rather than send them to a stopped task
+sub onShutdown()
+    m.retryTimer.control = "stop"
+    waiting = m.reads
+    m.reads = {}
+    for each key in waiting
+        promises.reject(stoppedError(), waiting[key].promise)
+    end for
+end sub
+
+function stoppedError() as object
+    return { code: 0, kind: "cancelled", cancelled: true, message: "sghttp: persistence stopped" }
 end function
 
 ' Numbers the op, on the render thread, so the task can tell one lost or delivered twice (see
