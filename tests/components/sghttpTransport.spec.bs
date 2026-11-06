@@ -14,6 +14,7 @@ namespace tests
         public second = invalid
         public third = invalid
         public results = []
+        public store = invalid
 
         protected override function afterEach()
             for each transport in m.transports
@@ -21,6 +22,15 @@ namespace tests
             end for
             m.transports = []
             m.results = []
+            if type(m.store) = "roSGNode" then m.store.callFunc("_destroy")
+            m.store = invalid
+        end function
+
+        ' A store with its own Transport talking to the test server, as an app's would be
+        function realStore() as object
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { baseUrl: testServerUrl(), persist: false })
+            return m.store
         end function
 
         ' A started Transport talking to the test server; fields overrides any of its settings
@@ -484,6 +494,62 @@ namespace tests
                 suite.done()
                 return invalid
             end function)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("the store over the real transport")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("answers a refresh of the same body as unchanged, and of a different body as a change")
+        function _()
+            store = m.realStore()
+            store.callFunc("_define", "same", { request: { url: "/status/200" }, ttl: 300 })
+            ' Answers with the position of each request for its key, so every body differs
+            store.callFunc("_define", "moving", { request: { url: "/order/" + m.key("moving") + "/x" }, ttl: 300 })
+            first = [store.callFunc("_query", "same", {}, {}), store.callFunc("_query", "moving", {}, {})]
+            promises.chain(promises.all(first), m).then(function(values as object, suite as object) as dynamic
+                suite.assertEqual(values[0].status, 200)
+                suite.assertEqual(values[1].position, 1)
+                return promises.all([
+                    suite.store.callFunc("_query", "same", {}, { force: true })
+                    suite.store.callFunc("_query", "moving", {}, { force: true })
+                ])
+            end function).then(function(values as object, suite as object) as dynamic
+                ' The cached value, kept: the body came back unchanged, without crossing
+                suite.assertEqual(values[0].status, 200)
+                suite.assertEqual(values[1].position, 2)
+                stats = suite.store.callFunc("_getStats")
+                suite.assertEqual(stats.unchanged, 1)
+                suite.assertEqual(stats.changes, 1)
+                suite.assertEqual(stats.requests, 4)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends fetch as is, with the whole body, even for a cached query's name")
+        function _()
+            store = m.realStore()
+            store.callFunc("_define", "same", { request: { url: "/status/200" }, ttl: 300 })
+            promises.chain(store.callFunc("_query", "same", {}, {}), m).then(function(value as object, suite as object) as dynamic
+                return promises.all([
+                    suite.store.callFunc("_fetch", "same", {})
+                    suite.store.callFunc("_fetch", "/echo", {})
+                    suite.store.callFunc("_fetch", { url: "/echo", query: { q: "{term}" } }, { term: "drama" })
+                ])
+            end function).then(function(responses as object, suite as object) as dynamic
+                ' By name: the request the query sends, its body in full though the query has it cached
+                suite.assertEqual(responses[0].code, 200)
+                suite.assertEqual(responses[0].body.status, 200)
+                suite.assertInvalid(responses[0].unchanged)
+                suite.assertEqual(responses[1].body.path, "/echo")
+                suite.assertEqual(responses[2].body.path, "/echo?q=drama")
+                suite.assertEqual(suite.store.callFunc("_getStats").unchanged, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
         end function
 
         '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
