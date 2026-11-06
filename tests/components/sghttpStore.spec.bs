@@ -2001,6 +2001,28 @@ namespace tests
             end function)
         end function
 
+        @async(5000)
+        @it("sends a read again when its answer never lands, as a dropped rendezvous leaves it")
+        function _()
+            disk = m.disk()
+            path = "cachefs:/sghttp-spec/retry.json"
+            disk.callFunc("execute", { type: "ensureDir", dir: "cachefs:/sghttp-spec" })
+            disk.callFunc("execute", { type: "write", path: path, text: "kept" })
+            disk.callFunc("execute", { type: "dropAnswers", count: 1 })
+            m.slow = createObject("roTimespan")
+            promises.chain(disk.callFunc("execute", { type: "read", path: path }), m).then(function(text as dynamic, suite as object) as dynamic
+                suite.assertEqual(text, "kept")
+                ' The first answer was dropped: the read went again after READ_RETRY_SECONDS
+                suite.assertTrue(suite.slow.totalMilliseconds() >= 900)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
         @describe("GraphQL")
 
         @async
