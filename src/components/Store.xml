@@ -29,6 +29,8 @@
         <function name="_onUnauthorized" />
         <function name="_reauthorize" />
         <function name="_getStats" />
+        <function name="_openEventStream" />
+        <function name="_supportsEventStreams" />
         <function name="_keyFor" />
         <function name="_destroy" />
     </interface>

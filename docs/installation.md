@@ -5,6 +5,7 @@
 - A SceneGraph channel built with [BrighterScript](https://github.com/rokucommunity/brighterscript).
 - [ropm](https://github.com/rokucommunity/ropm) to install the package.
 - [promises](https://github.com/rokucommunity/promises), which ropm installs with sgHttp. Every `fetch` and `query` returns one of its promise nodes.
+- Any Roku OS that runs SceneGraph, except for [event streams](guides/event-streams.md), which need Roku OS 16.0 or later.
 
 ## Install with ropm
 

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A server-sent event stream, as sghttp.openEventStream returns it. Observe its fields (or pass
+     handlers to openEventStream); close it with sghttp.closeEventStream. -->
+<component name="EventStream" extends="Node">
+    <interface>
+        <!-- One event: { type, id, data, retry, lastEventId }. type is "message" when the server
+             named none; data is always text -->
+        <field id="message" type="assocarray" alwaysNotify="true" />
+        <!-- A connection's first event arrived: { attempt, lastEventId } -->
+        <field id="open" type="assocarray" alwaysNotify="true" />
+        <!-- A connection failed or ended: { code, kind, message, willRetry, retryInMs, attempt,
+             lastEventId }. willRetry false: closed follows -->
+        <field id="error" type="assocarray" alwaysNotify="true" />
+        <!-- The stream is over: { reason, code, lastEventId }, reason "closed" (closeEventStream),
+             "done" (the server is finished with it) or "failed" -->
+        <field id="closed" type="assocarray" alwaysNotify="true" />
+        <!-- "connecting", "open" or "closed", set before any of the fields above -->
+        <field id="readyState" type="string" value="connecting" />
+        <!-- The id of the last event received, to resume from with openEventStream's lastEventId -->
+        <field id="lastEventId" type="string" value="" />
+
+        <!-- Ends the stream; returns whether it was still open. sghttp.closeEventStream calls it -->
+        <function name="close" />
+        <!-- Internal: the transport that runs the stream (see Store._openEventStream) -->
+        <function name="_attach" />
+        <!-- Internal: updates from the transport (see source/eventStream.bs) -->
+        <function name="_deliver" />
+    </interface>
+</component>

@@ -2,6 +2,7 @@ import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 import "pkg:/source/request.bs"
 import "pkg:/source/settle.bs"
+import "pkg:/source/eventStream.bs"
 
 ' The longest Retry-After wait honoured; a longer one fails the request at once rather than
 ' hold its callers
@@ -12,6 +13,8 @@ const MAX_RETRY_AFTER_SECONDS = 60
 ' queue per priority (a request waits only behind higher and earlier ones), retries with
 ' backoff or the wait a Retry-After asks for, timeouts, gzip, JSON decoding and downloads to a
 ' file. The Transport task is one of these behind a node; a task of the app's can make its own.
+' It also runs server-sent event streams beside the pool (openEventStream, closeEventStream; see
+' source/eventStream.bs).
 '
 ' Its owner runs the loop: wait on the port for at most nextWait() milliseconds (0: no limit),
 ' and hand every message, or invalid when the wait timed out, to handle().
@@ -64,6 +67,11 @@ function createHttpClient(settings = {} as object, port = invalid as dynamic) as
         deviceInfo: invalid
         files: invalid
         proxyWarned: false
+        ' Event streams (see source/eventStream.bs): id -> stream, transfer identity -> stream
+        streams: {}
+        streamTransfers: {}
+        streamCount: 0
+        streamSupport: invalid
         init: httpClient_init
         getPort: httpClient_getPort
         fetch: httpClient_fetch
@@ -95,6 +103,20 @@ function createHttpClient(settings = {} as object, port = invalid as dynamic) as
         proxyAddress: httpClient_proxyAddress
         appendQuery: httpClient_appendQuery
         getEscaper: httpClient_getEscaper
+        openEventStream: httpClient_openEventStream
+        closeEventStream: httpClient_closeEventStream
+        closeAllStreams: httpClient_closeAllStreams
+        eventStreamsSupported: httpClient_eventStreamsSupported
+        openStream: httpClient_openStream
+        connectStream: httpClient_connectStream
+        onStreamMessage: httpClient_onStreamMessage
+        streamOpened: httpClient_streamOpened
+        streamDisconnected: httpClient_streamDisconnected
+        failStream: httpClient_failStream
+        dropStream: httpClient_dropStream
+        pumpStreams: httpClient_pumpStreams
+        nextStreamWait: httpClient_nextStreamWait
+        notifyStream: httpClient_notifyStream
     }
     client.init(settings, port)
     return client
@@ -170,17 +192,26 @@ end function
 ' message was one of this client's.
 function httpClient_handle(message as dynamic) as boolean
     ours = false
-    if type(message) = "roUrlEvent" then ours = m.onUrlEvent(message)
+    messageType = type(message)
+    if messageType = "roUrlEvent" then
+        ours = m.onUrlEvent(message)
+        if not ours then ours = m.onStreamMessage(message)
+    else if messageType = "roSSEvent" then
+        ours = m.onStreamMessage(message)
+    end if
     m.pumpRetries()
     m.pumpQueue()
+    if m.streams.count() > 0 then m.pumpStreams()
     return ours
 end function
 
-' How long the owner's wait may last before handle must run again: until the next retry is
-' due, or 0 (no limit) when none is waiting
+' How long the owner's wait may last before handle must run again: until the next retry, stream
+' reconnect or stream idle timeout is due, or 0 (no limit) when none is waiting
 function httpClient_nextWait() as integer
-    if m.retryQueue.count() = 0 then return 0
+    streamWait = m.streams.count() > 0 ? m.nextStreamWait() : -1
+    if m.retryQueue.count() = 0 then return streamWait > 0 ? streamWait : 0
     soonest = 2147483647
+    if streamWait > 0 then soonest = streamWait
     for each job in m.retryQueue
         remaining = job.retryAfterMs - job.retryTimer.totalMilliseconds()
         if remaining < soonest then soonest = remaining

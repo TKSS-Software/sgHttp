@@ -1,0 +1,492 @@
+import "pkg:/source/roku_modules/promises/promises.brs"
+import "pkg:/source/keys.bs"
+import "pkg:/source/testServer.brs"
+
+' Event streams: a store's real Transport task against the /sse routes of
+' scripts/test-server.js, on the Roku running the specs (Roku OS 16.0 or later). Every field a
+' stream sets is recorded in its log (see onSpecStreamUpdate), and waitFor settles once enough of
+' one has arrived. Promise callbacks get the suite as their context.
+namespace tests
+    @SGNode("Node")
+    @suite("sghttp event streams")
+    class SghttpStreamTests extends rooibos.BaseTestSuite
+
+        public store = invalid
+        public streams = []
+        public first = invalid
+        public second = invalid
+        ' The server key of the spec's stream, for /sse/open/<key>
+        public serverKey = ""
+
+        protected override function afterEach()
+            for each stream in m.streams
+                stream.callFunc("close")
+            end for
+            m.streams = []
+            if type(m.store) = "roSGNode" then m.store.callFunc("_destroy")
+            m.store = invalid
+            m.first = invalid
+            m.second = invalid
+        end function
+
+        ' A store with its own Transport talking to the test server, as an app's would be
+        function realStore(params = {} as object) as object
+            settings = { baseUrl: testServerUrl(), persist: false }
+            settings.append(params)
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", settings)
+            return m.store
+        end function
+
+        ' Opens a stream as sghttp.openEventStream does, its fields recorded from the start
+        function open(spec as dynamic, args = {} as object) as object
+            if m.store = invalid then m.realStore()
+            node = createObject("roSGNode", "EventStream")
+            node.addField("log", "array", false)
+            node.addField("waitFor", "assocarray", false)
+            node.addField("arrived", "node", false)
+            node.log = []
+            for each field in ["message", "open", "error", "closed"]
+                node.observeFieldScoped(field, "onSpecStreamUpdate")
+            end for
+            m.store.callFunc("_openEventStream", node, spec, args)
+            m.streams.push(node)
+            return node
+        end function
+
+        ' A unique key for the server's counters, so specs never share one
+        function key(name as string) as string
+            return name + "-" + createObject("roDeviceInfo").getRandomUUID().left(8)
+        end function
+
+        function failed(error as dynamic, suite as object) as dynamic
+            suite.fail("rejected: " + formatJson(error))
+            suite.done()
+            return invalid
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("events")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("delivers each event as it arrives, with its type, id, data and retry")
+        function _()
+            stream = m.open("/sse/fields")
+            promises.chain(waitFor(stream, "message", 3), m).then(function(updates as object, suite as object) as dynamic
+                suite.assertEqual(updates[0].field, "open")
+                suite.assertEqual(updates[0].readyState, "open")
+                messages = entriesOf(updates, "message")
+                suite.assertEqual(messages[0].type, "greeting")
+                suite.assertEqual(messages[0].id, "f1")
+                suite.assertEqual(messages[0].data, "hello")
+                suite.assertEqual(messages[0].retry, 4000)
+                suite.assertEqual(messages[1].type, "message")
+                suite.assertEqual(messages[1].data, "line one" + chr(10) + "line two")
+                ' No id: the last one stands
+                suite.assertEqual(messages[2].id, "")
+                suite.assertEqual(messages[2].lastEventId, "f2")
+                suite.assertEqual(parseJson(messages[2].data).score, 3)
+                suite.assertEqual(suite.streams[0].lastEventId, "f2")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("sends the stream's headers and the client's, asks for an event stream and sends no Last-Event-ID")
+        function _()
+            m.realStore({ headers: { "X-Shared": "s" }, baseHeaders: { "X-Base": "b" } })
+            stream = m.open({ url: "/sse/echo/{key}", headers: { "Authorization": "Bearer {token}" }, query: { q: "1" } }, { key: m.key("echo"), token: "abc" })
+            promises.chain(waitFor(stream, "message", 1), m).then(function(updates as object, suite as object) as dynamic
+                echo = parseJson(entriesOf(updates, "message")[0].data)
+                suite.assertEqual(echo.method, "GET")
+                suite.assertTrue(echo.path.instr("q=1") > 0)
+                suite.assertEqual(echo.headers["accept"], "text/event-stream")
+                suite.assertEqual(echo.headers["authorization"], "Bearer abc")
+                suite.assertEqual(echo.headers["x-shared"], "s")
+                suite.assertEqual(echo.headers["x-base"], "b")
+                suite.assertInvalid(echo.headers["last-event-id"])
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("leaves out the shared headers for auth: false, and sends a lastEventId it is given")
+        function _()
+            m.realStore({ headers: { "X-Shared": "s" } })
+            stream = m.open({ url: "/sse/echo/" + m.key("resume"), auth: false, lastEventId: "resume-9" })
+            m.assertEqual(stream.lastEventId, "resume-9")
+            promises.chain(waitFor(stream, "message", 1), m).then(function(updates as object, suite as object) as dynamic
+                echo = parseJson(entriesOf(updates, "message")[0].data)
+                suite.assertInvalid(echo.headers["x-shared"])
+                suite.assertEqual(echo.headers["last-event-id"], "resume-9")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(15000)
+        @it("delivers a burst of events in order without losing one")
+        function _()
+            stream = m.open("/sse/burst/" + m.key("burst") + "/50")
+            promises.chain(waitFor(stream, "message", 50), m).then(function(updates as object, suite as object) as dynamic
+                messages = entriesOf(updates, "message")
+                suite.assertEqual(messages.count(), 50)
+                for i = 0 to messages.count() - 1
+                    if messages[i].id <> (i + 1).toStr() then
+                        suite.fail(`event ${i + 1} arrived as ${messages[i].id}`)
+                        exit for
+                    end if
+                end for
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("routes each event to its own stream when several are open")
+        function _()
+            m.first = m.open("/sse/tagged/one/5")
+            m.second = m.open("/sse/tagged/two/5")
+            promises.chain(promises.all([waitFor(m.first, "message", 5), waitFor(m.second, "message", 5)]), m).then(function(logs as object, suite as object) as dynamic
+                tags = ["one", "two"]
+                for i = 0 to 1
+                    messages = entriesOf(logs[i], "message")
+                    suite.assertEqual(messages.count(), 5)
+                    for each message in messages
+                        suite.assertEqual(message.data, tags[i])
+                    end for
+                end for
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("closing")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("cancels the connection when closed, delivers nothing after and never reconnects")
+        function _()
+            m.serverKey = m.key("close")
+            m.first = m.open({ url: "/sse/hold/" + m.serverKey, retryMs: 100 })
+            promises.chain(waitFor(m.first, "message", 1), m).then(function(updates as object, suite as object) as dynamic
+                suite.assertTrue(suite.first.callFunc("close"))
+                suite.assertFalse(suite.first.callFunc("close"))
+                suite.assertEqual(suite.first.readyState, "closed")
+                closed = entriesOf(suite.first.log, "closed")
+                suite.assertEqual(closed.count(), 1)
+                suite.assertEqual(closed[0].reason, "closed")
+                suite.assertEqual(closed[0].lastEventId, "h1")
+                return specDelay(1000)
+            end function).then(function(_ as dynamic, suite as object) as dynamic
+                return suite.store.callFunc("_fetch", "/sse/open/" + suite.serverKey)
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.open, 0)
+                suite.assertEqual(response.body.connections, 1)
+                ' Nothing after closed
+                suite.assertEqual(suite.first.log.peek().field, "closed")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("closes its open streams when the store is destroyed")
+        function _()
+            m.serverKey = m.key("destroy")
+            m.first = m.open({ url: "/sse/hold/" + m.serverKey })
+            promises.chain(waitFor(m.first, "message", 1), m).then(function(updates as object, suite as object) as dynamic
+                suite.store.callFunc("_destroy")
+                suite.store = invalid
+                suite.assertEqual(suite.first.readyState, "closed")
+                suite.assertEqual(entriesOf(suite.first.log, "closed")[0].reason, "closed")
+                return specDelay(1000)
+            end function).then(function(_ as dynamic, suite as object) as dynamic
+                suite.realStore()
+                return suite.store.callFunc("_fetch", "/sse/open/" + suite.serverKey)
+            end function).then(function(response as object, suite as object) as dynamic
+                suite.assertEqual(response.body.open, 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("reconnecting")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("reconnects after a dropped connection, after the server's retry interval, sending the last event id")
+        function _()
+            ' retryMs is far longer than the server's retry: 200, so a quick reconnect shows that won
+            stream = m.open({ url: "/sse/drop/" + m.key("drop"), retryMs: 8000 })
+            promises.chain(waitFor(stream, "message", 2), m).then(function(updates as object, suite as object) as dynamic
+                errors = entriesOf(updates, "error")
+                suite.assertEqual(errors.count(), 1)
+                suite.assertTrue(errors[0].code < 0)
+                suite.assertEqual(errors[0].kind, "connection")
+                suite.assertTrue(errors[0].willRetry)
+                suite.assertEqual(errors[0].retryInMs, 200)
+                suite.assertEqual(errors[0].lastEventId, "d1")
+                opens = entriesOf(updates, "open")
+                suite.assertEqual(opens.count(), 2)
+                suite.assertEqual(opens[1].attempt, 1)
+                resumed = entriesOf(updates, "message")[1]
+                suite.assertEqual(resumed.type, "resumed")
+                suite.assertEqual(parseJson(resumed.data).lastEventId, "d1")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("reconnects after the server ends the stream, and is done when the server answers 204")
+        function _()
+            stream = m.open({ url: "/sse/end/" + m.key("end") })
+            promises.chain(waitFor(stream, "closed", 1), m).then(function(updates as object, suite as object) as dynamic
+                fields = []
+                for each entry in updates
+                    fields.push(entry.field)
+                end for
+                suite.assertEqual(fields.join(","), "open,message,error,closed")
+                error = entriesOf(updates, "error")[0]
+                suite.assertEqual(error.kind, "ended")
+                suite.assertEqual(error.code, 200)
+                suite.assertTrue(error.willRetry)
+                closed = entriesOf(updates, "closed")[0]
+                suite.assertEqual(closed.reason, "done")
+                suite.assertEqual(closed.code, 204)
+                suite.assertEqual(closed.lastEventId, "end1")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("is done when the server ends the stream and reconnect is false")
+        function _()
+            stream = m.open({ url: "/sse/end/" + m.key("once"), reconnect: false })
+            promises.chain(waitFor(stream, "closed", 1), m).then(function(updates as object, suite as object) as dynamic
+                suite.assertEqual(entriesOf(updates, "error").count(), 0)
+                closed = entriesOf(updates, "closed")[0]
+                suite.assertEqual(closed.reason, "done")
+                suite.assertEqual(closed.code, 200)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("reconnects after a 503")
+        function _()
+            stream = m.open({ url: "/sse/flaky/" + m.key("flaky"), retryMs: 100 })
+            promises.chain(waitFor(stream, "message", 1), m).then(function(updates as object, suite as object) as dynamic
+                error = entriesOf(updates, "error")[0]
+                suite.assertEqual(error.code, 503)
+                suite.assertEqual(error.kind, "http")
+                suite.assertTrue(error.willRetry)
+                suite.assertEqual(parseJson(entriesOf(updates, "message")[0].data).count, 2)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("drops a connection with no event for idleTimeout seconds, and reconnects")
+        function _()
+            stream = m.open({ url: "/sse/hold/" + m.key("idle"), idleTimeout: 1, retryMs: 100 })
+            promises.chain(waitFor(stream, "open", 2), m).then(function(updates as object, suite as object) as dynamic
+                error = entriesOf(updates, "error")[0]
+                suite.assertEqual(error.kind, "timeout")
+                suite.assertTrue(error.willRetry)
+                ' The first connection's last id went with the second
+                suite.assertEqual(error.lastEventId, "h1")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("failures")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("fails on a 401 without reconnecting")
+        function _()
+            stream = m.open({ url: "/sse/status/" + m.key("auth") + "/401", retryMs: 100 })
+            promises.chain(waitFor(stream, "closed", 1), m).then(function(updates as object, suite as object) as dynamic
+                errors = entriesOf(updates, "error")
+                suite.assertEqual(errors.count(), 1)
+                suite.assertEqual(errors[0].code, 401)
+                suite.assertEqual(errors[0].kind, "http")
+                suite.assertFalse(errors[0].willRetry)
+                suite.assertEqual(entriesOf(updates, "closed")[0].reason, "failed")
+                suite.assertEqual(suite.streams[0].readyState, "closed")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("fails on an answer that is not an event stream")
+        function _()
+            stream = m.open({ url: "/sse/status/" + m.key("json") + "/200", retryMs: 100 })
+            promises.chain(waitFor(stream, "closed", 1), m).then(function(updates as object, suite as object) as dynamic
+                error = entriesOf(updates, "error")[0]
+                suite.assertEqual(error.kind, "notEventStream")
+                suite.assertFalse(error.willRetry)
+                suite.assertTrue(error.message.instr("application/json") > 0)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @async(10000)
+        @it("reports each failed connection, and fails once maxReconnects are used up")
+        function _()
+            stream = m.open({ url: "http://127.0.0.1:1/events", retryMs: 100, maxReconnects: 1 })
+            promises.chain(waitFor(stream, "closed", 1), m).then(function(updates as object, suite as object) as dynamic
+                errors = entriesOf(updates, "error")
+                suite.assertEqual(errors.count(), 2)
+                suite.assertEqual(errors[0].kind, "connection")
+                suite.assertTrue(errors[0].willRetry)
+                suite.assertEqual(errors[0].attempt, 1)
+                suite.assertFalse(errors[1].willRetry)
+                suite.assertEqual(entriesOf(updates, "closed")[0].reason, "failed")
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+        @it("fails at once for a method other than GET")
+        function _()
+            stream = m.open({ url: "/sse/fields", method: "POST" })
+            m.assertEqual(stream.readyState, "closed")
+            m.assertEqual(stream.error.kind, "invalid")
+            m.assertTrue(stream.error.message.instr("POST") > 0)
+            m.assertEqual(stream.closed.reason, "failed")
+        end function
+
+        @it("fails at once for a client initialize did not set up")
+        function _()
+            stream = m.open({ url: "/sse/fields", client: "nowhere" })
+            m.assertEqual(stream.error.kind, "invalid")
+            m.assertTrue(stream.error.message.instr("nowhere") > 0)
+        end function
+
+        @it("fails with a clear message on a Roku OS before 16.0")
+        function _()
+            m.realStore({ osVersion: { major: "15", minor: "1" } })
+            m.assertFalse(m.store.callFunc("_supportsEventStreams"))
+            stream = m.open("/sse/fields")
+            m.assertEqual(stream.readyState, "closed")
+            m.assertEqual(stream.error.kind, "unsupported")
+            m.assertFalse(stream.error.willRetry)
+            m.assertTrue(stream.error.message.instr("16.0") > 0)
+            m.assertTrue(stream.error.message.instr("runs 15.1") > 0)
+            m.assertEqual(stream.closed.reason, "failed")
+        end function
+
+        @it("supports event streams on this device")
+        function _()
+            m.realStore()
+            m.assertTrue(m.store.callFunc("_supportsEventStreams"))
+        end function
+
+        @it("fails when the client's transport has no event streams")
+        function _()
+            m.realStore({ transport: createObject("roSGNode", "FakeTransport") })
+            stream = m.open("/sse/fields")
+            m.assertEqual(stream.error.kind, "unsupported")
+            m.assertTrue(stream.error.message.instr("transport") > 0)
+        end function
+
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        @describe("createHttpClient in a task")
+        '+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+        @async(10000)
+        @it("opens a stream with the task's own client, and closes it")
+        function _()
+            task = createObject("roSGNode", "ClientTask")
+            task.baseUrl = testServerUrl()
+            task.scenario = "stream"
+            task.promise = promises.create()
+            m.first = task
+            task.control = "RUN"
+            promises.chain(task.promise, m).then(function(result as object, suite as object) as dynamic
+                suite.assertEqual(result.status, "resolved")
+                value = result.value
+                suite.assertEqual(value.opens, 1)
+                suite.assertEqual(value.messages.count(), 3)
+                suite.assertEqual(value.messages[0].type, "greeting")
+                suite.assertEqual(value.messages[1].data, "line one" + chr(10) + "line two")
+                suite.assertEqual(value.closed.reason, "closed")
+                suite.assertFalse(value.closedAgain)
+                suite.done()
+                return invalid
+            end function).catch(m.failed)
+        end function
+
+    end class
+end namespace
+
+' Records every field a spec's stream sets, with its readyState then, and settles waitFor
+sub onSpecStreamUpdate(event as object)
+    node = event.getRoSGNode()
+    updates = node.log
+    updates.push({ field: event.getField(), value: event.getData(), readyState: node.readyState })
+    node.log = updates
+    checkSpecStreamWait(node)
+end sub
+
+sub checkSpecStreamWait(node as object)
+    wanted = node.waitFor
+    if type(wanted) <> "roAssociativeArray" or not isNode(node.arrived) or node.arrived.promiseState <> "pending" then return
+    count = 0
+    for each entry in node.log
+        if entry.field = wanted.field then count++
+    end for
+    if count >= wanted.count then promises.resolve(node.log, node.arrived)
+end sub
+
+' A promise settled with the stream's log once count updates of field have arrived (counting
+' those already in it)
+function waitFor(node as object, field as string, count as integer) as object
+    node.arrived = promises.create()
+    node.waitFor = { field: field, count: count }
+    checkSpecStreamWait(node)
+    return node.arrived
+end function
+
+' The values of a log's updates of one field
+function entriesOf(updates as object, field as string) as object
+    values = []
+    for each entry in updates
+        if entry.field = field then values.push(entry.value)
+    end for
+    return values
+end function
+
+' A promise resolved after ms milliseconds
+function specDelay(ms as integer) as object
+    timer = createObject("roSGNode", "Timer")
+    timer.duration = ms / 1000
+    timer.addField("done", "node", false)
+    timer.done = promises.create()
+    timer.observeFieldScoped("fire", "onSpecDelay")
+    if m.specTimers = invalid then m.specTimers = []
+    m.specTimers.push(timer)
+    timer.control = "start"
+    return timer.done
+end function
+
+sub onSpecDelay(event as object)
+    timer = event.getRoSGNode()
+    timer.unobserveFieldScoped("fire")
+    promises.resolve(true, timer.done)
+end sub

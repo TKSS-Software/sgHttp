@@ -27,6 +27,11 @@
         <field id="promote" type="assocarray" alwaysNotify="true" />
         <!-- Internal: { id, queuedOnly } cancels a request (see cancelJob) -->
         <field id="cancel" type="assocarray" alwaysNotify="true" />
+        <!-- Internal: { id, node, spec } opens an event stream whose updates go to the node's
+             _deliver (see EventStream and source/eventStream.bs) -->
+        <field id="openStream" type="assocarray" alwaysNotify="true" />
+        <!-- Internal: { id } closes an event stream -->
+        <field id="closeStream" type="assocarray" alwaysNotify="true" />
         <field id="shutdown" type="boolean" alwaysNotify="true" />
         <field id="activeRequests" type="integer" value="0" />
 

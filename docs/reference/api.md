@@ -10,6 +10,7 @@ Promise-returning functions return a [promises](https://github.com/rokucommunity
 
 - Setup: [`initialize`](#initialize), [`getStore`](#getstore), [`destroy`](#destroy)
 - Requests: [`fetch`](#fetch), [`onUnauthorized`](#onunauthorized), [`reauthorize`](#reauthorize), and, only inside a Task of your own, [`createHttpClient`](#createhttpclient)
+- Event streams: [`openEventStream`](#openeventstream), [`closeEventStream`](#closeeventstream), [`supportsEventStreams`](#supportseventstreams)
 - Queries: [`define`](#define), [`query`](#query), [`precache`](#precache), [`nextPage`](#nextpage), [`peek`](#peek), [`mutate`](#mutate), [`set`](#set)
 - Cache control: [`expire`](#expire), [`remove`](#remove), [`removeAll`](#removeall), [`expireAll`](#expireall), [`refresh`](#refresh), [`setScope`](#setscope), [`removeScope`](#removescope), [`setHeaders`](#setheaders)
 - Changes: [`watch`](#watch), [`unwatch`](#unwatch), [`observeChanges`](#observechanges), [`unobserveChanges`](#unobservechanges), [`isChange`](#ischange)
@@ -82,6 +83,42 @@ Only for code that already runs in a Task of the app's: everywhere else, use [`f
 | `promote(promise, priority)` | Moves a waiting request to `"high"`, `"normal"` or `"low"` |
 | `getPort()` | The port the client's transfers post to |
 | `headers` | The shared headers; set it to change them |
+| `openEventStream(spec, listener, args = {})` | Opens an [event stream](#openeventstream), its updates going to `listener.onOpen`, `onMessage`, `onError` and `onClosed`. Returns its id. Roku OS 16.0. |
+| `closeEventStream(id)` | Ends an event stream. Returns whether it was open. |
+| `eventStreamsSupported()` | Whether the device has native event streams |
+
+## openEventStream
+
+```brightscript
+sghttp.openEventStream(spec as dynamic, handlers = {} as object, args = {} as object) as object
+```
+
+Opens a server-sent event stream through a client and returns its `EventStream` node at once. **Needs Roku OS 16.0 or later.** `spec` is a url, or `{ url, headers, query, client, auth, proxy, lastEventId, reconnect, retryMs, maxReconnects, idleTimeout }`, with `{placeholders}` filled from `args` and the scopes. `handlers` is `{ message, open, error, closed }`, function names in the calling component, called with the node's field events:
+
+| Field | Data |
+|---|---|
+| `message` | `{ type, id, data, retry, lastEventId }`, one per event |
+| `open` | `{ attempt, lastEventId }`, when a connection's first event arrives |
+| `error` | `{ code, kind, message, willRetry, retryInMs, attempt, lastEventId }`, when a connection fails or ends |
+| `closed` | `{ reason, code, lastEventId }`, once; reason `"closed"`, `"done"` or `"failed"` |
+
+The node also has `readyState` (`"connecting"`, `"open"` or `"closed"`) and `lastEventId`. The stream reconnects after a disconnect, sending `Last-Event-ID`, until it's closed, the server answers 204 or a status that a retry won't change, or `maxReconnects` are used up. A stream that can't open (an older Roku OS, a method other than `GET`, an unknown client, a transport without streams) gets `error` and `closed` during the call. See [Event streams](../guides/event-streams.md).
+
+## closeEventStream
+
+```brightscript
+sghttp.closeEventStream(stream as object) as boolean
+```
+
+Ends a stream `openEventStream` returned: its connection is cancelled and nothing reconnects it. `closed` is set with reason `"closed"` during the call, and nothing is delivered after. Returns whether the stream was still open.
+
+## supportsEventStreams
+
+```brightscript
+sghttp.supportsEventStreams() as boolean
+```
+
+Whether the device runs Roku OS 16.0 or later, which event streams need. Where it's false, poll instead.
 
 ## define
 
@@ -354,4 +391,4 @@ Returns the store node, or `invalid` before `initialize`.
 sghttp.destroy()
 ```
 
-Clears the in-memory cache, watchers and expiry records, stops the parser task, and the persistence task and transports sgHttp created, and removes the store from the scene. A transport or persistence node the app passed in is left running. Calls still waiting reject as cancelled. Files on `cachefs:/` stay; call [`removeAll`](#removeall) first to remove them. A later `initialize` creates a fresh store.
+Clears the in-memory cache, watchers and expiry records, closes open event streams, stops the parser task, and the persistence task and transports sgHttp created, and removes the store from the scene. A transport or persistence node the app passed in is left running. Calls still waiting reject as cancelled. Files on `cachefs:/` stay; call [`removeAll`](#removeall) first to remove them. A later `initialize` creates a fresh store.

@@ -15,6 +15,7 @@ Everything in these guides works without defining any queries.
 - [GraphQL](guides/graphql.md): queries and mutations, variables from args, `data` and `errors`
 - [More than one server](guides/multiple-servers.md): clients, their headers and their transports
 - [The transport](guides/transport.md): the built-in HTTP task, retries, timeouts, priorities, and replacing it
+- [Event streams](guides/event-streams.md): server-sent events, reconnecting with the last event id (Roku OS 16.0)
 - [Requests from a task](guides/tasks.md): only when you already have a Task of your own that needs HTTP
 - [Debugging](guides/debugging.md): events, stats, console warnings and routing traffic through Charles
 
@@ -39,7 +40,7 @@ A **query** is a request defined with `define` and called with `query`, so that 
 
 ## API reference
 
-- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, then `define`, `query`, `precache`, `cancel`, `nextPage`, `mutate`, `peek`, `expire`, `remove`, and the rest
+- [Functions](reference/api.md): `initialize`, `fetch`, `setHeaders`, `openEventStream`, then `define`, `query`, `precache`, `cancel`, `nextPage`, `mutate`, `peek`, `expire`, `remove`, and the rest
 - [Query definitions](reference/definition.md): every key `define` accepts
 - [Events, stats and errors](reference/events-and-stats.md): the shapes sgHttp reports
 

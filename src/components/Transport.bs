@@ -10,12 +10,17 @@ import "pkg:/source/client.bs"
 '   down when its callers give up.
 ' cancel: { id, queuedOnly } drops the request whose promise has that id if it is still waiting,
 '   or aborts it in flight unless queuedOnly; its promise rejects with { cancelled: true }.
+' openStream: { id, node, spec } opens an event stream (see source/eventStream.bs) whose updates
+'   go to the node's _deliver; closeStream: { id } closes it. A transport without these fields
+'   has no event streams.
 
 sub init()
     m.port = createObject("roMessagePort")
     m.top.observeField("request", m.port)
     m.top.observeField("promote", m.port)
     m.top.observeField("cancel", m.port)
+    m.top.observeField("openStream", m.port)
+    m.top.observeField("closeStream", m.port)
     m.top.observeField("shutdown", m.port)
     m.top.observeField("headers", m.port)
     ' Settings a running transport takes a change of, as it always has
@@ -63,6 +68,7 @@ sub runTransport()
         proxy: settings.proxy
     }, m.port)
     lastRequestId = ""
+    lastStreamId = ""
     while true
         message = wait(client.nextWait(), m.port)
         if type(message) = "roSGNodeEvent" then
@@ -86,7 +92,18 @@ sub runTransport()
             else if field = "headers" then
                 client.headers = message.getData()
                 if client.headers = invalid then client.headers = {}
+            else if field = "openStream" then
+                data = message.getData()
+                if type(data) = "roAssociativeArray" and isNonEmptyString(data.id) and isNode(data.node) then
+                    if data.id = lastStreamId then print `[sghttp] transport: stream ${data.id} delivered twice (field events coalesced)`
+                    lastStreamId = data.id
+                    client.openStream(data.spec, data.node, data.id)
+                end if
+            else if field = "closeStream" then
+                data = message.getData()
+                if type(data) = "roAssociativeArray" then client.closeEventStream(data.id)
             else if field = "shutdown" then
+                client.closeAllStreams()
                 return
             else if field = "baseUrl" or field = "proxy" then
                 client[field] = message.getData()

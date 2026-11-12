@@ -1,0 +1,358 @@
+import "pkg:/source/keys.bs"
+import "pkg:/source/request.bs"
+
+' Server-sent event streams, run by an HttpClient (see source/client.bs) beside its requests: the
+' Transport task hosts the streams sghttp.openEventStream opens, and a task's own client opens
+' them with openEventStream. Each stream is a long-lived GET read with roUrlTransfer's native
+' SSE support (Roku OS 16.0), outside the request pool: it never takes a slot from requests.
+'
+' What Roku OS 16.0.4 does, measured on a device, and how it shapes this:
+' - A reused roUrlTransfer sends a stale Last-Event-ID that SSEClearLastEventId does not clear,
+'   and a header added after clearing is sent beside it. Every connection is a new transfer,
+'   which sends none, and the stream sets the header itself.
+' - roSSEvent.getId() is "" both for an event with no id and for a blank id, which resets the
+'   last event id. The transfer's SSELastEventId() tells them apart, so it is read when a
+'   connection that received events ends.
+' - setMinimumTransferRate does not apply to a stream, and comments (keep-alives) are never
+'   posted, so a silent connection is never given up unless idleTimeout asks for it.
+' - The started roUrlEvent (2) arrives only with the first event. The completed one (1) ends
+'   every connection: code 200 for a clean end (with the content type of whatever answered), the
+'   status for any other answer, a negative code when no answer came.
+'
+' A stream's listener hears, in order, any of these, each with the stream's readyState after it
+' ("connecting", "open" or "closed"):
+'   open    - { attempt, lastEventId } the first event of a connection arrived
+'   message - { type, id, data, retry, lastEventId } one event; type is "message" when the
+'             server named none, data is always text
+'   error   - { code, kind, message, willRetry, retryInMs, attempt, lastEventId } a connection
+'             failed or ended; willRetry says whether another is coming
+'   closed  - { reason, code, lastEventId } the stream is over: reason "closed" (closeEventStream),
+'             "done" (the server answered 204, or ended the stream and reconnect is false) or
+'             "failed"
+' A node listener gets them through its _deliver function (see components/EventStream.bs); an
+' associative array listener through its onOpen, onMessage, onError and onClosed functions.
+
+' Before the server sends a retry interval
+const DEFAULT_STREAM_RETRY_MS = 3000
+' Repeated failures back off from the retry interval, doubling, to at most this (a longer
+' interval the server asks for is kept)
+const MAX_STREAM_BACKOFF_MS = 60000
+
+' Whether this device has native event streams (Roku OS 16.0)
+function eventStreamsSupported() as boolean
+    return findMemberFunction(createObject("roUrlTransfer"), "AsyncGetSSEvents") <> invalid
+end function
+
+' The message an unsupported device fails a stream with. version: { major, minor }, the
+' device's when none is given
+function unsupportedStreamMessage(version = invalid as dynamic) as string
+    if type(version) <> "roAssociativeArray" then version = createObject("roDeviceInfo").getOSVersion()
+    return `sghttp: event streams need Roku OS 16.0 or later, and this device runs ${version.major}.${version.minor}. Check sghttp.supportsEventStreams() before opening one, and poll instead where it is false.`
+end function
+
+' Why a stream spec can't be opened, or "": streams are GETs, the only method Roku's native
+' support documents
+function eventStreamProblem(spec as dynamic) as string
+    if type(spec) <> "roAssociativeArray" or not isNonEmptyString(spec.url) then return "needs a url"
+    if isNonEmptyString(spec.method) and ucase(spec.method) <> "GET" then return `is a GET; Roku's native event streams can't be sent as ${ucase(spec.method)}`
+    return ""
+end function
+
+' Opens a stream from a spec as sghttp.openEventStream takes it ({placeholders} filled from
+' args) and returns its id, for closeEventStream. listener: see above.
+function httpClient_openEventStream(spec as dynamic, listener as object, args = {} as object) as string
+    if type(spec) = "roString" or type(spec) = "String" then spec = { url: spec }
+    m.streamCount++
+    id = "stream-" + m.streamCount.toStr()
+    if eventStreamProblem(spec) <> "" then
+        ' openStream fails it, saying why
+        m.openStream(type(spec) = "roAssociativeArray" ? spec : {}, listener, id)
+        return id
+    end if
+    filled = fillRequest(spec, args, {}, { auth: spec.auth, proxy: spec.proxy, name: "event stream" })
+    for each setting in ["lastEventId", "reconnect", "retryMs", "maxReconnects", "idleTimeout"]
+        filled[setting] = spec[setting]
+    end for
+    m.openStream(filled, listener, id)
+    return id
+end function
+
+' Opens a stream from a filled spec (see fillRequest) plus its stream settings:
+' { lastEventId, reconnect, retryMs, maxReconnects, idleTimeout }
+sub httpClient_openStream(spec as object, listener as object, id as string)
+    stream = {
+        id: id
+        spec: spec
+        listener: listener
+        transfer: invalid
+        identity: ""
+        lastEventId: isNonEmptyString(spec.lastEventId) ? spec.lastEventId : ""
+        reconnect: spec.reconnect <> false
+        retryMs: (isWholeNumber(spec.retryMs) and spec.retryMs >= 0) ? spec.retryMs : DEFAULT_STREAM_RETRY_MS
+        serverRetryMs: 0
+        maxReconnects: (isWholeNumber(spec.maxReconnects) and spec.maxReconnects >= 0) ? spec.maxReconnects : -1
+        idleMs: (isWholeNumber(spec.idleTimeout) and spec.idleTimeout > 0) ? 1000 * spec.idleTimeout : 0
+        ' Reconnects since an event last arrived
+        attempt: 0
+        ' Events on the current connection
+        received: 0
+        ' Since the last event, or the connection started (idleTimeout)
+        idleTimer: createObject("roTimespan")
+        ' Until the next connection (reconnectMs), while waiting to reconnect
+        waitTimer: invalid
+        reconnectMs: 0
+        readyState: "connecting"
+    }
+    problem = eventStreamProblem(spec)
+    if problem <> "" then
+        m.failStream(stream, { code: 0, kind: "invalid", message: `sghttp: an event stream ${problem}` }, false)
+        return
+    end if
+    if not m.eventStreamsSupported() then
+        m.failStream(stream, { code: 0, kind: "unsupported", message: unsupportedStreamMessage() }, false)
+        return
+    end if
+    m.streams[id] = stream
+    m.connectStream(stream)
+end sub
+
+' Ends a stream: its connection is cancelled and nothing reconnects it. The listener hears closed,
+' with reason "closed". Returns whether the stream was still open.
+function httpClient_closeEventStream(id as dynamic) as boolean
+    if not isNonEmptyString(id) then return false
+    stream = m.streams[id]
+    if stream = invalid then return false
+    m.dropStream(stream)
+    m.notifyStream(stream, [{ field: "closed", value: { reason: "closed", code: 0, lastEventId: stream.lastEventId } }], "closed")
+    return true
+end function
+
+' Every stream ends, quietly (the client's owner is going away)
+sub httpClient_closeAllStreams()
+    for each id in m.streams.keys()
+        m.dropStream(m.streams[id])
+    end for
+end sub
+
+function httpClient_eventStreamsSupported() as boolean
+    if m.streamSupport = invalid then m.streamSupport = eventStreamsSupported()
+    return m.streamSupport
+end function
+
+' A new connection for the stream: a new transfer every time (see the top of this file), with
+' the headers the client has now, so a token renewed by setHeaders is used on a reconnect
+sub httpClient_connectStream(stream as object)
+    spec = stream.spec
+    url = spec.url
+    if url.left(4) <> "http" and isNonEmptyString(m.baseUrl) then url = m.baseUrl + url
+    url = m.appendQuery(url, spec.query)
+    if spec.useProxy <> false then url = m.applyProxy(url)
+
+    headers = {}
+    headers.append(m.baseHeaders)
+    if spec.includeSharedHeaders <> false and type(m.headers) = "roAssociativeArray" then headers.append(m.headers)
+    if type(spec.headers) = "roAssociativeArray" then headers.append(spec.headers)
+    if not streamHasHeader(headers, "Accept") then headers["Accept"] = "text/event-stream"
+    if stream.lastEventId <> "" then headers["Last-Event-ID"] = stream.lastEventId
+
+    transfer = createObject("roUrlTransfer")
+    transfer.setMessagePort(m.port)
+    transfer.setCertificatesFile("common:/certs/ca-bundle.crt")
+    transfer.initClientCertificates()
+    transfer.setUrl(url)
+    transfer.setHeaders(headers)
+    stream.transfer = transfer
+    stream.identity = transfer.getIdentity().toStr()
+    stream.url = url
+    stream.received = 0
+    stream.waitTimer = invalid
+    stream.idleTimer.mark()
+    m.streamTransfers[stream.identity] = stream
+    ' Called through the stream: the compiler's roUrlTransfer has no OS 16 methods yet
+    if not stream.transfer.asyncGetSSEvents() then
+        m.streamTransfers.delete(stream.identity)
+        stream.transfer = invalid
+        m.streamDisconnected(stream, { code: -1, kind: "network", message: "sghttp: could not start the event stream" })
+    end if
+end sub
+
+' A message for one of the client's streams: an event, or the start or end of a connection.
+' Returns whether it was one.
+function httpClient_onStreamMessage(message as object) as boolean
+    stream = m.streamTransfers[message.getSourceIdentity().toStr()]
+    if stream = invalid then return false
+    if type(message) = "roSSEvent" then
+        updates = m.streamOpened(stream)
+        stream.received++
+        stream.attempt = 0
+        stream.idleTimer.mark()
+        id = message.getId()
+        if id <> "" then stream.lastEventId = id
+        retry = message.getRetry()
+        if retry > 0 then stream.serverRetryMs = retry
+        kind = message.getEvent()
+        if kind = "" then kind = "message"
+        updates.push({ field: "message", value: { type: kind, id: id, data: message.getData(), retry: retry, lastEventId: stream.lastEventId } })
+        m.notifyStream(stream, updates, "open")
+        return true
+    end if
+    ' The started event comes with the first one, and is heard there
+    if message.getInt() <> 1 then return true
+
+    m.streamTransfers.delete(stream.identity)
+    ' The transfer knows a blank id reset the last id, which getId() can't tell from no id
+    if stream.received > 0 then stream.lastEventId = stream.transfer.SSELastEventId()
+    stream.transfer = invalid
+    code = message.getResponseCode()
+    headers = message.getResponseHeaders()
+    if code = 204 then
+        m.dropStream(stream)
+        m.notifyStream(stream, [{ field: "closed", value: { reason: "done", code: 204, lastEventId: stream.lastEventId } }], "closed")
+    else if code >= 200 and code < 300 and stream.received = 0 and not isEventStreamType(headers["content-type"]) then
+        ' Answered, but not with a stream: a wrong url, which reconnecting won't fix
+        m.failStream(stream, { code: code, kind: "notEventStream", message: `sghttp: ${stream.url} answered ${code} with ${streamContentType(headers["content-type"])}, not text/event-stream` }, true)
+    else if code >= 200 and code < 300 then
+        m.streamDisconnected(stream, { code: code, kind: "ended", message: "sghttp: the server ended the event stream" })
+    else if code > 0 and code <> 429 and code < 500 then
+        ' 401, 403, 404...: the same request would get the same answer
+        m.failStream(stream, { code: code, kind: "http", message: `sghttp: ${stream.url} answered ${code}` }, true)
+    else if code > 0 then
+        retryAfter = retryAfterSeconds(headers["retry-after"], nowSeconds())
+        m.streamDisconnected(stream, { code: code, kind: "http", message: `sghttp: ${stream.url} answered ${code}` }, retryAfter)
+    else
+        m.streamDisconnected(stream, { code: code, kind: failureKind(code, m.deviceInfo.getLinkStatus()), message: message.getFailureReason() })
+    end if
+    return true
+end function
+
+' The open update for a connection's first event, or none
+function httpClient_streamOpened(stream as object) as object
+    if stream.readyState = "open" then return []
+    stream.readyState = "open"
+    return [{ field: "open", value: { attempt: stream.attempt, lastEventId: stream.lastEventId } }]
+end function
+
+' A connection ended or failed in a way another might not: reconnect after the server's retry
+' interval (else retryMs), doubling while connections fail without an event, or end the stream
+' when reconnect is false or maxReconnects are used up. retryAfter: seconds a 429 or 503 asked
+' to wait, or -1.
+sub httpClient_streamDisconnected(stream as object, failure as object, retryAfter = -1 as integer)
+    if not stream.reconnect or (stream.maxReconnects >= 0 and stream.attempt >= stream.maxReconnects) then
+        if failure.kind = "ended" then
+            ' The server finished and nothing is to reconnect: the stream is done, not failed
+            m.dropStream(stream)
+            m.notifyStream(stream, [{ field: "closed", value: { reason: "done", code: failure.code, lastEventId: stream.lastEventId } }], "closed")
+            return
+        end if
+        m.failStream(stream, failure, true)
+        return
+    end if
+    stream.attempt++
+    base = stream.serverRetryMs > 0 ? stream.serverRetryMs : stream.retryMs
+    ' A longer interval than the cap, asked for or set, stands
+    cap = base > MAX_STREAM_BACKOFF_MS ? base : MAX_STREAM_BACKOFF_MS
+    delay = base
+    for i = 2 to stream.attempt
+        delay = delay * 2
+        if delay >= cap then
+            delay = cap
+            exit for
+        end if
+    end for
+    if retryAfter >= 0 and 1000 * retryAfter > delay then delay = 1000 * retryAfter
+    stream.readyState = "connecting"
+    stream.reconnectMs = delay
+    stream.waitTimer = createObject("roTimespan")
+    error = { code: failure.code, kind: failure.kind, message: failure.message, willRetry: true, retryInMs: delay, attempt: stream.attempt, lastEventId: stream.lastEventId }
+    m.notifyStream(stream, [{ field: "error", value: error }], "connecting")
+end sub
+
+' The stream ends with an error. tracked: whether it is in streams (an open that failed at once
+' never was)
+sub httpClient_failStream(stream as object, failure as object, tracked as boolean)
+    if tracked then m.dropStream(stream)
+    error = { code: failure.code, kind: failure.kind, message: failure.message, willRetry: false, retryInMs: 0, attempt: stream.attempt, lastEventId: stream.lastEventId }
+    m.notifyStream(stream, [{ field: "error", value: error }, { field: "closed", value: { reason: "failed", code: failure.code, lastEventId: stream.lastEventId } }], "closed")
+end sub
+
+' Forgets a stream, cancelling its connection
+sub httpClient_dropStream(stream as object)
+    m.streams.delete(stream.id)
+    stream.readyState = "closed"
+    stream.waitTimer = invalid
+    if stream.transfer <> invalid then
+        m.streamTransfers.delete(stream.identity)
+        stream.transfer.asyncCancel()
+        stream.transfer = invalid
+    end if
+end sub
+
+' Starts the reconnects that are due, and gives up connections idle for longer than idleTimeout
+sub httpClient_pumpStreams()
+    for each id in m.streams.keys()
+        stream = m.streams[id]
+        if stream = invalid then continue for
+        if stream.waitTimer <> invalid then
+            if stream.waitTimer.totalMilliseconds() >= stream.reconnectMs then m.connectStream(stream)
+        else if stream.idleMs > 0 and stream.transfer <> invalid and stream.idleTimer.totalMilliseconds() >= stream.idleMs then
+            m.streamTransfers.delete(stream.identity)
+            stream.transfer.asyncCancel()
+            stream.transfer = invalid
+            m.streamDisconnected(stream, { code: -28, kind: "timeout", message: `sghttp: no event for ${stream.idleMs \ 1000} seconds (idleTimeout)` })
+        end if
+    end for
+end sub
+
+' Milliseconds until a stream needs the loop (a reconnect or an idle timeout), or -1
+function httpClient_nextStreamWait() as integer
+    soonest = -1
+    for each id in m.streams
+        stream = m.streams[id]
+        if stream.waitTimer <> invalid then
+            remaining = stream.reconnectMs - stream.waitTimer.totalMilliseconds()
+        else if stream.idleMs > 0 and stream.transfer <> invalid then
+            remaining = stream.idleMs - stream.idleTimer.totalMilliseconds()
+        else
+            continue for
+        end if
+        if remaining < 1 then remaining = 1
+        if soonest < 0 or remaining < soonest then soonest = remaining
+    end for
+    return soonest
+end function
+
+' Hands updates to the stream's listener: a node's _deliver function (one rendezvous for them
+' all, when the node is the render thread's), or an associative array's onOpen, onMessage,
+' onError and onClosed
+sub httpClient_notifyStream(stream as object, updates as object, readyState as string)
+    listener = stream.listener
+    if isNode(listener) then
+        listener.callFunc("_deliver", { updates: updates, readyState: readyState })
+        return
+    end if
+    if type(listener) <> "roAssociativeArray" then return
+    listener.readyState = readyState
+    for each update in updates
+        handler = "on" + ucase(update.field.left(1)) + update.field.mid(1)
+        handlerType = type(listener[handler])
+        if handlerType = "roFunction" or handlerType = "Function" then listener[handler](update.value)
+    end for
+end sub
+
+' Whether a header is in headers, in any case
+function streamHasHeader(headers as object, name as string) as boolean
+    for each key in headers
+        if lcase(key) = lcase(name) then return true
+    end for
+    return false
+end function
+
+function isEventStreamType(contentType as dynamic) as boolean
+    if not isNonEmptyString(contentType) then return false
+    return lcase(contentType.trim()).left(17) = "text/event-stream"
+end function
+
+function streamContentType(value as dynamic) as string
+    if isNonEmptyString(value) then return value
+    return "no content type"
+end function
