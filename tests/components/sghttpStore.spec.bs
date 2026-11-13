@@ -19,6 +19,8 @@ namespace tests
         public slow = invalid
         public authWatcher = invalid
         public spy = invalid
+        public budgetNode = invalid
+        public budgetDir = ""
 
         ' A fresh store per spec: "items" is cached, "items.save" is a mutation that expires it
         function makeStore()
@@ -344,6 +346,79 @@ namespace tests
                 suite.done()
                 return invalid
             end function)
+        end function
+
+        @async
+        @it("trims its least recently used disk copies to stay within maxDiskBytes, and asks the server for one trimmed")
+        function _()
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            ' Room for one body: storing item 2 trims item 1's
+            m.store.callFunc("_initialize", { transport: m.fake, persistence: m.disk(), persist: true, maxEntries: 1, maxDiskBytes: 1, version: "spec", appInfo: { id: "dev", title: "trim app", version: "1" } })
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300, persist: true })
+            m.store.callFunc("_removeAll")
+            promises.chain(m.storeAndEvict(), m).then(function(value as dynamic, suite as object) as dynamic
+                suite.fake.callFunc("answerNext", "fresh")
+                return suite.query("1")
+            end function).then(function(value as dynamic, suite as object) as dynamic
+                ' Not "a" from the disk: that copy was trimmed
+                suite.assertEqual(value, "fresh")
+                suite.assertEqual(suite.fake.requestCount, 3)
+                stats = suite.store.callFunc("_getStats")
+                suite.assertEqual(stats.diskHits, 0)
+                suite.assertTrue(stats.diskTrimmed >= 1)
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @it("releases its least recently used values on a memory warning the app reports, holds the cap down, and lets it back up when memory recovers")
+        function _()
+            m.dropStore()
+            m.fake = createObject("roSGNode", "FakeTransport")
+            m.store = createObject("roSGNode", "Store")
+            m.store.callFunc("_initialize", { transport: m.fake, persist: false, maxEntries: 10 })
+            m.store.callFunc("_define", "items", { request: { url: "/items/{id}" }, ttl: 300 })
+            for i = 1 to 8
+                m.store.callFunc("_set", "items", { id: i.toStr() }, "v" + i.toStr())
+            end for
+            ' roAppMemoryNotificationEvent.getInfo() at 90% of the app's limit: a quarter of the 8
+            ' stay, the most recently used
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { memoryUsagePercent: 90 }), 6)
+            m.assertInvalid(m.store.callFunc("_peek", "items", { id: "1" }))
+            m.assertEqual(m.store.callFunc("_peek", "items", { id: "8" }), "v8")
+            stats = m.store.callFunc("_getStats")
+            m.assertEqual(stats.entries, 2)
+            m.assertEqual(stats.memoryWarnings, 1)
+            m.assertEqual(stats.memoryReleased, 6)
+            ' The same warning again, or a milder one, releases nothing more
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { memoryUsagePercent: 90 }), 0)
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { memoryUsagePercent: 85 }), 0)
+            ' While it holds, new values push old ones out
+            m.store.callFunc("_set", "items", { id: "9" }, "v9")
+            m.store.callFunc("_set", "items", { id: "10" }, "v10")
+            m.assertEqual(m.store.callFunc("_getStats").entries, 2)
+            ' Worse: a share of the 8 there were when the warning began; at 95% only the newest
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", 95), 1)
+            m.assertEqual(m.store.callFunc("_peek", "items", { id: "10" }), "v10")
+            ' Below the first threshold: maxEntries again
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { memoryUsagePercent: 75 }), 0)
+            for i = 11 to 14
+                m.store.callFunc("_set", "items", { id: i.toStr() }, "v" + i.toStr())
+            end for
+            m.assertEqual(m.store.callFunc("_getStats").entries, 5)
+            ' roDeviceInfoEvent.getInfo() on a device that reports only a level: low keeps half
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { generalMemoryLevel: "low" }), 3)
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", { generalMemoryLevel: "normal" }), 0)
+            ' Anything else is ignored
+            m.assertEqual(m.store.callFunc("_reportMemoryWarning", "full"), 0)
+            m.assertEqual(m.store.callFunc("_getStats").memoryWarnings, 5)
+            m.dropStore()
         end function
 
         @async
@@ -1972,9 +2047,10 @@ namespace tests
                 suite.assertEqual(suite.spy.operations, 0)
                 ' Its folders are made once, when a query that persists is defined
                 suite.store.callFunc("_define", "home", { request: { url: "/home" }, persist: true })
-                suite.assertEqual(suite.spy.operations, 2)
+                ' The two folders, and the disk budget
+                suite.assertEqual(suite.spy.operations, 3)
                 suite.store.callFunc("_define", "menu", { request: { url: "/menu" }, persist: true })
-                suite.assertEqual(suite.spy.operations, 2)
+                suite.assertEqual(suite.spy.operations, 3)
                 suite.done()
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
@@ -1996,6 +2072,100 @@ namespace tests
                 return invalid
             end function).catch(function(error as dynamic, suite as object) as dynamic
                 suite.fail("rejected: " + formatJson(error))
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        ' A persistence task of its own, with an empty dir under the spec folder holding bodies a,
+        ' b and c (100 bytes each, in query-like folders, written in that order) and, when budget
+        ' is given, those limits on dir. Shut down by finishBudget.
+        function budgetDisk(dir as string, budget = invalid as dynamic) as object
+            m.budgetNode = createObject("roSGNode", "Persistence")
+            m.budgetDir = dir
+            m.budgetNode.callFunc("execute", { type: "clear", dir: dir })
+            m.budgetNode.callFunc("execute", { type: "ensureDir", dir: "cachefs:/sghttp-spec" })
+            m.budgetNode.callFunc("execute", { type: "ensureDir", dir: dir })
+            if budget <> invalid then
+                budget.dir = dir
+                budget.type = "budget"
+                m.budgetNode.callFunc("execute", budget)
+            end if
+            for each name in ["a", "b", "c"]
+                m.writeBudgetBody(name)
+            end for
+            return m.budgetNode
+        end function
+
+        sub writeBudgetBody(name as string)
+            m.budgetNode.callFunc("execute", { type: "write", path: m.budgetPath(name), text: string(100, name) })
+        end sub
+
+        function budgetPath(name as string) as string
+            return m.budgetDir + "/" + name + "/body.json"
+        end function
+
+        ' Reads every body in names, in order, as the task answers them; a missing one reads ""
+        function readBudgetBodies(names as object) as object
+            reads = []
+            for each name in names
+                reads.push(m.budgetNode.callFunc("execute", { type: "read", path: m.budgetPath(name) }))
+            end for
+            return promises.all(reads)
+        end function
+
+        sub finishBudget()
+            m.budgetNode.callFunc("execute", { type: "clear", dir: m.budgetDir })
+            m.budgetNode.shutdown = true
+        end sub
+
+        @async(5000)
+        @it("trims the least recently used bodies when its folder goes over maxBytes, a read counting as a use")
+        function _()
+            m.budgetDisk("cachefs:/sghttp-spec/budget-cap", { maxBytes: 350, log: true })
+            ' a is read after b and c were written, so b is now the least recently used
+            m.budgetNode.callFunc("execute", { type: "read", path: m.budgetPath("a") })
+            ' 400 bytes: over 350, so down to 80% of it (280): b and c go, a stays with d
+            m.writeBudgetBody("d")
+            promises.chain(m.readBudgetBodies(["a", "b", "c", "d"]), m).then(function(texts as dynamic, suite as object) as dynamic
+                suite.assertEqual(texts[0], string(100, "a"))
+                suite.assertEqual(texts[1], "")
+                suite.assertEqual(texts[2], "")
+                suite.assertEqual(texts[3], string(100, "d"))
+                trimmed = suite.budgetNode.trimmed
+                suite.assertEqual(trimmed.files, 2)
+                suite.assertEqual(trimmed.reason, "over maxDiskBytes")
+                suite.finishBudget()
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.finishBudget()
+                suite.done()
+                return invalid
+            end function)
+        end function
+
+        @async(5000)
+        @it("trims the oldest bodies and tries again when a write fails, as on a full disk")
+        function _()
+            ' No cap of its own: only the failed write trims, twice the body's size (a and b)
+            m.budgetDisk("cachefs:/sghttp-spec/budget-full", { maxBytes: 0 })
+            m.budgetNode.callFunc("execute", { type: "failWrites", count: 1 })
+            m.writeBudgetBody("d")
+            promises.chain(m.readBudgetBodies(["a", "b", "c", "d"]), m).then(function(texts as dynamic, suite as object) as dynamic
+                suite.assertEqual(texts[0], "")
+                suite.assertEqual(texts[1], "")
+                suite.assertEqual(texts[2], string(100, "c"))
+                suite.assertEqual(texts[3], string(100, "d"))
+                suite.assertEqual(suite.budgetNode.trimmed.files, 2)
+                suite.assertEqual(suite.budgetNode.trimmed.reason, "write failed")
+                suite.finishBudget()
+                suite.done()
+                return invalid
+            end function).catch(function(error as dynamic, suite as object) as dynamic
+                suite.fail("rejected: " + formatJson(error))
+                suite.finishBudget()
                 suite.done()
                 return invalid
             end function)

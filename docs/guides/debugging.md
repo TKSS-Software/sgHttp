@@ -26,7 +26,7 @@ With `initialize({ debug: true })`, sgHttp prints every event and change as it h
 [sghttp] change homePage via network homePage|profile=|{"slug":"home-page"}
 ```
 
-The key shows the args, and the cursor for any page after the first, so you can tell which page or profile a line is about. It's the same information `observeEvents` delivers. Turn it on in development builds only.
+The key shows the args, and the cursor for any page after the first, so you can tell which page or profile a line is about. It's the same information `observeEvents` delivers. Each body written to `cachefs:/` prints its size too (see [Disk space](persistence.md#disk-space)). Turn it on in development builds only.
 
 ## Stats
 

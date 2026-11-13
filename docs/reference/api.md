@@ -44,6 +44,7 @@ Creates the store, attaches it to the scene and returns it. If a store already e
 | `version` | `"1"` | Cache version; change it to stop every body on disk from being read. Rarely needed: app releases, servers and definition changes already keep bodies apart. |
 | `namespace` | `<id>_<title>-<hash>_<app version>` from `roAppInfo` | This app's folder under `cachefs:/sghttp/`. See [One folder per app](../guides/persistence.md#one-folder-per-app). |
 | `maxEntries` | 100 | In-memory entry cap |
+| `maxDiskBytes` | 10485760 (10 MB) | Bytes this app's stored bodies may take on `cachefs:/`; least recently used trimmed first. `0` for no cap. See [Disk space](../guides/persistence.md#disk-space). |
 | `defaultTtl` | 300 | Seconds, for definitions without a `ttl` whose responses carry no `Cache-Control: max-age` |
 | `debug` | `false` | Print every event and change to the console with its cache key, as `[sghttp] <type> <name> via <source> (<ms>ms) <key>`. See [Debugging](../guides/debugging.md#printing-every-event). |
 | `store` | none | An existing `Store` node to attach instead of creating one (tests) |
@@ -376,6 +377,14 @@ sghttp.getStats() as object
 ```
 
 Returns counters and gauges. See [Stats](events-and-stats.md#stats).
+
+## reportMemoryWarning
+
+```brightscript
+sghttp.reportMemoryWarning(info as dynamic, store = invalid as dynamic) as integer
+```
+
+Hands sgHttp a memory warning from the app's own monitor, so the cache releases its least recently used values. sgHttp runs no monitor of its own. `info` is the event's `getInfo()` as it came: `roAppMemoryNotificationEvent`'s `{ memoryUsagePercent }` or `roDeviceInfoEvent`'s `{ generalMemoryLevel }`. A percent on its own also works. Pass `store` (the node `getStore()` returns) when calling from `main.brs` or a task. Returns how many values were released. See [Memory warnings](../guides/threads-and-memory.md#memory-warnings).
 
 ## getStore
 

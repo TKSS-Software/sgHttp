@@ -38,12 +38,43 @@ Nodes are cached by reference. Every query of a key whose value is a ContentNode
 | Expiry records (to skip old disk copies) | About one per expired query, plus one per expired persisted key not yet fetched again |
 | Watchers | Until you call `unwatch` |
 | Observers from `observeEvents` / `observeChanges` | Until you call `unobserveEvents` / `unobserveChanges` |
-| Files on `cachefs:/` | Managed by the OS; removed by `remove`, scope changes, the next app version's start-up, and the start-up [sweep](persistence.md#the-start-up-sweep) of files the store can no longer read |
+| Files on `cachefs:/` | Capped at `maxDiskBytes` (default 10 MB), least recently used trimmed first; removed by `remove`, scope changes, the next app version's start-up, and the start-up [sweep](persistence.md#the-start-up-sweep) of files the store can no longer read |
 
 The `maxEntries` cap counts entries, not bytes. A hundred small objects and a hundred trees of a thousand nodes each are both at the cap. For queries with large results:
 
 - pass only the args that identify the data, so one screen doesn't create many keys,
 - or lower `maxEntries` for the whole app.
+
+## Memory warnings
+
+sgHttp doesn't subscribe to the OS's memory warnings itself. Roku doesn't document whether two subscriptions in one app both get every warning, so the app keeps the only monitor (Roku's certification requires one from October 1, 2026) and hands each warning to sgHttp with `reportMemoryWarning`. Pass the event's `getInfo()` as it is:
+
+```brightscript
+if type(msg) = "roAppMemoryNotificationEvent" then
+    sghttp.reportMemoryWarning(msg.getInfo())      ' { memoryUsagePercent }
+else if type(msg) = "roDeviceInfoEvent" and msg.getInfo().generalMemoryLevel <> invalid then
+    sghttp.reportMemoryWarning(msg.getInfo())      ' { generalMemoryLevel }, where roAppMemoryMonitor isn't available
+end if
+```
+
+Forward the warnings in both directions: on Roku OS 15.2 and later, `roAppMemoryMonitor` reports as usage crosses 80, 85, 90 and 95% of the app's limit going up and going down, and the report below 80% is what lets the cache grow again.
+
+On a warning, the cache releases its least recently used values, more the closer the app is to its limit:
+
+| App's usage of its limit | Values kept, of those cached when the warning began |
+|---|---|
+| 80% | 75% |
+| 85%, or level `low` | 50% |
+| 90% | 25% |
+| 95%, or level `critical` | only the newest, and those with a request in flight |
+
+- The lower cap stays in place, so new values push out old ones instead of growing the cache again. It lifts on a report below 80% (or level `normal`), or after a minute without another warning.
+- A warning no worse than the one in effect releases nothing more, so forwarding the same warning twice is harmless.
+- Only memory copies go. A persisted body stays on `cachefs:/`, and a released value is fetched again the next time it's queried. A value the app still holds, such as a ContentNode on screen, stays alive; the cache only drops its own reference.
+
+`reportMemoryWarning` returns how many values it released. `getStats()` counts warnings in `memoryWarnings` and released values in `memoryReleased`.
+
+**Where the monitor runs.** From a component, `sghttp.reportMemoryWarning(info)` finds the store through the scene. In `main.brs`, or in a task, where the scene may not be reachable, pass the store node as a second argument: `getStore()` taken on the render thread and handed to the task in a field, or `scene.__sghttp` in `main.brs`. From a task, each call crosses to the render thread once; warnings are throttled by the OS, so that's cheap.
 
 ## Cleaning up
 
