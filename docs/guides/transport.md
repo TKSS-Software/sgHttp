@@ -85,6 +85,8 @@ The store sets `baseUrl`, `headers`, `baseHeaders`, `proxy`, `maxConcurrent`, `t
 
 The store doesn't start a replacement. If it's a Task, start it yourself. A replacement with an assocarray field named `promote` is told `{ id, priority }` when a queued request should move up, `id` being the id of the promise it returned; without that field, queued requests keep their order. A replacement with an assocarray field named `cancel` is told `{ id, queuedOnly }` when a request is cancelled: drop it if it's still waiting, or abort it in flight unless `queuedOnly`, and reject its promise with `{ cancelled: true }`. Without that field, a cancelled `fetch` still rejects as cancelled once its answer arrives, but the request isn't stopped.
 
+A replacement transport has no [event streams](event-streams.md) unless it has assocarray fields named `openStream` and `closeStream`. The store sets `openStream` to `{ id, node, spec }`, the spec filled as for a request plus the stream settings; the transport calls `node.callFunc("_deliver", { updates: [{ field, value }], readyState })` for each update, as the built-in one does from `source/eventStream.bs`. `closeStream` is set to `{ id }`. A client whose transport has neither field fails its streams with kind `unsupported`.
+
 ## Next
 
-[Requests from a task](tasks.md)
+[Event streams](event-streams.md)

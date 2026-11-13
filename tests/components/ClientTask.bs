@@ -25,6 +25,25 @@ sub runTask()
         m.client.cancel(work)
     else if scenario = "parser" then
         work = m.client.fetch({ url: "/echo", parser: "SomeParser" })
+    else if scenario = "stream" then
+        ' An event stream with a listener of the task's: closed from inside its third event
+        work = promises.create()
+        listener = { client: m.client, work: work, id: "", result: { opens: 0, messages: [], closed: invalid, closedAgain: true } }
+        listener.onOpen = function(info as object)
+            m.result.opens++
+        end function
+        listener.onMessage = function(message as object)
+            m.result.messages.push(message)
+            if m.result.messages.count() = 3 then
+                m.client.closeEventStream(m.id)
+                m.result.closedAgain = m.client.closeEventStream(m.id)
+                promises.resolve(m.result, m.work)
+            end if
+        end function
+        listener.onClosed = function(info as object)
+            m.result.closed = info
+        end function
+        listener.id = m.client.openEventStream("/sse/fields", listener)
     end if
     promises.chain(promises.allSettled([work]), m).then(function(results as object, m as object) as dynamic
         m.done = true

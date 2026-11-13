@@ -1,6 +1,7 @@
 import "pkg:/source/roku_modules/promises/promises.brs"
 import "pkg:/source/keys.bs"
 import "pkg:/source/request.bs"
+import "pkg:/source/eventStream.bs"
 
 ' The cache singleton. Everything lives in m (never in fields) so reads never copy.
 ' Entry shape in m.cache[key] (see newEntry):
@@ -77,6 +78,11 @@ sub init()
     m.initialized = false
     ' Set by _destroy: an optimistic write failing after it puts nothing back
     m.destroyed = false
+    ' EventStream nodes opened and maybe still open (see _openEventStream)
+    m.streams = []
+    m.streamCount = 0
+    ' { major, minor } to report instead of the device's (tests), see _supportsEventStreams
+    m.osVersion = invalid
 end sub
 
 function _initialize(params = {} as object) as object
@@ -141,6 +147,7 @@ function _initialize(params = {} as object) as object
         end if
     end if
 
+    if type(params.osVersion) = "roAssociativeArray" then m.osVersion = params.osVersion
     m.initialized = true
     return m.top
 end function
@@ -317,6 +324,64 @@ function _fetch(spec as dynamic, args = {} as object) as object
     if spec.toFile <> invalid then definition.toFile = spec.toFile
     return runUncached(definition, args, true)
 end function
+
+'*************************************************************************
+'#region Event streams
+'*************************************************************************
+
+' Opens a server-sent event stream on a client's transport and returns the node, its updates
+' delivered to it by the transport's task (see source/eventStream.bs). A stream that can't open
+' (a bad spec, no such client, a transport without streams, Roku OS before 16.0) gets error and
+' closed at once, on this thread, so the caller's observers must already be in place.
+function _openEventStream(node as object, spec as dynamic, args = {} as object) as object
+    if type(spec) = "roString" or type(spec) = "String" then spec = { url: spec }
+    if type(args) <> "roAssociativeArray" then args = {}
+    m.streamCount++
+    id = "stream-" + m.streamCount.toStr()
+    ' Closed streams are forgotten as others open, so the list holds only what may be open
+    stillOpen = []
+    for each stream in m.streams
+        if stream.readyState <> "closed" then stillOpen.push(stream)
+    end for
+    m.streams = stillOpen
+
+    problem = eventStreamProblem(spec)
+    if problem <> "" then return failStreamNode(node, "invalid", `sghttp: an event stream ${problem}`)
+    clientName = isNonEmptyString(spec.client) ? spec.client : DEFAULT_CLIENT
+    client = m.clients[clientName]
+    if client = invalid then return failStreamNode(node, "invalid", `sghttp: an event stream names client "${clientName}", which initialize did not set up`)
+    if not client.transport.hasField("openStream") then return failStreamNode(node, "unsupported", `sghttp: client "${clientName}"'s transport has no event streams (a replacement transport needs openStream and closeStream fields; see the event streams guide)`)
+    if not _supportsEventStreams() then return failStreamNode(node, "unsupported", unsupportedStreamMessage(m.osVersion))
+
+    filled = fillRequest(spec, args, m.scopes, { auth: spec.auth, proxy: spec.proxy, name: "event stream" })
+    for each setting in ["lastEventId", "reconnect", "retryMs", "maxReconnects", "idleTimeout"]
+        filled[setting] = spec[setting]
+    end for
+    if isNonEmptyString(filled.lastEventId) then node.lastEventId = filled.lastEventId
+    node.callFunc("_attach", client.transport, id)
+    m.streams.push(node)
+    client.transport.openStream = { id: id, node: node, spec: filled }
+    return node
+end function
+
+function failStreamNode(node as object, kind as string, message as string) as object
+    print "[sghttp] " + message.replace("sghttp: ", "")
+    node.callFunc("_deliver", { updates: [{ field: "error", value: { code: 0, kind: kind, message: message, willRetry: false, retryInMs: 0, attempt: 0, lastEventId: "" } }, { field: "closed", value: { reason: "failed", code: 0, lastEventId: "" } }], readyState: "closed" })
+    return node
+end function
+
+' Whether this device runs Roku OS 16.0 or later, which event streams need. roUrlTransfer can't
+' be made on the render thread to look for the method, so the version decides here; a
+' transport's task checks for the method itself.
+function _supportsEventStreams() as boolean
+    version = m.osVersion
+    if version = invalid then version = createObject("roDeviceInfo").getOSVersion()
+    major = version.major
+    if type(major) = "roString" or type(major) = "String" then major = major.toInt()
+    return isWholeNumber(major) and major >= 16
+end function
+
+'#endregion
 
 sub _setScope(scopeName as string, value as dynamic, options = {} as object)
     previous = m.scopes[scopeName]
@@ -2147,6 +2212,11 @@ sub _destroy()
     m.buckets = {}
     m.calls = {}
     m.awaiting = {}
+    ' Before the transports stop, so each hears its streams close
+    for each stream in m.streams
+        stream.callFunc("close")
+    end for
+    m.streams = []
     for each clientName in m.clients
         client = m.clients[clientName]
         transport = client.transport

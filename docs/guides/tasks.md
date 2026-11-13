@@ -101,6 +101,8 @@ The client is the HTTP layer only. These stay on the render thread, in the store
 - **Events and stats:** a task client's requests don't reach `observeEvents` or `getStats`.
 - **`setHeaders` and `onUnauthorized`:** the client's headers are its own. Pass the current token in when the task starts, and set `headers` when it changes.
 
+A task client can also open [event streams](event-streams.md#from-a-task), with a listener of the task's.
+
 Each task client has its own pool, separate from the transport's. A task's requests don't wait behind the screens' requests, and the screens' requests don't wait behind the task's.
 
 ## Next

@@ -112,12 +112,126 @@ function route(req, res, body) {
             return send(res, 200, 'file contents');
         case 'file-missing':
             return send(res, 404, 'no such file');
+        // Server-sent event streams (see sse)
+        case 'sse':
+            return sse(req, res, parts.slice(1), echo);
         // /bench/body/<bytes>: the same JSON listing of about that size every time (npm run bench)
         case 'bench':
             if (parts[1] !== 'body') throw new BadRoute(`unknown bench route: ${parts[1]}`);
             return send(res, 200, benchBody(number(parts[2])), { 'Content-Type': 'application/json' });
         default:
             return send(res, 404, { error: 'unknown route' });
+    }
+}
+
+// Connections to /sse routes still open, per key, so a spec can tell a stream was closed
+const openStreams = {};
+
+function sseHeaders(res) {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+}
+
+function sseEvent(res, { event, id, data, retry }) {
+    let text = '';
+    if (event !== undefined) text += `event: ${event}\n`;
+    if (id !== undefined) text += `id: ${id}\n`;
+    if (retry !== undefined) text += `retry: ${retry}\n`;
+    for (const line of String(data === undefined ? '' : data).split('\n')) text += `data: ${line}\n`;
+    res.write(text + '\n');
+}
+
+// Holds the connection open with keep-alive comments until the client goes, counting it as open
+function holdOpen(req, res, key) {
+    if (key) openStreams[key] = (openStreams[key] || 0) + 1;
+    const timer = setInterval(() => res.write(': keep-alive\n\n'), 1000);
+    res.on('close', () => {
+        clearInterval(timer);
+        if (key) openStreams[key] -= 1;
+    });
+}
+
+// /sse/... routes. Each counts its connections per key with hit(), so a spec can read them at /hits/<key>.
+function sse(req, res, parts, echo) {
+    switch (parts[0]) {
+        // /sse/echo/<key>: one "echo" event whose data is what the server received, then held open
+        case 'echo':
+            hit(parts[1]);
+            sseHeaders(res);
+            sseEvent(res, { event: 'echo', id: 'e1', data: JSON.stringify(echo) });
+            return holdOpen(req, res, parts[1]);
+        // /sse/burst/<key>/<n>: n events at once, ids 1..n, then held open
+        case 'burst': {
+            hit(parts[1]);
+            sseHeaders(res);
+            for (let i = 1; i <= number(parts[2]); i++) sseEvent(res, { id: String(i), data: `event ${i}` });
+            return holdOpen(req, res, parts[1]);
+        }
+        // /sse/fields: a comment, then events with every field, multi-line data and no id, then held open
+        case 'fields':
+            sseHeaders(res);
+            res.write(': a comment, never delivered\n\n');
+            sseEvent(res, { event: 'greeting', id: 'f1', retry: 4000, data: 'hello' });
+            sseEvent(res, { id: 'f2', data: 'line one\nline two' });
+            sseEvent(res, { data: '{"score":3}' });
+            return holdOpen(req, res, '');
+        // /sse/tagged/<tag>/<n>: n events, 100 ms apart, each with the tag as data, then held open
+        case 'tagged': {
+            sseHeaders(res);
+            let sent = 0;
+            const timer = setInterval(() => {
+                sent += 1;
+                sseEvent(res, { id: `${parts[1]}-${sent}`, data: parts[1] });
+                if (sent >= number(parts[2])) clearInterval(timer);
+            }, 100);
+            res.on('close', () => clearInterval(timer));
+            return holdOpen(req, res, '');
+        }
+        // /sse/hold/<key>: one event, then held open with keep-alives, counted at /sse/open/<key>
+        case 'hold':
+            hit(parts[1]);
+            sseHeaders(res);
+            sseEvent(res, { id: 'h1', data: 'first' });
+            return holdOpen(req, res, parts[1]);
+        // /sse/open/<key>: how many of a key's connections are open
+        case 'open':
+            return send(res, 200, { open: openStreams[parts[1]] || 0, connections: hits[parts[1]] || 0 });
+        // /sse/drop/<key>: the first connection sends id d1 and is cut; the next ones echo the
+        // Last-Event-ID they sent and are held open
+        case 'drop': {
+            const count = hit(parts[1]);
+            sseHeaders(res);
+            if (count === 1) {
+                sseEvent(res, { id: 'd1', retry: 200, data: 'before the drop' });
+                return setTimeout(() => req.socket.destroy(), 200);
+            }
+            sseEvent(res, { event: 'resumed', data: JSON.stringify({ count, lastEventId: req.headers['last-event-id'] || null }) });
+            return holdOpen(req, res, parts[1]);
+        }
+        // /sse/end/<key>: the first connection sends one event and ends cleanly; the next is a 204
+        case 'end': {
+            const count = hit(parts[1]);
+            if (count > 1) {
+                res.writeHead(204);
+                return res.end();
+            }
+            sseHeaders(res);
+            sseEvent(res, { id: 'end1', retry: 200, data: 'only' });
+            return setTimeout(() => res.end(), 200);
+        }
+        // /sse/status/<key>/<code>: that status and a JSON body, never a stream
+        case 'status':
+            hit(parts[1]);
+            return send(res, number(parts[2]), { status: number(parts[2]) });
+        // /sse/flaky/<key>: 503 for the first connection, then a stream held open
+        case 'flaky': {
+            const count = hit(parts[1]);
+            if (count === 1) return send(res, 503, { count });
+            sseHeaders(res);
+            sseEvent(res, { data: JSON.stringify({ count }) });
+            return holdOpen(req, res, parts[1]);
+        }
+        default:
+            return send(res, 404, { error: 'unknown sse route' });
     }
 }
 

@@ -1,0 +1,43 @@
+import "pkg:/source/keys.bs"
+
+' The render thread's handle on an event stream run by a transport (see source/eventStream.bs).
+' The transport hands it updates through _deliver, one call (one rendezvous) per update: an
+' event, or the open, error and closed of the connection. Each sets readyState first, then
+' its fields in order, here on the render thread, so an observer reads them as they arrived.
+
+sub init()
+    m.transport = invalid
+    m.streamId = ""
+end sub
+
+sub _attach(transport as dynamic, id as string)
+    m.transport = transport
+    m.streamId = id
+end sub
+
+' Ends the stream: no event is delivered after this, and nothing reconnects it. closed is set
+' with reason "closed". Returns whether the stream was still open.
+function close() as boolean
+    if m.top.readyState = "closed" then return false
+    if isNode(m.transport) and m.transport.hasField("closeStream") then m.transport.closeStream = { id: m.streamId }
+    m.transport = invalid
+    _deliver({ updates: [{ field: "closed", value: { reason: "closed", code: 0, lastEventId: m.top.lastEventId } }], readyState: "closed" })
+    return true
+end function
+
+' updates: [{ field, value }] in order; readyState: the stream's state after them. Nothing is
+' delivered once the stream is closed: the transport's word that it closed, after close(),
+' and anything it sent before it heard of the close.
+sub _deliver(update as object)
+    if m.top.readyState = "closed" then return
+    if type(update) <> "roAssociativeArray" or type(update.updates) <> "roArray" then return
+    if isNonEmptyString(update.readyState) then m.top.readyState = update.readyState
+    for each item in update.updates
+        value = item.value
+        if type(value) = "roAssociativeArray" and (type(value.lastEventId) = "roString" or type(value.lastEventId) = "String") then
+            if m.top.lastEventId <> value.lastEventId then m.top.lastEventId = value.lastEventId
+        end if
+        m.top[item.field] = value
+    end for
+    if m.top.readyState = "closed" then m.transport = invalid
+end sub

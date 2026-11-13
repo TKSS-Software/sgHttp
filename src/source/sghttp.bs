@@ -187,6 +187,8 @@ interface InitializeParams extends ClientSettings
     optional persistence as object
     ' { id, title, version } to name the disk namespace with instead of roAppInfo (tests)
     optional appInfo as object
+    ' { major, minor } to report as the Roku OS version instead of the device's (tests)
+    optional osVersion as object
 end interface
 
 ' What fetch resolves with, and what a failing status or network error rejects with
@@ -209,6 +211,49 @@ interface Response
     optional errors as object
     ' fetch with toFile: where the body was written
     optional path as string
+end interface
+
+' openEventStream's spec: a GET whose answer is a stream of server-sent events. {name}
+' placeholders in the url, query and headers are filled from the args and the current scopes.
+interface EventStreamSpec
+    ' Relative to the client's baseUrl, or absolute (starting with http)
+    url as string
+    ' Added to the client's shared headers for this stream. Accept: text/event-stream is sent
+    optional headers as object
+    ' Query string parameters, as a request's
+    optional query as object
+    ' The client to connect through. Default: the default client
+    optional client as string
+    ' false leaves out the client's shared headers
+    optional auth as boolean
+    ' false connects directly even when a debugging proxy is set
+    optional proxy as boolean
+    ' Sent as Last-Event-ID on the first connection, to resume a stream the app saved the
+    ' position of. Default: none, a fresh stream
+    optional lastEventId as string
+    ' false ends the stream at the first disconnect instead of reconnecting. Default true
+    optional reconnect as boolean
+    ' Milliseconds before reconnecting, until the server sends a retry interval. Default 3000.
+    ' Doubles while reconnects fail without an event, up to a minute
+    optional retryMs as integer
+    ' Reconnects in a row without an event before the stream fails. Default: no limit
+    optional maxReconnects as integer
+    ' Seconds without an event before the connection is dropped and reconnected. Default 0:
+    ' never, since Roku never times out a stream and never reports the server's keep-alives
+    optional idleTimeout as integer
+end interface
+
+' Function names in the calling component, called with the event stream's field events
+interface EventStreamHandlers
+    ' { type, id, data, retry, lastEventId } for every event
+    optional message as string
+    ' { attempt, lastEventId } when a connection's first event arrives
+    optional open as string
+    ' { code, kind, message, willRetry, retryInMs, attempt, lastEventId } when a connection fails
+    ' or ends
+    optional error as string
+    ' { reason, code, lastEventId } once, when the stream is over
+    optional closed as string
 end interface
 
 ' What query, nextPage and peek answer with for a query defined with pages
@@ -521,6 +566,39 @@ function isChange(change as dynamic, name as string, args = invalid as dynamic) 
     if type(change) <> "roAssociativeArray" or change.name <> name then return false
     if args = invalid then return true
     return change.key = getStore().callFunc("_keyFor", name, args)
+end function
+
+' Opens a server-sent event stream: a GET through a client (the default one, or spec.client),
+' with its baseUrl, shared headers and proxy, held open while the server sends events. Returns
+' an EventStream node; handlers names the functions in the calling component that hear its
+' message, open, error and closed fields (observe them on the node instead, if you like, but
+' a stream that can't open fails at once, so only handlers passed here are sure to hear it).
+' The stream reconnects after a disconnect, sending the last event id, until closeEventStream,
+' a status that a retry won't change (4xx), a 204 from the server, or maxReconnects. Needs
+' Roku OS 16.0 (see supportsEventStreams).
+' @param {Dynamic} spec - a url, or an EventStreamSpec
+' @param {Object} handlers - EventStreamHandlers
+function openEventStream(spec as dynamic, handlers = {} as EventStreamHandlers, args = {} as object) as object
+    stream = createObject("roSGNode", "EventStream")
+    if type(handlers) = "roAssociativeArray" then
+        for each field in ["message", "open", "error", "closed"]
+            if isNonEmptyString(handlers[field]) then stream.observeFieldScoped(field, handlers[field])
+        end for
+    end if
+    return getStore().callFunc("_openEventStream", stream, spec, args)
+end function
+
+' Ends an event stream openEventStream returned: its connection is cancelled, no event is
+' delivered after this and nothing reconnects it. Its closed field is set with reason "closed".
+' Returns whether it was still open.
+function closeEventStream(stream as dynamic) as boolean
+    if not isNode(stream) then return false
+    return stream.callFunc("close")
+end function
+
+' Whether this device can open event streams: Roku OS 16.0 or later
+function supportsEventStreams() as boolean
+    return getStore().callFunc("_supportsEventStreams")
 end function
 
 ' Hit/miss/request counters for instrumentation, plus entries, watchers and per client
