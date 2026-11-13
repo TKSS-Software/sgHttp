@@ -42,6 +42,9 @@ Returned by `getStats`. Counters run from `initialize`.
 | `staleHits` | Queries that returned a cached value while a background refresh ran |
 | `misses` | Queries that had to wait: nothing in memory, a stale value without `staleWhileRevalidate`, an expired value, or `force` |
 | `diskHits` | Values returned from `cachefs:/` |
+| `diskTrimmed` | Stored bodies deleted to stay within [`maxDiskBytes`](../guides/persistence.md#disk-space), or to make room after a failed write |
+| `memoryWarnings` | Memory warnings the app reported with `reportMemoryWarning`, not counting reports that memory is back to normal. See [Memory warnings](../guides/threads-and-memory.md#memory-warnings). |
+| `memoryReleased` | Cached values released on those warnings |
 | `requests` | Requests sent, including background refreshes, mutations and `fetch` calls |
 | `errors` | Failed requests and parses |
 | `unchanged` | Responses that matched the cached value |

@@ -77,13 +77,33 @@ Once the first disk read has completed, the store sweeps this app's folder. In t
 
 The folders of queries not defined by then are left alone, so a query defined later, by a screen, keeps its bodies. Define every persisted query before the first query, as `registerQueries()` does in the examples, and the sweep covers them all.
 
+## Disk space
+
+`cachefs:/` is shared by every app on the device, and the OS can't be asked how full it is: on Roku OS 16.0.4, `roFileSystem.getVolumeInfo` answers zeros for `cachefs:/`. So sgHttp limits its own share:
+
+```brightscript
+sghttp.initialize({ maxDiskBytes: 5 * 1024 * 1024 })   ' default 10 MB; 0 for no cap
+```
+
+- After each write that takes this app's folder over `maxDiskBytes`, the least recently used bodies (oldest read or written) are deleted until the folder is down to 80% of it. The body just written is never one of them.
+- A write the OS refuses, most likely because `cachefs:/` is full, deletes the least recently used bodies (twice the new body's size) and is tried once more. This happens with `maxDiskBytes: 0` too. If the retry fails as well, whatever the write left is deleted, so a cut-off body is never read back.
+- Only stored bodies go, and only from this app's folder. Their memory copies stay; a cold start that wanted one asks the server instead.
+- The trimming runs on the Persistence task. Each trim prints a `[sghttp] persistence:` line, and [`getStats().diskTrimmed`](../reference/events-and-stats.md) counts the bodies deleted.
+- With `initialize({ debug: true })`, each stored body prints its size and the folder's total after any trim it caused:
+
+  ```
+  [sghttp] persistence: stored homePage/3f9a2c1e-0b7d….json, 48.2 KB; folder 1.3 MB of 10.0 MB
+  ```
+
+With a cap, the first write of a launch lists the folder once to learn its size. After that, sgHttp keeps track as it writes, reads and deletes. Bodies not used since the launch are trimmed before any used this launch, oldest first.
+
 ## Turning it off
 
 `initialize({ persist: false })` disables persistence for every query: nothing is read or written, and no Persistence task is started. Persistence is on by default, but applies only to queries with `persist: true`. The Persistence task starts, and creates the app's folder on `cachefs:/`, when the first such query is defined, or when `removeAll()` is called, since a sign-out should clear copies stored by an earlier launch too. An app with no such query never starts it otherwise: `remove(name)` and `removeScope` touch memory only until it's running.
 
 ## Things to know
 
-- `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage.
+- `cachefs:/` is managed by the Roku OS. Files survive app restarts but can be removed when the device needs space, so treat it as a cache, never as storage. sgHttp also trims its own folder to [`maxDiskBytes`](#disk-space).
 - `persist` has no effect on `cache: false` queries.
 
 ## Next

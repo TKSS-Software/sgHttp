@@ -173,6 +173,9 @@ interface InitializeParams extends ClientSettings
     ' This app's folder under cachefs:/sghttp/. Default: <id>_<title>-<hash>_<app version> from
     ' roAppInfo, so sideloaded apps never share bodies and each release starts empty
     optional namespace as string
+    ' Bytes this app's stored bodies may take on cachefs:/, least recently used trimmed first
+    ' once over it; 0 for no cap. Default 10485760 (10 MB)
+    optional maxDiskBytes as integer
     ' In-memory entry cap, least recently used evicted first (the disk copy stays). Default 100
     optional maxEntries as integer
     ' Seconds, for definitions without a ttl whose responses carry no max-age. Default 300
@@ -605,6 +608,24 @@ end function
 ' { requests, errors, active } under clients.<name>.
 function getStats() as object
     return getStore().callFunc("_getStats")
+end function
+
+' Hands sgHttp a memory warning from the app's own roAppMemoryMonitor (or roDeviceInfo low
+' memory event), so the cache releases its least recently used values. sgHttp runs no monitor of
+' its own. Pass the event's getInfo() as it is, or the percent. Returns how many values went.
+'   if type(msg) = "roAppMemoryNotificationEvent" then sghttp.reportMemoryWarning(msg.getInfo())
+' Where the scene can't be reached to find the store (main.brs, a task), pass the store node, as
+' getStore() returned it on the render thread, or as scene.__sghttp.
+function reportMemoryWarning(info as dynamic, store = invalid as dynamic) as integer
+    if not isNode(store) and type(m.top) = "roSGNode" then
+        scene = m.top.getScene()
+        if isNode(scene) then store = scene.__sghttp
+    end if
+    if not isNode(store) then
+        print "[sghttp] reportMemoryWarning: no store here; pass the store node (getStore() on the render thread, or scene.__sghttp)"
+        return 0
+    end if
+    return store.callFunc("_reportMemoryWarning", info)
 end function
 
 ' Clears the memory cache, stops the tasks and removes the scene field. The disk copies stay:

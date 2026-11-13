@@ -13,6 +13,7 @@ import "pkg:/source/keys.bs"
 ' went missing the same way, leaving the caller waiting forever.
 '
 '      { type: "dropAnswers", count }                  for the specs: the task drops the next count reads' answers
+'      { type: "failWrites", count }                   for the specs: the next count writes fail once, as on a full disk
 
 ' ops: { type: "ensureDir", dir }
 '      { type: "read", path }        -> promise resolving to the file text, or "" when missing
@@ -25,9 +26,15 @@ import "pkg:/source/keys.bs"
 '      { type: "clearLegacy", dir }                     files directly under dir, and folders holding files directly
 '      { type: "sweep", dir, keep }                      in each folder dir/<name> that keep lists, every entry whose
 '                                                        name starts with none of keep[name]'s prefixes
+'      { type: "budget", dir, maxBytes, log }           the files under dir are trimmed to stay within maxBytes (see checkBudget);
+'                                                        log prints each body's size as it is stored (see logStored)
 
 ' A read unanswered for this long is sent again (see onRetryTick)
 const READ_RETRY_SECONDS = 1.0
+' A trim for the byte cap goes down to this share of it, so the next few writes do not trim again
+const CAP_TRIM_TO = 0.8
+' A write that fails trims this many times its own size (in bytes) before it tries again
+const FAILED_WRITE_ROOM = 2
 
 sub init()
     m.port = createObject("roMessagePort")
@@ -120,6 +127,17 @@ end sub
 sub runPersistence()
     m.fileSystem = createObject("roFileSystem")
     m.dropAnswers = 0
+    ' See checkBudget: the limits, the index of the files under budget.dir (invalid until a
+    ' write needs it, or after an op that deleted files in bulk) and their total size
+    m.budget = invalid
+    m.files = invalid
+    m.totalBytes = 0#
+    m.failWrites = 0
+    m.trimmedTotal = 0
+    ' path -> when it was last read or written this run (see indexDirectory, useTime)
+    m.touched = {}
+    m.startSeconds = nowSeconds()
+    m.useCount = 0
     lastSeq = 0
     while true
         message = wait(0, m.port)
@@ -145,11 +163,19 @@ sub runOp(op as object)
     opType = op.type
     if opType = "dropAnswers" then
         if isWholeNumber(op.count) then m.dropAnswers = op.count
+    else if opType = "budget" then
+        setBudget(op)
+    else if opType = "failWrites" then
+        if isWholeNumber(op.count) then m.failWrites = op.count
     else if opType = "ensureDir" then
         if isNonEmptyString(op.dir) and not m.fileSystem.exists(op.dir) then m.fileSystem.createDirectory(op.dir)
     else if opType = "read" then
         text = ""
-        if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then text = readAsciiFile(op.path)
+        if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then
+            text = readAsciiFile(op.path)
+            ' A body read is one in use: the last to be trimmed
+            touchFile(op.path)
+        end if
         if m.dropAnswers > 0 then
             m.dropAnswers--
             return
@@ -164,11 +190,52 @@ sub runOp(op as object)
         if isNonEmptyString(op.path) and isNonEmptyString(text) then
             dir = op.path.left(op.path.len() - op.path.split("/").peek().len() - 1)
             if dir <> "" and not m.fileSystem.exists(dir) then m.fileSystem.createDirectory(dir)
-            writeAsciiFile(op.path, text)
+            written = false
+            if m.failWrites > 0 then
+                m.failWrites--
+            else
+                written = writeAsciiFile(op.path, text)
+            end if
+            ' Most likely a full disk, the one sign of it the OS gives (getVolumeInfo answers zeros
+            ' for cachefs:/ on OS 16.0.4): make room among this folder's oldest bodies and try once more
+            if not written and inBudget(op.path) then
+                print `[sghttp] persistence: writing ${op.path} failed; trimming the disk cache and trying again`
+                trimDisk("write failed", byteLength(text) * FAILED_WRITE_ROOM, op.path)
+                written = writeAsciiFile(op.path, text)
+            end if
+            if written then
+                ' The total is known only once the folder is indexed
+                logging = m.budget <> invalid and m.budget.log and inBudget(op.path)
+                if logging then ensureIndex()
+                recordFile(op.path, text.len())
+                checkBudget(op.path)
+                if logging then logStored(op.path)
+            else
+                ' Whatever the failed write left (a cut-off body, maybe) must not be read back
+                if m.fileSystem.exists(op.path) then deleteFile(op.path)
+                forgetFile(op.path)
+            end if
         end if
     else if opType = "delete" then
-        if isNonEmptyString(op.path) and m.fileSystem.exists(op.path) then deleteFile(op.path)
-    else if opType = "clear" then
+        if isNonEmptyString(op.path) then
+            if m.fileSystem.exists(op.path) then deleteFile(op.path)
+            forgetFile(op.path)
+        end if
+    else if opType = "clear" or opType = "clearQuery" or opType = "clearSiblings" or opType = "clearLegacy" or opType = "sweep" then
+        ' Deletes files in bulk: the index is built again when a write next needs it, and the
+        ' uses of files that went are dropped now (the index, which prunes them too, may never
+        ' be built without a cap)
+        m.files = invalid
+        runClearOp(op)
+        for each path in m.touched.keys()
+            if not m.fileSystem.exists(path) then m.touched.delete(path)
+        end for
+    end if
+end sub
+
+sub runClearOp(op as object)
+    opType = op.type
+    if opType = "clear" then
         if isNonEmptyString(op.dir) and m.fileSystem.exists(op.dir) then clearDirectory(op.dir)
     else if opType = "clearQuery" then
         ' A query's directory, and its dotted descendants' (name.*) when descendants is true
@@ -214,6 +281,193 @@ sub runOp(op as object)
         end if
     end if
 end sub
+
+'*************************************************************************
+'#region Disk budget
+'*************************************************************************
+
+' cachefs:/ is shared by every app on the device, the OS can refuse a write when it is full, and
+' it cannot be asked how full it is (getVolumeInfo answers zeros for cachefs:/ on OS 16.0.4). So
+' the task holds the bodies under budget.dir to budget.maxBytes: after a write takes them over it,
+' the least recently used (oldest read or written) go until they are down to CAP_TRIM_TO of it.
+' A write that fails anyway trims and tries again (see runOp). Bodies only: every one is a copy
+' of a server response, so a trimmed one is fetched again.
+' The index of the folder's files (path -> { size, time }) is built from disk when a write
+' first needs it; reads and writes keep it current after that.
+
+' One budget per task: a task shared by two stores (the specs' persistence param) is budgeted
+' for the last store's folder only. An app has one store (initialize returns the existing one).
+sub setBudget(op as object)
+    m.budget = invalid
+    m.files = invalid
+    if not isNonEmptyString(op.dir) then return
+    ' maxBytes 0 still trims after a failed write
+    maxBytes = numberOf(op.maxBytes)
+    if maxBytes < 0 then maxBytes = 0#
+    m.budget = { dir: op.dir, maxBytes: maxBytes, log: op.log = true }
+end sub
+
+' With log on (the store's debug): how much the body just written takes on disk, and the
+' folder's total after any trim it caused
+sub logStored(path as string)
+    file = m.files[path]
+    if file = invalid then return
+    cap = m.budget.maxBytes > 0 ? " of " + formatBytes(m.budget.maxBytes) : ""
+    print `[sghttp] persistence: stored ${path.mid(m.budget.dir.len() + 1)}, ${formatBytes(file.size)}; folder ${formatBytes(m.totalBytes)}${cap}`
+end sub
+
+' bytes as B, KB or MB, to one decimal
+function formatBytes(bytes as double) as string
+    if bytes < 1024 then return int(bytes).toStr() + " B"
+    unit = "KB"
+    value = bytes / 1024
+    if value >= 1024 then
+        unit = "MB"
+        value = value / 1024
+    end if
+    tenths = int(value * 10 + 0.5)
+    return (tenths \ 10).toStr() + "." + (tenths mod 10).toStr() + " " + unit
+end function
+
+function inBudget(path as string) as boolean
+    if m.budget = invalid then return false
+    prefix = m.budget.dir + "/"
+    return path.left(prefix.len()) = prefix
+end function
+
+' After a write of keep (never trimmed itself: it is the newest)
+sub checkBudget(keep as string)
+    if not inBudget(keep) or m.budget.maxBytes <= 0 then return
+    ensureIndex()
+    if m.totalBytes > m.budget.maxBytes then trimDisk("over maxDiskBytes", m.totalBytes - m.budget.maxBytes * CAP_TRIM_TO, keep)
+end sub
+
+' Deletes the least recently used files under budget.dir, but keep, until bytes are freed.
+' Files not used this run go first, oldest mtime first; then files used this run, in order of
+' use. Two lists, since a use's time (see useTime) and an mtime are on different clocks: the
+' device's clock may not have been set when the task started, or was ahead at an earlier run.
+sub trimDisk(reason as string, bytes as double, keep as string)
+    if bytes <= 0 or m.budget = invalid then return
+    ensureIndex()
+    unused = []
+    used = []
+    for each path in m.files
+        if path <> keep then
+            file = m.files[path]
+            candidate = { path: path, size: file.size, time: file.time }
+            if m.touched[path] <> invalid then
+                used.push(candidate)
+            else
+                unused.push(candidate)
+            end if
+        end if
+    end for
+    unused.sortBy("time")
+    used.sortBy("time")
+    candidates = unused
+    candidates.append(used)
+    freed = 0#
+    count = 0
+    for each file in candidates
+        if freed >= bytes then exit for
+        deleteFile(file.path)
+        forgetFile(file.path)
+        freed += file.size
+        count++
+    end for
+    if count = 0 then return
+    print `[sghttp] persistence: ${reason}; trimmed ${count} stored bodies (${formatBytes(freed)}), ${formatBytes(m.totalBytes)} left`
+    ' One rendezvous, which may not land (see the header): totalFiles counts every trim since
+    ' the task started, so the next one that lands catches the store up (see Store.onDiskTrimmed)
+    m.trimmedTotal += count
+    m.top.trimmed = { files: count, bytes: freed, reason: reason, totalFiles: m.trimmedTotal }
+end sub
+
+sub ensureIndex()
+    if m.files <> invalid then return
+    m.files = {}
+    m.totalBytes = 0#
+    if m.budget <> invalid and m.fileSystem.exists(m.budget.dir) then indexDirectory(m.budget.dir)
+    ' Uses of files a clear has since deleted
+    for each path in m.touched.keys()
+        if m.files[path] = invalid then m.touched.delete(path)
+    end for
+end sub
+
+sub indexDirectory(dir as string)
+    for each entryName in m.fileSystem.getDirectoryListing(dir)
+        path = dir + "/" + entryName
+        info = m.fileSystem.stat(path)
+        if type(info) = "roAssociativeArray" then
+            if info.type = "directory" then
+                indexDirectory(path)
+            else
+                size = numberOf(info.size)
+                if size < 0 then size = 0#
+                time = 0
+                if type(info.mtime) = "roDateTime" then time = info.mtime.asSeconds()
+                ' A body read or written this run, before the index existed, goes by that use
+                ' (see useTime, trimDisk)
+                if m.touched[path] <> invalid then time = m.touched[path]
+                m.files[path] = { size: size, time: time }
+                m.totalBytes += size
+            end if
+        end if
+    end for
+end sub
+
+' A file just written: its size on disk (the text's length when stat says nothing)
+sub recordFile(path as string, length as integer)
+    if not inBudget(path) then return
+    if m.files <> invalid then
+        size = -1#
+        info = m.fileSystem.stat(path)
+        if type(info) = "roAssociativeArray" then size = numberOf(info.size)
+        if size < 0 then size = length + 0#
+        forgetFile(path)
+        m.files[path] = { size: size, time: 0 }
+        m.totalBytes += size
+    end if
+    touchFile(path)
+end sub
+
+sub touchFile(path as string)
+    if not inBudget(path) then return
+    m.touched[path] = useTime()
+    if m.files <> invalid and m.files[path] <> invalid then m.files[path].time = m.touched[path]
+end sub
+
+' When a file is used this run: the task's start time plus a count of uses, so two uses within
+' a second still order, and every one of them is newer than a file last written by an earlier run
+function useTime() as integer
+    m.useCount++
+    return m.startSeconds + m.useCount
+end function
+
+sub forgetFile(path as string)
+    m.touched.delete(path)
+    if m.files = invalid or m.files[path] = invalid then return
+    m.totalBytes -= m.files[path].size
+    m.files.delete(path)
+end sub
+
+' A number of any BrightScript numeric type (or numeric string) as a Double; -1 otherwise
+function numberOf(value as dynamic) as double
+    if isNumber(value) then return value + 0#
+    valueType = type(value)
+    if (valueType = "String" or valueType = "roString") and createObject("roRegex", "^\d+(\.\d+)?$", "").isMatch(value) then return val(value) + 0#
+    return -1#
+end function
+
+' The bytes text takes on disk: len() counts characters, and a character of UTF-8 can be
+' several bytes
+function byteLength(text as string) as integer
+    bytes = createObject("roByteArray")
+    bytes.fromAsciiString(text)
+    return bytes.count()
+end function
+
+'#endregion
 
 function startsWithAny(text as string, prefixes as object) as boolean
     for each prefix in prefixes

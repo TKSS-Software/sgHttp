@@ -39,6 +39,13 @@ const DEFAULT_CLIENT = "default"
 ' Which build of sghttp this is: scripts/build.js writes the commit and build time over this
 ' in dist, so the device log shows whether a sideload carries the latest sghttp
 const BUILD_STAMP = "unstamped (compiled from source)"
+' The bytes this app's stored bodies may take on cachefs:/, which every app on the device
+' shares: over it, the persistence task deletes the least recently used (see
+' Persistence.checkBudget). The OS cannot be asked how full cachefs is, so this is the limit.
+const DEFAULT_MAX_DISK_BYTES = 10485760
+' After a memory warning, the lowered entry cap holds until the app reports usage below the first
+' threshold, or this long passes without another warning (in case that report never comes)
+const MEMORY_RELIEF_SECONDS = 60
 
 sub init()
     m.definitions = {}
@@ -73,7 +80,17 @@ sub init()
     m.persistEnabled = false
     m.persistence = invalid
     m.givenPersistence = invalid
-    m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
+    m.stats = { hits: 0, staleHits: 0, misses: 0, diskHits: 0, diskTrimmed: 0, memoryWarnings: 0, memoryReleased: 0, requests: 0, errors: 0, unchanged: 0, changes: 0 }
+    ' A memory warning in effect (see _reportMemoryWarning): the share of entries kept (-1:
+    ' none), the entry count it is a share of, the cap it makes and when it lapses
+    m.memoryShare = -1
+    m.memoryBase = 0
+    m.memoryCap = -1
+    m.memoryReliefAt = 0
+    ' The persistence task's disk budget (see diskTask, Persistence.checkBudget), and the task's
+    ' trim count when this store started observing it (see onDiskTrimmed)
+    m.maxDiskBytes = DEFAULT_MAX_DISK_BYTES
+    m.trimmedBefore = 0
     m.parsers = []
     m.initialized = false
     ' Set by _destroy: an optimistic write failing after it puts nothing back
@@ -123,13 +140,18 @@ function _initialize(params = {} as object) as object
     ' This app's folder: sideloaded apps all run as the "dev" channel and may share cachefs, so
     ' every app (and every version of it) keeps its bodies apart from the others'
     m.persistDir = PERSIST_DIR + "/" + persistNamespace(params)
+    ' The bytes this app's stored bodies may take on cachefs:/; 0 for no cap of its own
+    m.maxDiskBytes = DEFAULT_MAX_DISK_BYTES
+    if isNumber(params.maxDiskBytes) and params.maxDiskBytes >= 0 then m.maxDiskBytes = params.maxDiskBytes
     ' The persistence task starts at the first call that needs the disk (see diskTask), so an app
     ' that only sends requests never runs it or touches cachefs:/. A persistence task of the
     ' caller's (tests): file operations of several stores then run in one queue, in order, and
     ' _destroy leaves it running.
     m.persistence = invalid
     m.ownsPersistence = false
+    m.diskReady = false
     m.givenPersistence = params.persistence
+    relieveMemory()
     if m.persistEnabled then
         ' Clean-ups wait until the first disk read has answered (see runCleanups), so a cold
         ' start never queues behind them. Bodies stored while the library was called sgQuery are
@@ -1900,13 +1922,19 @@ end sub
 sub insertEntry(key as string, entry as object)
     m.cache[key] = entry
     m.order.push(key)
-    ' Evict the least recently used first, skipping in-flight entries. Scan at most one pass
-    ' so a cache made entirely of in-flight entries can temporarily exceed the cap. Only the
-    ' memory copy goes: a persisted body stays on cachefs for the next cold start (the OS
-    ' manages cachefs space; remove still deletes it).
+    evictTo(entryCap())
+end sub
+
+' Evicts the least recently used entries until at most limit are left, skipping in-flight
+' entries. Scans at most one pass, so a cache made entirely of in-flight entries can
+' temporarily exceed the cap. Only the memory copy goes: a persisted body stays on cachefs for
+' the next cold start (the persistence task holds those to maxDiskBytes; remove still deletes
+' it). Returns how many went.
+function evictTo(limit as integer) as integer
+    evicted = 0
     scanned = 0
-    limit = m.order.count()
-    while m.order.count() > m.maxEntries and scanned < limit
+    pass = m.order.count()
+    while m.order.count() > limit and scanned < pass
         scanned++
         oldest = m.order.shift()
         oldestEntry = m.cache[oldest]
@@ -1914,9 +1942,91 @@ sub insertEntry(key as string, entry as object)
             m.order.push(oldest)
         else
             m.cache.delete(oldest)
+            evicted++
         end if
     end while
+    return evicted
+end function
+
+' maxEntries, or less while a memory warning holds (see _reportMemoryWarning)
+function entryCap() as integer
+    if m.memoryCap < 0 then return m.maxEntries
+    if nowSeconds() >= m.memoryReliefAt then
+        relieveMemory()
+        return m.maxEntries
+    end if
+    if m.memoryCap < m.maxEntries then return m.memoryCap
+    return m.maxEntries
+end function
+
+' Evicts to the memory warning's cap, if one holds; never below 1, so the entry just inserted
+' or set is never the one to go (a cap of 0 would make set a no-op)
+function warningCap(cap as integer) as integer
+    if cap < 1 then return 1
+    return cap
+end function
+
+' The share of cached values to keep at a memory warning: by the app's usage of its limit
+' (roAppMemoryMonitor), or by the device's general level (roDeviceInfo). -1 when memory is back
+' to normal.
+function memoryKeepShare(percent as integer, level as string) as float
+    if percent >= 95 or level = "critical" then return 0
+    if percent >= 90 then return 0.25
+    if percent >= 85 or level = "low" then return 0.5
+    if percent >= 80 then return 0.75
+    return -1
+end function
+
+sub relieveMemory()
+    m.memoryShare = -1
+    m.memoryBase = 0
+    m.memoryCap = -1
 end sub
+
+' A memory warning from the app's own monitor (see sghttp.reportMemoryWarning). info is what the
+' event's getInfo() gave: roAppMemoryNotificationEvent's { memoryUsagePercent } or
+' roDeviceInfoEvent's { generalMemoryLevel }; or the percent itself. sgHttp runs no monitor of
+' its own, so an app never has two subscriptions that might take each other's warnings.
+' Cached values are what the store holds that can be fetched again, so the least recently used
+' go, more the closer the app is to its limit, and the cap stays that low (new entries evict old
+' ones) until usage is reported below the first threshold or MEMORY_RELIEF_SECONDS pass without
+' another warning. The share kept is of the entries there were when the warning began, and a
+' warning no worse than the one in effect releases nothing more, so a warning reported twice
+' costs nothing. A value the app still holds (on screen) stays alive through it; the store only
+' lets go of its reference. In-flight entries are never dropped. Returns how many values went.
+function _reportMemoryWarning(info as dynamic) as integer
+    percent = -1
+    level = ""
+    if isNumber(info) then
+        percent = int(info)
+    else if type(info) = "roAssociativeArray" then
+        if isNumber(info.memoryUsagePercent) then percent = int(info.memoryUsagePercent)
+        if isNonEmptyString(info.generalMemoryLevel) then level = lcase(info.generalMemoryLevel)
+    end if
+    if percent < 0 and level = "" then
+        print `[sghttp] reportMemoryWarning: expected an event's getInfo() ({ memoryUsagePercent } or { generalMemoryLevel }) or a percent, got ${formatJson(info)}`
+        return 0
+    end if
+    label = percent >= 0 ? percent.toStr() + "%" : level
+    share = memoryKeepShare(percent, level)
+    if share < 0 then
+        if m.memoryCap >= 0 then print `[sghttp] memory back to ${label}: the cache may hold ${m.maxEntries} values again`
+        relieveMemory()
+        return 0
+    end if
+    m.stats.memoryWarnings++
+    ' An earlier warning's cap that has lapsed no longer counts
+    entryCap()
+    m.memoryReliefAt = nowSeconds() + MEMORY_RELIEF_SECONDS
+    if m.memoryShare >= 0 and share >= m.memoryShare then return 0
+    if m.memoryShare < 0 then m.memoryBase = m.cache.count()
+    m.memoryShare = share
+    m.memoryCap = warningCap(int(m.memoryBase * share))
+    released = evictTo(m.memoryCap)
+    m.stats.memoryReleased += released
+    print `[sghttp] memory at ${label}: released ${released} cached values; holding at most ${m.memoryCap} until it falls`
+    return released
+end function
 
 ' Drops the entry and its disk copy; the disk copy even when the entry is not in memory
 ' (evicted, or stored by an earlier run)
@@ -2020,7 +2130,7 @@ end function
 ' many files, and a cold start should not wait on it. The last one sweeps out the bodies no
 ' definition defined by then can read.
 sub runCleanups()
-    if type(m.cleanups) <> "roArray" or not isNode(m.persistence) then return
+    if type(m.cleanups) <> "roArray" or not m.diskReady then return
     m.cleanups.push({ type: "sweep", dir: m.persistDir, keep: sweepPlan() })
     for each op in m.cleanups
         m.persistence.callFunc("execute", op)
@@ -2089,20 +2199,48 @@ end function
 ' earlier run is checked when its query next reads the disk. Clearing everything (clearPersisted,
 ' for a sign-out) starts it if need be, so copies of queries that no longer persist go too.
 function diskTask() as dynamic
-    if isNode(m.persistence) or not m.persistEnabled then return m.persistence
+    if not m.persistEnabled then return invalid
+    if m.diskReady then return m.persistence
+    persistenceTask()
+    m.diskReady = true
+    m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
+    m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
+    m.persistence.callFunc("execute", { type: "budget", dir: m.persistDir, maxBytes: m.maxDiskBytes, log: m.debug })
+    if m.persistence.hasField("trimmed") then
+        ' Trims before this store (a task shared with an earlier store, in the specs) are not its
+        m.trimmedBefore = type(m.persistence.trimmed) = "roAssociativeArray" and isWholeNumber(m.persistence.trimmed.totalFiles) ? m.persistence.trimmed.totalFiles : 0
+        m.persistence.observeFieldScoped("trimmed", "onDiskTrimmed")
+    end if
+    return m.persistence
+end function
+
+' The persistence task deleted stored bodies to stay within its budget. Their memory copies
+' stay; a cold start that wanted one reads nothing and asks the server.
+sub onDiskTrimmed(event as object)
+    trimmed = event.getData()
+    if type(trimmed) <> "roAssociativeArray" then return
+    ' By the task's running total, so a report that never landed (a lost rendezvous) is made up
+    if isWholeNumber(trimmed.totalFiles) then
+        m.stats.diskTrimmed = trimmed.totalFiles - m.trimmedBefore
+    else if isWholeNumber(trimmed.files) then
+        m.stats.diskTrimmed += trimmed.files
+    end if
+end sub
+
+' The persistence task, started now if need be: the caller's, or one of the store's own
+function persistenceTask() as object
+    if isNode(m.persistence) then return m.persistence
     if isNode(m.givenPersistence) then
         m.persistence = m.givenPersistence
     else
         m.persistence = createObject("roSGNode", "Persistence")
         m.ownsPersistence = true
     end if
-    m.persistence.callFunc("execute", { type: "ensureDir", dir: PERSIST_DIR })
-    m.persistence.callFunc("execute", { type: "ensureDir", dir: m.persistDir })
     return m.persistence
 end function
 
 sub deletePersisted(key as string)
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "delete", path: persistPath(key) })
+    if m.diskReady then m.persistence.callFunc("execute", { type: "delete", path: persistPath(key) })
 end sub
 
 sub clearPersisted()
@@ -2111,7 +2249,7 @@ end sub
 
 ' Deletes every stored body of a query, and of its dotted descendants when descendants is true
 sub clearPersistedQuery(name as string, descendants as boolean)
-    if isNode(m.persistence) then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
+    if m.diskReady then m.persistence.callFunc("execute", { type: "clearQuery", dir: m.persistDir, name: persistDirName(name), descendants: descendants })
 end sub
 
 '#endregion
@@ -2228,5 +2366,6 @@ sub _destroy()
         if worker.node.hasField("shutdown") then worker.node.shutdown = true
     end for
     m.parsers = []
+    if isNode(m.persistence) and m.persistence.hasField("trimmed") then m.persistence.unobserveFieldScoped("trimmed")
     if isNode(m.persistence) and m.ownsPersistence then m.persistence.shutdown = true
 end sub

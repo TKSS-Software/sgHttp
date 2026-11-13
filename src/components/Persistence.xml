@@ -5,6 +5,9 @@
         <field id="op" type="assocarray" alwaysNotify="true" />
         <!-- Internal: a read's answer from the task thread, { seq, text } (see onResult) -->
         <field id="result" type="assocarray" alwaysNotify="true" />
+        <!-- Internal: the task deleted stored bodies to stay within its disk budget, { files, bytes, reason,
+             totalFiles }; totalFiles counts every trim since the task started -->
+        <field id="trimmed" type="assocarray" alwaysNotify="true" />
         <field id="shutdown" type="boolean" alwaysNotify="true" />
 
         <function name="execute" />

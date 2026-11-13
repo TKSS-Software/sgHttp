@@ -105,6 +105,13 @@ function isWholeNumber(value as dynamic) as boolean
     return valueType = "roInt" or valueType = "roInteger" or valueType = "Integer"
 end function
 
+' Returns true if the value is any BrightScript number: whole, long, float or double.
+function isNumber(value as dynamic) as boolean
+    if isWholeNumber(value) then return true
+    valueType = type(value)
+    return valueType = "LongInteger" or valueType = "roLongInteger" or valueType = "Float" or valueType = "roFloat" or valueType = "Double" or valueType = "roDouble"
+end function
+
 ' key=value pairs joined with &, for a query string or a form body: an array value repeats its
 ' key (key=a&key=b), and invalid values are left out. escaper.escape encodes each part: a
 ' roUrlTransfer on a task, which exists only there.
